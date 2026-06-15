@@ -1,7 +1,7 @@
 <?php
 /**
- * product_add.php — إضافة / تعديل منتج
- * المسار: /bayhas/aleppo/modules/inventory/product_add.php
+ * product_edit.php — تعديل منتج
+ * المسار: /bayhas/aleppo/modules/inventory/product_edit.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -9,7 +9,14 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('inventory.products', 'view');
+requirePermission('inventory.products', 'edit');
+
+// يجب أن يكون هناك id
+$editId = (int)($_GET['id'] ?? 0);
+if (!$editId) {
+    header('Location: products.php');
+    exit;
+}
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $TS  = $_SESSION['table_suffix'];
@@ -234,8 +241,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── جلب بيانات الصفحة ───────────────────────────────────────────────
-// صفحة الإضافة فقط — التعديل في product_edit.php
-$editProd = null;
+// جلب بيانات المنتج
+$st = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+$st->execute([$editId]);
+$editProd = $st->fetch();
+if (!$editProd) { header('Location: products.php'); exit; }
+
+// جلب المقاسات وبناء الكروبات
+$szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+$szSt->execute([$editId]);
+$editSizes = $szSt->fetchAll(PDO::FETCH_ASSOC);
+
+$grpMap = [];
+foreach ($editSizes as $s) {
+    $key = (string)$s['selling_price'];
+    if (!isset($grpMap[$key])) {
+        $grpMap[$key] = [
+            'key'        => 'edit_' . str_replace('.', '_', $key),
+            'type'       => 'سنة',
+            'sizes'      => [],
+            'grpIdx'     => count($grpMap),
+            'sell_price' => (float)$s['selling_price'],
+            'packet_qty' => 0,
+        ];
+    }
+    $grpMap[$key]['sizes'][]    = (int)$s['size'];
+    $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
+}
+$editSizeGroups = array_values($grpMap);
+
+$editPricing = [];
+foreach ($editSizeGroups as $grp) {
+    $editPricing[] = [
+        'group_key'  => $grp['key'],
+        'packet_qty' => $grp['packet_qty'],
+        'cost_price' => '',
+        'margin'     => 30,
+        'sell_price' => $grp['sell_price'],
+    ];
+}
+
+// جلب الألوان عبر color_id
+$clSt = $pdo->prepare("
+    SELECT DISTINCT pc.id, pc.name, pc.hex_code AS hex
+    FROM `{$TV}` v
+    JOIN `{$TCL}` pc ON pc.id = v.color_id
+    WHERE v.product_id=? AND v.is_active=1
+    ORDER BY pc.name
+");
+$clSt->execute([$editId]);
+$editColors = $clSt->fetchAll(PDO::FETCH_ASSOC);
 
 $categories = $pdo->query("SELECT * FROM `{$TC}` WHERE is_active=1 ORDER BY parent_id, name")->fetchAll();
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
@@ -273,7 +328,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>إضافة منتج جديد — <?= htmlspecialchars($branchName) ?></title>
+<title>تعديل منتج — <?= htmlspecialchars($branchName) ?></title>
 <link rel="icon" href="/bayhas/assets/images/logo.png">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -357,7 +412,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
     <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
         <a href="products.php" style="color:#64748b;text-decoration:none">المنتجات</a>
         <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
-        <span class="text-primary">إضافة منتج</span>
+        <span class="text-primary">تعديل منتج</span>
     </nav>
 </header>
 
@@ -367,8 +422,8 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
     <!-- عنوان الصفحة -->
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
         <div style="font-size:.95rem;font-weight:700;color:#1e293b">
-            <i class="bi bi-plus-circle me-2 text-primary"></i>
-            إضافة منتج جديد
+            <i class="bi bi-pencil-square me-2 text-primary"></i>
+            تعديل منتج: <?= htmlspecialchars($editProd['name']) ?>
         </div>
         <div class="d-flex gap-2">
             <button class="btn btn-sm" style="border-radius:8px;border:1px solid #1e3a8a;color:#1e3a8a;font-size:.78rem"
@@ -386,7 +441,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
         </div>
     </div>
 
-    <input type="hidden" id="pId" value="">
+    <input type="hidden" id="pId" value="<?= $editProd['id'] ?>">
 
     <div class="row g-3">
     <!-- ══ العمود الرئيسي ══ -->
@@ -410,7 +465,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                         <label class="field-lbl">رقم الموديل <span class="req">*</span></label>
                         <input type="text" id="pModel" class="form-control form-control-sm"
                                placeholder="مثال: MDL-2024-001" dir="ltr"
-                               value=""
+                               value="<?= htmlspecialchars($editProd['name'] ?? '') ?>"
                                oninput="updateBarcodes()">
                     </div>
                 </div>
@@ -433,7 +488,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                                 <?php foreach ($categories as $cat): ?>
                                 <option value="<?= $cat['id'] ?>"
                                     data-parent="<?= $cat['parent_id'] ?>"
-                                    >
+                                    <?= ($editProd['category_id'] == $cat['id']) ? 'selected' : '' ?>>
                                     <?= $cat['parent_id'] ? '↳ ' : '' ?><?= htmlspecialchars($cat['name']) ?>
                                 </option>
                                 <?php endforeach; ?>
@@ -447,7 +502,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                         <label class="field-lbl">صنف المنتج (الخامة)</label>
                         <input type="text" id="pFabric" class="form-control form-control-sm"
                                placeholder="مثال: RAPID، كوتون، جينز"
-                               value="">
+                               value="<?= htmlspecialchars($editProd['fabric_type'] ?? '') ?>">
                     </div>
                 </div>
                 <div class="row g-3 mt-0">
@@ -459,7 +514,8 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                                 <?php foreach ($suppliers as $sp): ?>
                                 <option value="<?= $sp['id'] ?>"
                                     data-phone="<?= htmlspecialchars($sp['phone']??'') ?>"
-                                    data-type="<?= htmlspecialchars($sp['type']??'') ?>">
+                                    data-type="<?= htmlspecialchars($sp['type']??'') ?>"
+                                    <?= ($editProd['supplier_id'] == $sp['id']) ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($sp['name']) ?>
                                     <?= $sp['contact_person'] ? '— '.htmlspecialchars($sp['contact_person']) : '' ?>
                                 </option>
@@ -576,7 +632,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                     <div class="col-md-7">
                         <label class="field-lbl">وصف المنتج</label>
                         <textarea id="pNotes" class="form-control form-control-sm" rows="3"
-                                  placeholder="وصف اختياري..."></textarea>
+                                  placeholder="وصف اختياري..."><?= htmlspecialchars($editProd['notes'] ?? '') ?></textarea>
                     </div>
                     <div class="col-md-5">
                         <label class="field-lbl">صورة المنتج</label>
@@ -1416,6 +1472,42 @@ function removeImg() {
     preview.src = '';
     toast.classList.remove('show');
 }
+
+// ── تهيئة بيانات التعديل ──
+sizeGroups   = <?= json_encode($editSizeGroups) ?>;
+activeGrpIdx = Math.max(0, sizeGroups.length - 1);
+pricing      = <?= json_encode($editPricing) ?>;
+pricing.forEach((p,i) => { if (sizeGroups[i]) p.group_key = sizeGroups[i].key; });
+
+// تحميل الألوان
+(function(){
+    const editClrs = <?= json_encode(array_map(fn($c) => [
+        'id'  => (int)($c['id']??0),
+        'name'=> $c['name'],
+        'hex' => $c['hex'] ?? '#ccc'
+    ], $editColors)) ?>;
+    selColorIdxs = [];
+    editClrs.forEach(ec => {
+        const idx = allColors.findIndex(ac => ac.id === ec.id && ec.id > 0);
+        if (idx >= 0) {
+            selColorIdxs.push(idx);
+            selColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+        } else {
+            allColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+            selColorIdxs.push(allColors.length - 1);
+            selColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+        }
+    });
+})();
+
+// ضبط المورد
+(function(){
+    const spSel = document.getElementById('pSupplier');
+    if (spSel && '<?= (int)($editProd['supplier_id'] ?? 0) ?>') {
+        spSel.value = '<?= (int)($editProd['supplier_id'] ?? 0) ?>';
+        onSupplierChange();
+    }
+})();
 
 // ── تهيئة ──
 renderSizeGrid();

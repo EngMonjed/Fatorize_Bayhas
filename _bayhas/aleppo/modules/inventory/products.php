@@ -407,10 +407,9 @@ $catColors = [
                 <?php endif; ?>
             </span>
             <?php if (can('inventory.products','create')): ?>
-            <button class="btn btn-sm" style="border-radius:9px;background:#1e3a8a;color:#fff;font-size:.82rem;font-weight:600"
-                    onclick="window.location.href='product_add.php'">
+            <a href="product_add.php" class="btn btn-sm" style="border-radius:9px;background:#1e3a8a;color:#fff;font-size:.82rem;font-weight:600;text-decoration:none">
                 <i class="bi bi-plus-lg me-1"></i>منتج جديد
-            </button>
+            </a>
             <?php endif; ?>
         </div>
         <div class="table-responsive">
@@ -423,13 +422,14 @@ $catColors = [
                 <th>القياسات</th>
                 <th>الألوان</th>
                 <th>نوع القماش</th>
+                <th>المخزون</th>
                 <th>سعر البيع</th>
                 <th>الحالة</th>
                 <th style="text-align:center">إجراءات</th>
             </tr></thead>
             <tbody>
             <?php if (empty($products)): ?>
-            <tr><td colspan="10" class="text-center text-muted py-4">
+            <tr><td colspan="11" class="text-center text-muted py-4">
                 <i class="bi bi-boxes d-block mb-2 fs-2" style="opacity:.2"></i>
                 لا توجد منتجات<?= $search ? " تطابق \"{$search}\"" : '' ?>
             </td></tr>
@@ -512,6 +512,15 @@ $catColors = [
                 <!-- نوع القماش -->
                 <td style="font-size:.78rem;color:#64748b"><?=htmlspecialchars($prod['fabric_type']??'—')?></td>
 
+                <!-- المخزون -->
+                <td class="n" style="font-size:.82rem">
+                    <?php
+                        $sCls = $stock > 10 ? 'text-success' : ($stock > 0 ? 'text-warning' : 'text-danger');
+                        $sLbl = $stock > 0 ? number_format($stock,0).' قطعة' : 'نفد';
+                    ?>
+                    <span class="<?=$sCls?> fw-600"><?=$sLbl?></span>
+                </td>
+
                 <!-- سعر البيع (أدنى سعر) -->
                 <td class="n" style="font-size:.82rem;font-weight:600;color:#1e293b">
                     <?= $minSell ? number_format($minSell,2).' $' : '—' ?>
@@ -533,7 +542,7 @@ $catColors = [
                                 onclick="viewDetail(<?=$prod['id']?>)" title="عرض التفاصيل">
                             <i class="bi bi-eye"></i>
                         </button>
-                        <a href="product_add.php?id=<?=$prod['id']?>" class="act-btn" title="تعديل" style="text-decoration:none">
+                        <a href="product_edit.php?id=<?=$prod['id']?>" class="act-btn" title="تعديل" style="text-decoration:none">
                             <i class="bi bi-pencil"></i>
                         </a>
                         <button class="act-btn <?=$prod['is_active']?'danger':''?>"
