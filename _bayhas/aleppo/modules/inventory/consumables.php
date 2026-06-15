@@ -28,9 +28,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st = $pdo->prepare("SELECT ci.*,
                 COALESCE(SUM(cs.quantity),0) AS total_qty,
                 MAX(cs.min_quantity)         AS min_qty,
-                MAX(cs.avg_cost_usd)         AS avg_cost
+                MAX(cs.avg_cost_usd)         AS avg_cost,
+                cu.code AS currency_code, cu.symbol AS currency_symbol
                 FROM `{$TI}` ci
                 LEFT JOIN `{$TST}` cs ON cs.item_id=ci.id
+                LEFT JOIN `currencies` cu ON cu.id=ci.currency_id
                 WHERE ci.id=? GROUP BY ci.id");
             $st->execute([$id]);
             $item = $st->fetch();
@@ -47,19 +49,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $name     = trim($_POST['name'] ?? '');
             $category = $_POST['category'] ?? 'other';
             $unit     = trim($_POST['unit'] ?? 'قطعة');
-            $est_cost = (float)($_POST['estimated_cost'] ?? 0);
-            $min_qty  = (float)($_POST['min_quantity'] ?? 0);
+            $est_cost    = (float)($_POST['estimated_cost'] ?? 0);
+            $currency_id = (int)($_POST['currency_id'] ?? 0) ?: null;
+            $min_qty     = (float)($_POST['min_quantity'] ?? 0);
             $wh_id    = (int)($_POST['warehouse_id'] ?? 0);
             $notes    = trim($_POST['notes'] ?? '');
             if (!$name) throw new Exception('اسم المادة مطلوب');
             if ($id) {
                 requirePermission('inventory.consumables','edit');
-                $pdo->prepare("UPDATE `{$TI}` SET name=?,category=?,unit=?,estimated_cost=?,notes=?,updated_at=NOW() WHERE id=?")
-                    ->execute([$name,$category,$unit,$est_cost,$notes,$id]);
+                $pdo->prepare("UPDATE `{$TI}` SET name=?,category=?,unit=?,estimated_cost=?,currency_id=?,notes=?,updated_at=NOW() WHERE id=?")
+                    ->execute([$name,$category,$unit,$est_cost,$currency_id,$notes,$id]);
             } else {
                 requirePermission('inventory.consumables','create');
-                $pdo->prepare("INSERT INTO `{$TI}` (name,category,unit,estimated_cost,notes,created_by) VALUES (?,?,?,?,?,?)")
-                    ->execute([$name,$category,$unit,$est_cost,$notes,$_SESSION['user_id']]);
+                $pdo->prepare("INSERT INTO `{$TI}` (name,category,unit,estimated_cost,currency_id,notes,created_by) VALUES (?,?,?,?,?,?,?)")
+                    ->execute([$name,$category,$unit,$est_cost,$currency_id,$notes,$_SESSION['user_id']]);
                 $id = (int)$pdo->lastInsertId();
             }
             if ($wh_id && $id) {
@@ -109,15 +112,18 @@ $stmt = $pdo->prepare("SELECT ci.*,
     COALESCE(SUM(cs.quantity),0)                    AS total_qty,
     MAX(cs.min_quantity)                             AS min_qty,
     COALESCE(AVG(NULLIF(cs.avg_cost_usd,0)),0)      AS avg_cost,
-    COUNT(DISTINCT cs.warehouse_id)                  AS wh_count
+    COUNT(DISTINCT cs.warehouse_id)                  AS wh_count,
+    cu.code AS currency_code, cu.symbol AS currency_symbol
     FROM `{$TI}` ci
     LEFT JOIN `{$TST}` cs ON cs.item_id=ci.id
+    LEFT JOIN `currencies` cu ON cu.id=ci.currency_id
     {$where}
     GROUP BY ci.id ORDER BY ci.category, ci.name");
 $stmt->execute($params);
 $items = $stmt->fetchAll();
 
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
+$currencies = $pdo->query("SELECT * FROM `currencies` ORDER BY is_base DESC, code")->fetchAll();
 
 // إحصائيات
 $s = $pdo->query("SELECT COUNT(*) AS total, SUM(is_active) AS active FROM `{$TI}`")->fetch();
@@ -276,7 +282,7 @@ table.mtbl tr:hover td{background:#f8faff}
                 <span style="font-weight:400;font-size:.7rem;color:#94a3b8"><?= htmlspecialchars($item['unit']) ?></span>
             </td>
             <td class="n text-muted"><?= $minQ>0 ? number_format($minQ,2) : '—' ?></td>
-            <td class="n text-muted"><?= $item['estimated_cost']>0 ? number_format($item['estimated_cost'],2).' $' : '—' ?></td>
+            <td class="n text-muted"><?= $item['estimated_cost']>0 ? number_format($item['estimated_cost'],2).' '.htmlspecialchars($item['currency_code']??'$') : '—' ?></td>
             <td>
                 <?php if ($item['is_active']): ?>
                 <span class="badge bg-success-subtle text-success border border-success-subtle" style="font-size:.68rem">نشط</span>
@@ -341,10 +347,19 @@ table.mtbl tr:hover td{background:#f8faff}
             <label class="field-lbl">وحدة القياس <span class="req">*</span></label>
             <input type="text" id="mUnit" class="form-control form-control-sm" placeholder="قطعة، كيلو، لتر، فاتورة">
           </div>
-          <div class="col-md-4">
-            <label class="field-lbl">التكلفة التقديرية ($)</label>
+          <div class="col-md-3">
+            <label class="field-lbl">التكلفة التقديرية</label>
             <input type="number" id="mEstCost" class="form-control form-control-sm" min="0" step="0.01" placeholder="0.00">
             <div class="field-hint">للمقارنة مع التكلفة الفعلية</div>
+          </div>
+          <div class="col-md-3">
+            <label class="field-lbl">العملة</label>
+            <select id="mCurrency" class="form-select form-select-sm">
+              <option value="">— اختر —</option>
+              <?php foreach ($currencies as $cur): ?>
+              <option value="<?=$cur['id']?>"><?= htmlspecialchars($cur['code'].' - '.$cur['name']) ?></option>
+              <?php endforeach; ?>
+            </select>
           </div>
           <div class="col-md-4">
             <label class="field-lbl">حد التنبيه (الكمية)</label>
@@ -426,6 +441,7 @@ function toast(msg, type='success') {
 
 function openAdd() {
     ['mId','mName','mEstCost','mMinQty','mNotes'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('mCurrency').value='';
     document.getElementById('mCategory').value='other';
     document.getElementById('mUnit').value='قطعة';
     document.getElementById('mWarehouse').value='';
@@ -442,6 +458,7 @@ function openEdit(id) {
         document.getElementById('mCategory').value = it.category;
         document.getElementById('mUnit').value     = it.unit;
         document.getElementById('mEstCost').value  = it.estimated_cost||'';
+        document.getElementById('mCurrency').value  = it.currency_id||'';
         document.getElementById('mMinQty').value   = it.min_qty||'';
         document.getElementById('mNotes').value    = it.notes||'';
         const stk=it.stock||[];
@@ -464,6 +481,7 @@ function saveItem() {
         category:       document.getElementById('mCategory').value,
         unit:           document.getElementById('mUnit').value,
         estimated_cost: document.getElementById('mEstCost').value,
+        currency_id:   document.getElementById('mCurrency').value,
         min_quantity:   document.getElementById('mMinQty').value,
         warehouse_id:   document.getElementById('mWarehouse').value,
         notes:          document.getElementById('mNotes').value,
@@ -505,7 +523,7 @@ function viewItem(id) {
         <div style="background:#f8fafc;border-radius:10px;padding:10px 14px;margin-bottom:10px">
             <div class="srow"><span style="color:#64748b">الرصيد الكلي</span><span class="n fw-700" style="color:${qClr}">${qty.toFixed(2)} ${it.unit}</span></div>
             <div class="srow"><span style="color:#64748b">متوسط التكلفة</span><span class="n">${parseFloat(it.avg_cost||0)>0?parseFloat(it.avg_cost).toFixed(4)+' $':'—'}</span></div>
-            <div class="srow"><span style="color:#64748b">التكلفة التقديرية</span><span class="n">${parseFloat(it.estimated_cost||0)>0?parseFloat(it.estimated_cost).toFixed(2)+' $':'—'}</span></div>
+            <div class="srow"><span style="color:#64748b">التكلفة التقديرية</span><span class="n">${parseFloat(it.estimated_cost||0)>0?parseFloat(it.estimated_cost).toFixed(2)+' '+(it.currency_code||'$'):'—'}</span></div>
         </div>
         <div style="font-size:.75rem;font-weight:700;color:#1e293b;margin-bottom:5px">الأرصدة بالمستودعات</div>
         <div>${stkHtml}</div>

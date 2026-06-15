@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1:3306
--- Generation Time: Jun 15, 2026 at 10:50 AM
+-- Generation Time: Jun 15, 2026 at 11:31 AM
 -- Server version: 11.8.6-MariaDB-log
 -- PHP Version: 7.2.34
 
@@ -169,6 +169,43 @@ CREATE TABLE `consumable_entries_alp` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `consumable_issues_alp`
+--
+
+CREATE TABLE `consumable_issues_alp` (
+  `id` int(11) NOT NULL,
+  `issue_no` varchar(30) NOT NULL COMMENT 'ISS-2024-0001',
+  `warehouse_id` int(11) NOT NULL COMMENT 'المستودع المصدر',
+  `department` varchar(100) DEFAULT NULL COMMENT 'القسم/الجهة المستلمة',
+  `issue_date` date NOT NULL,
+  `status` enum('draft','confirmed','cancelled') NOT NULL DEFAULT 'draft',
+  `journal_entry_id` int(11) DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT 0,
+  `notes` text DEFAULT NULL,
+  `created_by` int(11) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أوامر الصرف الداخلي للمستهلكات';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_issue_items_alp`
+--
+
+CREATE TABLE `consumable_issue_items_alp` (
+  `id` int(11) NOT NULL,
+  `issue_id` int(11) NOT NULL COMMENT 'FK → consumable_issues_alp',
+  `item_id` int(11) NOT NULL COMMENT 'FK → consumable_items_alp',
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_cost_usd` decimal(12,4) DEFAULT 0.0000,
+  `total_cost_usd` decimal(15,4) DEFAULT 0.0000,
+  `movement_id` int(11) DEFAULT NULL COMMENT 'FK → consumable_movements_alp',
+  `notes` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل أوامر الصرف الداخلي';
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `consumable_items_alp`
 --
 
@@ -178,12 +215,160 @@ CREATE TABLE `consumable_items_alp` (
   `category` enum('utility','supplies','food','maintenance','other') NOT NULL DEFAULT 'other',
   `unit` varchar(20) NOT NULL DEFAULT 'قطعة',
   `estimated_cost` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT 'تكلفة تقديرية للمقارنة',
+  `currency_id` int(11) DEFAULT NULL,
   `notes` text DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_by` int(11) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستهلكات — فرع حلب';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_movements_alp`
+--
+
+CREATE TABLE `consumable_movements_alp` (
+  `id` int(11) NOT NULL,
+  `movement_no` varchar(30) NOT NULL COMMENT 'رقم الحركة: MOV-2024-0001',
+  `item_id` int(11) NOT NULL COMMENT 'FK → consumable_items_alp',
+  `warehouse_id` int(11) NOT NULL COMMENT 'FK → warehouses_alp',
+  `movement_type` enum('receive','issue','return_in','return_out','transfer','adjust','waste') NOT NULL,
+  `direction` enum('in','out') NOT NULL COMMENT 'داخل أو خارج المخزون',
+  `quantity` decimal(12,3) NOT NULL COMMENT 'الكمية الموجبة دائماً',
+  `unit_cost_usd` decimal(12,4) DEFAULT 0.0000 COMMENT 'تكلفة الوحدة بالدولار',
+  `total_cost_usd` decimal(15,4) DEFAULT 0.0000 COMMENT 'إجمالي التكلفة بالدولار',
+  `qty_before` decimal(12,3) DEFAULT 0.000 COMMENT 'الرصيد قبل الحركة',
+  `qty_after` decimal(12,3) DEFAULT 0.000 COMMENT 'الرصيد بعد الحركة',
+  `reference_type` enum('purchase','sale','issue','transfer','inventory','manual') NOT NULL DEFAULT 'manual',
+  `reference_id` int(11) DEFAULT NULL COMMENT 'id المصدر',
+  `to_warehouse_id` int(11) DEFAULT NULL COMMENT 'للنقل: المستودع المستهدف',
+  `journal_entry_id` int(11) DEFAULT NULL COMMENT 'FK → journal_entries',
+  `is_posted` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'هل رُحّل المحاسبياً؟',
+  `movement_date` date NOT NULL,
+  `notes` text DEFAULT NULL,
+  `created_by` int(11) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='حركات مخزون المستهلكات — مستقلة عن الفواتير';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_purchases_alp`
+--
+
+CREATE TABLE `consumable_purchases_alp` (
+  `id` int(11) NOT NULL,
+  `invoice_no` varchar(50) NOT NULL COMMENT 'رقم الفاتورة الداخلي: PUR-2024-0001',
+  `supplier_ref` varchar(100) DEFAULT NULL COMMENT 'رقم فاتورة المورد',
+  `supplier_id` int(11) DEFAULT NULL COMMENT 'FK → product_suppliers_alp',
+  `warehouse_id` int(11) NOT NULL COMMENT 'المستودع المستلِم',
+  `invoice_date` date NOT NULL,
+  `due_date` date DEFAULT NULL COMMENT 'تاريخ الاستحقاق',
+  `currency` varchar(3) NOT NULL DEFAULT 'USD',
+  `exchange_rate` decimal(10,6) NOT NULL DEFAULT 1.000000,
+  `subtotal_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `discount_pct` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `discount_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `tax_pct` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `tax_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `total_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `paid_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `balance_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `status` enum('draft','confirmed','partial','paid','cancelled') NOT NULL DEFAULT 'draft',
+  `payment_method` enum('cash','bank','card','deferred') DEFAULT 'deferred',
+  `journal_entry_id` int(11) DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT 0,
+  `notes` text DEFAULT NULL,
+  `created_by` int(11) NOT NULL,
+  `updated_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='فواتير شراء المستهلكات — رأس الفاتورة';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_purchase_items_alp`
+--
+
+CREATE TABLE `consumable_purchase_items_alp` (
+  `id` int(11) NOT NULL,
+  `purchase_id` int(11) NOT NULL COMMENT 'FK → consumable_purchases_alp',
+  `item_id` int(11) NOT NULL COMMENT 'FK → consumable_items_alp',
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_price_usd` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `discount_pct` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `total_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `movement_id` int(11) DEFAULT NULL COMMENT 'FK → consumable_movements_alp (حركة الاستلام)',
+  `notes` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل فواتير شراء المستهلكات';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_sales_alp`
+--
+
+CREATE TABLE `consumable_sales_alp` (
+  `id` int(11) NOT NULL,
+  `invoice_no` varchar(50) NOT NULL COMMENT 'SAL-2024-0001',
+  `customer_name` varchar(255) DEFAULT NULL,
+  `customer_phone` varchar(50) DEFAULT NULL,
+  `warehouse_id` int(11) NOT NULL COMMENT 'المستودع المصدر',
+  `invoice_date` date NOT NULL,
+  `currency` varchar(3) NOT NULL DEFAULT 'USD',
+  `exchange_rate` decimal(10,6) NOT NULL DEFAULT 1.000000,
+  `subtotal_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `discount_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `total_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `paid_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `status` enum('draft','confirmed','paid','cancelled') NOT NULL DEFAULT 'draft',
+  `payment_method` enum('cash','bank','card','deferred') DEFAULT 'cash',
+  `journal_entry_id` int(11) DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT 0,
+  `notes` text DEFAULT NULL,
+  `created_by` int(11) NOT NULL,
+  `updated_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='فواتير بيع المستهلكات';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_sale_items_alp`
+--
+
+CREATE TABLE `consumable_sale_items_alp` (
+  `id` int(11) NOT NULL,
+  `sale_id` int(11) NOT NULL COMMENT 'FK → consumable_sales_alp',
+  `item_id` int(11) NOT NULL COMMENT 'FK → consumable_items_alp',
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_price_usd` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `discount_pct` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `total_usd` decimal(15,4) NOT NULL DEFAULT 0.0000,
+  `movement_id` int(11) DEFAULT NULL COMMENT 'FK → consumable_movements_alp',
+  `notes` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل فواتير بيع المستهلكات';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `consumable_stock_alp`
+--
+
+CREATE TABLE `consumable_stock_alp` (
+  `id` int(11) NOT NULL,
+  `item_id` int(11) NOT NULL COMMENT 'FK → consumable_items_alp',
+  `warehouse_id` int(11) NOT NULL COMMENT 'FK → warehouses_alp',
+  `quantity` decimal(12,3) NOT NULL DEFAULT 0.000 COMMENT 'الرصيد الحالي',
+  `min_quantity` decimal(12,3) NOT NULL DEFAULT 0.000 COMMENT 'حد التنبيه',
+  `avg_cost_usd` decimal(12,4) NOT NULL DEFAULT 0.0000 COMMENT 'متوسط التكلفة (Weighted Average)',
+  `last_movement` datetime DEFAULT NULL COMMENT 'تاريخ آخر حركة',
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أرصدة المستهلكات لكل مستودع';
 
 -- --------------------------------------------------------
 
@@ -1818,10 +2003,90 @@ ALTER TABLE `consumable_entries_alp`
   ADD KEY `idx_entry_date` (`entry_date`);
 
 --
+-- Indexes for table `consumable_issues_alp`
+--
+ALTER TABLE `consumable_issues_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_issue_no` (`issue_no`),
+  ADD KEY `idx_warehouse_id` (`warehouse_id`),
+  ADD KEY `idx_date` (`issue_date`);
+
+--
+-- Indexes for table `consumable_issue_items_alp`
+--
+ALTER TABLE `consumable_issue_items_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_issue_id` (`issue_id`),
+  ADD KEY `idx_item_id` (`item_id`),
+  ADD KEY `fk_cii_movement` (`movement_id`);
+
+--
 -- Indexes for table `consumable_items_alp`
 --
 ALTER TABLE `consumable_items_alp`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `fk_ci_currency` (`currency_id`);
+
+--
+-- Indexes for table `consumable_movements_alp`
+--
+ALTER TABLE `consumable_movements_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_movement_no` (`movement_no`),
+  ADD KEY `idx_item_id` (`item_id`),
+  ADD KEY `idx_warehouse_id` (`warehouse_id`),
+  ADD KEY `idx_type` (`movement_type`),
+  ADD KEY `idx_date` (`movement_date`),
+  ADD KEY `idx_reference` (`reference_type`,`reference_id`),
+  ADD KEY `fk_cm_to_warehouse` (`to_warehouse_id`);
+
+--
+-- Indexes for table `consumable_purchases_alp`
+--
+ALTER TABLE `consumable_purchases_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_invoice_no` (`invoice_no`),
+  ADD KEY `idx_supplier_id` (`supplier_id`),
+  ADD KEY `idx_warehouse_id` (`warehouse_id`),
+  ADD KEY `idx_date` (`invoice_date`),
+  ADD KEY `idx_status` (`status`);
+
+--
+-- Indexes for table `consumable_purchase_items_alp`
+--
+ALTER TABLE `consumable_purchase_items_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_purchase_id` (`purchase_id`),
+  ADD KEY `idx_item_id` (`item_id`),
+  ADD KEY `idx_movement_id` (`movement_id`);
+
+--
+-- Indexes for table `consumable_sales_alp`
+--
+ALTER TABLE `consumable_sales_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_invoice_no` (`invoice_no`),
+  ADD KEY `idx_warehouse_id` (`warehouse_id`),
+  ADD KEY `idx_date` (`invoice_date`),
+  ADD KEY `idx_status` (`status`);
+
+--
+-- Indexes for table `consumable_sale_items_alp`
+--
+ALTER TABLE `consumable_sale_items_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_sale_id` (`sale_id`),
+  ADD KEY `idx_item_id` (`item_id`),
+  ADD KEY `idx_movement_id` (`movement_id`);
+
+--
+-- Indexes for table `consumable_stock_alp`
+--
+ALTER TABLE `consumable_stock_alp`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_item_warehouse` (`item_id`,`warehouse_id`),
+  ADD KEY `idx_item_id` (`item_id`),
+  ADD KEY `idx_warehouse_id` (`warehouse_id`);
 
 --
 -- Indexes for table `currencies`
@@ -2271,10 +2536,58 @@ ALTER TABLE `consumable_entries_alp`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `consumable_issues_alp`
+--
+ALTER TABLE `consumable_issues_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_issue_items_alp`
+--
+ALTER TABLE `consumable_issue_items_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `consumable_items_alp`
 --
 ALTER TABLE `consumable_items_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT for table `consumable_movements_alp`
+--
+ALTER TABLE `consumable_movements_alp`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_purchases_alp`
+--
+ALTER TABLE `consumable_purchases_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_purchase_items_alp`
+--
+ALTER TABLE `consumable_purchase_items_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_sales_alp`
+--
+ALTER TABLE `consumable_sales_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_sale_items_alp`
+--
+ALTER TABLE `consumable_sale_items_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `consumable_stock_alp`
+--
+ALTER TABLE `consumable_stock_alp`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `currencies`
@@ -2579,6 +2892,70 @@ ALTER TABLE `attendance_alp`
 --
 ALTER TABLE `consumable_entries_alp`
   ADD CONSTRAINT `fk_ce_consumable` FOREIGN KEY (`consumable_id`) REFERENCES `consumables_alp` (`id`);
+
+--
+-- Constraints for table `consumable_issues_alp`
+--
+ALTER TABLE `consumable_issues_alp`
+  ADD CONSTRAINT `fk_ci_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_alp` (`id`);
+
+--
+-- Constraints for table `consumable_issue_items_alp`
+--
+ALTER TABLE `consumable_issue_items_alp`
+  ADD CONSTRAINT `fk_cii_issue` FOREIGN KEY (`issue_id`) REFERENCES `consumable_issues_alp` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_cii_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_alp` (`id`),
+  ADD CONSTRAINT `fk_cii_movement` FOREIGN KEY (`movement_id`) REFERENCES `consumable_movements_alp` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `consumable_items_alp`
+--
+ALTER TABLE `consumable_items_alp`
+  ADD CONSTRAINT `fk_ci_currency` FOREIGN KEY (`currency_id`) REFERENCES `currencies` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `consumable_movements_alp`
+--
+ALTER TABLE `consumable_movements_alp`
+  ADD CONSTRAINT `fk_cm_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_alp` (`id`),
+  ADD CONSTRAINT `fk_cm_to_warehouse` FOREIGN KEY (`to_warehouse_id`) REFERENCES `warehouses_alp` (`id`),
+  ADD CONSTRAINT `fk_cm_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_alp` (`id`);
+
+--
+-- Constraints for table `consumable_purchases_alp`
+--
+ALTER TABLE `consumable_purchases_alp`
+  ADD CONSTRAINT `fk_cp_supplier` FOREIGN KEY (`supplier_id`) REFERENCES `product_suppliers_alp` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_cp_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_alp` (`id`);
+
+--
+-- Constraints for table `consumable_purchase_items_alp`
+--
+ALTER TABLE `consumable_purchase_items_alp`
+  ADD CONSTRAINT `fk_cpi_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_alp` (`id`),
+  ADD CONSTRAINT `fk_cpi_movement` FOREIGN KEY (`movement_id`) REFERENCES `consumable_movements_alp` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_cpi_purchase` FOREIGN KEY (`purchase_id`) REFERENCES `consumable_purchases_alp` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `consumable_sales_alp`
+--
+ALTER TABLE `consumable_sales_alp`
+  ADD CONSTRAINT `fk_csa_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_alp` (`id`);
+
+--
+-- Constraints for table `consumable_sale_items_alp`
+--
+ALTER TABLE `consumable_sale_items_alp`
+  ADD CONSTRAINT `fk_csi_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_alp` (`id`),
+  ADD CONSTRAINT `fk_csi_movement` FOREIGN KEY (`movement_id`) REFERENCES `consumable_movements_alp` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_csi_sale` FOREIGN KEY (`sale_id`) REFERENCES `consumable_sales_alp` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `consumable_stock_alp`
+--
+ALTER TABLE `consumable_stock_alp`
+  ADD CONSTRAINT `fk_cs_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_alp` (`id`),
+  ADD CONSTRAINT `fk_cs_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_alp` (`id`);
 
 --
 -- Constraints for table `hr_employees_alp`
