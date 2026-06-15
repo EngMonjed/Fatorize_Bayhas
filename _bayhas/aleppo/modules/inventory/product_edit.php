@@ -237,13 +237,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 }
             }
 
-            // ربط بالمستودع
+            // ربط بالمستودع مع حد التنبيه
+            $minQty = (int)($_POST['min_quantity'] ?? 0);
             if ($wh_id) {
                 $vrAll = $pdo->prepare("SELECT id FROM `{$TV}` WHERE product_id=? AND is_active=1");
                 $vrAll->execute([$id]);
                 foreach ($vrAll->fetchAll() as $vr) {
-                    $pdo->prepare("INSERT IGNORE INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,avg_cost_usd) VALUES (?,?,?,0,0)")
-                        ->execute([$wh_id,$vr['id'],$id]);
+                    $pdo->prepare("INSERT INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,min_quantity)
+                        VALUES (?,?,?,0,?)
+                        ON DUPLICATE KEY UPDATE min_quantity=VALUES(min_quantity)")
+                        ->execute([$wh_id,$vr['id'],$id,$minQty]);
                 }
             }
 
@@ -651,12 +654,26 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
             </div>
             <div class="sec-body">
                 <div class="row g-3">
-                    <div class="col-md-7">
+                    <div class="col-md-5">
                         <label class="field-lbl">وصف المنتج</label>
                         <textarea id="pNotes" class="form-control form-control-sm" rows="3"
                                   placeholder="وصف اختياري..."><?= htmlspecialchars($editProd['notes'] ?? '') ?></textarea>
                     </div>
-                    <div class="col-md-5">
+                    <div class="col-md-3">
+                        <label class="field-lbl">حد التنبيه للمخزون</label>
+                        <?php
+                        $curMinQty = 0;
+                        try {
+                            $mq = $pdo->prepare("SELECT MAX(min_quantity) FROM `{$TWI}` WHERE product_id=?");
+                            $mq->execute([$editId]);
+                            $curMinQty = (int)$mq->fetchColumn();
+                        } catch(Exception $e){}
+                        ?>
+                        <input type="number" id="pMinQty" class="form-control form-control-sm"
+                               min="0" value="<?= $curMinQty ?>" placeholder="0">
+                        <div class="field-hint">تنبيه عند انخفاض المخزون لهذا الحد</div>
+                    </div>
+                    <div class="col-md-4">
                         <label class="field-lbl">صورة المنتج</label>
                         <div class="upload-box" id="uploadBox" onclick="document.getElementById('pImg').click()">
                             <i class="bi bi-cloud-arrow-up d-block mb-1" style="font-size:1.4rem" id="uploadIcon"></i>
@@ -1382,6 +1399,7 @@ function saveProduct() {
         warehouse_id:  document.getElementById('pWarehouse').value,
         age_type:      document.getElementById('pAgeType').value,
         notes:         document.getElementById('pNotes').value,
+        min_quantity:  document.getElementById('pMinQty').value,
         size_groups:   JSON.stringify(sizeGroups),
         colors:        JSON.stringify(selColors),
         pricing:       JSON.stringify(pricing),
