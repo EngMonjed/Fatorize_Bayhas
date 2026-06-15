@@ -1,0 +1,70 @@
+[20-May-2026 14:52:58 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[HY000] [1045] Access denied for user 'u154183585_bayhas_main'@'localhost' (using password: YES) in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/database.php:9
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/database.php(9): PDO->__construct()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/database.php(21): _makePdo()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/login.php(12): getMainConnection()
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/database.php on line 9
+[20-May-2026 15:38:32 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:38:46 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:38:48 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:38:52 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:39:07 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:39:09 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:39:17 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:39:18 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
+[20-May-2026 15:40:52 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'u987540206_bayhas.modules' doesn't exist in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php:140
+Stack trace:
+#0 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php(140): PDO->query()
+#1 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/includes/sidebar.php(8): buildSidebarMenu()
+#2 /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/aleppo/modules/dashboard.php(72): require_once('/home/u98754020...')
+#3 {main}
+  thrown in /home/u987540206/domains/aqua-locust-851997.hostingersite.com/public_html/config/auth.php on line 140
