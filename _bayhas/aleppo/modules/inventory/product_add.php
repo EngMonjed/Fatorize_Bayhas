@@ -1099,7 +1099,7 @@ function pickColor(i) {
     if (pos >= 0) selColorIdxs.splice(pos, 1);
     else          selColorIdxs.push(i);
     // تحديث selColors من selColorIdxs
-    selColors = selColorIdxs.map(idx => ({name: allColors[idx].name, hex: allColors[idx].hex}));
+    selColors = selColorIdxs.map(idx => ({id: allColors[idx].id, name: allColors[idx].name, hex: allColors[idx].hex}));
     renderColorGrid();
     updateBarcodes();
     updateSummary();
