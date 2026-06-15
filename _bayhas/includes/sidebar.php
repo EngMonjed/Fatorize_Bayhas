@@ -92,6 +92,9 @@ function injectInternalOrdersToMenu(array &$menu): void
             if (!in_array('inventory.products', $existing)) {
                 $toAdd[] = ['key' => 'inventory.products', 'label' => 'المنتجات', 'icon' => 'bi-boxes'];
             }
+            if (!in_array('inventory.consumables', $existing)) {
+                $toAdd[] = ['key' => 'inventory.consumables', 'label' => 'إدارة المستهلكات', 'icon' => 'bi-box-seam'];
+            }
             foreach (array_reverse($toAdd) as $item) {
                 array_unshift($section['children'], $item);
             }
@@ -129,6 +132,9 @@ function moduleUrl(string $key): string
     'inventory.raw_materials' => 'inventory/raw_materials.php',
     'inventory.operations' => 'inventory/operations.php',
     'inventory.consumables' => 'inventory/consumables.php',
+    'inventory.consumables.issues' => 'inventory/consumable_issues.php',
+    'inventory.consumables.purchases' => 'inventory/consumable_purchases.php',
+    'inventory.consumables.sales' => 'inventory/consumable_sales.php',
     // المالية
     'finance.accounts' => 'accounting/accounts.php',
     'finance.journal' => 'accounting/journal.php',
