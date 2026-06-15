@@ -160,11 +160,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $pdo->prepare("DELETE FROM `{$TSZ}` WHERE product_id=?")->execute([$id]);
             $sortOrder = 0;
             foreach ($groups as $grp) {
-                $sellPrice  = 0;
-                $packetQty  = count($grp['sizes']);  // عدد القطع = عدد الأرقام المختارة
+                $sellPrice = 0;
+                $costPrice = null;
+                $marginPct = null;
+                $packetQty = count($grp['sizes']);
+                $ageType   = $grp['type'] ?? 'سنة';
                 foreach ($pricing as $pr) {
                     if ($pr['group_key'] === $grp['key']) {
-                        $sellPrice = (float)($pr['sell_price'] ?? 0);
+                        $sellPrice = (float)($pr['sell_price']  ?? 0);
+                        $costPrice = $pr['cost_price'] !== '' ? (float)$pr['cost_price'] : null;
+                        $marginPct = $pr['margin']     !== '' ? (float)$pr['margin']     : null;
                         break;
                     }
                 }
@@ -172,22 +177,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $szLabel = trim((string)$szVal);
                     if (!$szLabel) continue;
                     try {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,sort_order,selling_price,packet_qty,is_active) VALUES (?,?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $sortOrder++, $sellPrice, $packetQty]);
+                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,cost_price,margin_pct,packet_qty,is_active) VALUES (?,?,?,?,?,?,?,?,1)")
+                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice, $marginPct, $packetQty]);
                     } catch (Exception $e) {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,sort_order,selling_price,is_active) VALUES (?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $sortOrder++, $sellPrice]);
+                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,is_active) VALUES (?,?,?,?,?,1)")
+                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice]);
                     }
                 }
             }
 
-            // حذف المتغيرات القديمة نهائياً وإعادة البناء من صفر
-            $pdo->prepare("DELETE FROM `{$TV}` WHERE product_id=?")->execute([$id]);
-
-            // جلب المقاسات المُدخلة للتو
+            // جلب المقاسات الجديدة (بعد DELETE + INSERT أعلاه)
             $szRows = $pdo->prepare("SELECT id,size FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
             $szRows->execute([$id]);
             $allSizes = $szRows->fetchAll();
+
+            // قائمة size_ids الجديدة
+            $newSizeIds = array_column($allSizes, 'id');
+
+            // حذف المتغيرات للألوان المحذوفة فقط
+            $newColorIds = array_values(array_filter(array_map(fn($c) => (int)($c['id'] ?? 0), $colors)));
+            if ($newColorIds && $newSizeIds) {
+                $inClr  = implode(',', array_fill(0, count($newColorIds), '?'));
+                $inSz   = implode(',', array_fill(0, count($newSizeIds),  '?'));
+                // احذف فقط المتغيرات التي لونها أو مقاسها خارج القائمة الجديدة
+                $pdo->prepare("DELETE FROM `{$TV}` WHERE product_id=? AND (color_id NOT IN ({$inClr}) OR size_id NOT IN ({$inSz}))")
+                    ->execute(array_merge([$id], $newColorIds, $newSizeIds));
+            } elseif (!$newColorIds) {
+                $pdo->prepare("DELETE FROM `{$TV}` WHERE product_id=?")->execute([$id]);
+            }
 
             // خريطة: قيمة المقاس => رقم الكروب
             $sizeGrpMap = [];
@@ -202,10 +219,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $sizeIdGrpMap[$sz['id']] = $sizeGrpMap[(string)$sz['size']] ?? 0;
             }
 
-            // إدراج: كل لون × كل مقاس = سطر مستقل
+            // إدراج أو تحديث: كل لون × كل مقاس
             $insertVariant = $pdo->prepare("INSERT INTO `{$TV}`
                 (product_id, size_id, color_id, barcode, is_active, created_by)
-                VALUES (?, ?, ?, ?, 1, ?)");
+                VALUES (?, ?, ?, ?, 1, ?)
+                ON DUPLICATE KEY UPDATE barcode=VALUES(barcode), is_active=1");
 
             foreach ($colors as $ci => $clr) {
                 $colorId = (int)($clr['id'] ?? 0);
@@ -252,16 +270,20 @@ $szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1
 $szSt->execute([$editId]);
 $editSizes = $szSt->fetchAll(PDO::FETCH_ASSOC);
 
+// تجميع المقاسات بـ (selling_price + age_type) معاً للحفاظ على الكروبات
 $grpMap = [];
 foreach ($editSizes as $s) {
-    $key = (string)$s['selling_price'];
+    $ageType = $s['age_type'] ?? 'سنة';
+    $key     = $ageType . '_' . (string)$s['selling_price'];
     if (!isset($grpMap[$key])) {
         $grpMap[$key] = [
-            'key'        => 'edit_' . str_replace('.', '_', $key),
-            'type'       => 'سنة',
+            'key'        => 'edit_' . md5($key),
+            'type'       => $ageType,
             'sizes'      => [],
             'grpIdx'     => count($grpMap),
             'sell_price' => (float)$s['selling_price'],
+            'cost_price' => $s['cost_price'] !== null ? (float)$s['cost_price'] : '',
+            'margin_pct' => $s['margin_pct'] !== null ? (float)$s['margin_pct'] : 30,
             'packet_qty' => 0,
         ];
     }
@@ -275,8 +297,8 @@ foreach ($editSizeGroups as $grp) {
     $editPricing[] = [
         'group_key'  => $grp['key'],
         'packet_qty' => $grp['packet_qty'],
-        'cost_price' => '',
-        'margin'     => 30,
+        'cost_price' => $grp['cost_price'],
+        'margin'     => $grp['margin_pct'],
         'sell_price' => $grp['sell_price'],
     ];
 }
@@ -459,13 +481,13 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                         <label class="field-lbl">اسم المنتج <span class="req">*</span></label>
                         <input type="text" id="pName" class="form-control form-control-sm"
                                placeholder="مثال: بنطلون جينز أطفال"
-                               value="">
+                               value="<?= htmlspecialchars($editProd['name'] ?? '') ?>">
                     </div>
                     <div class="col-md-6">
                         <label class="field-lbl">رقم الموديل <span class="req">*</span></label>
                         <input type="text" id="pModel" class="form-control form-control-sm"
                                placeholder="مثال: MDL-2024-001" dir="ltr"
-                               value="<?= htmlspecialchars($editProd['name'] ?? '') ?>"
+                               value="<?= htmlspecialchars($editProd['model_number'] ?? '') ?>"
                                oninput="updateBarcodes()">
                     </div>
                 </div>
@@ -1155,7 +1177,7 @@ function pickColor(i) {
     if (pos >= 0) selColorIdxs.splice(pos, 1);
     else          selColorIdxs.push(i);
     // تحديث selColors من selColorIdxs
-    selColors = selColorIdxs.map(idx => ({name: allColors[idx].name, hex: allColors[idx].hex}));
+    selColors = selColorIdxs.map(idx => ({id: allColors[idx].id, name: allColors[idx].name, hex: allColors[idx].hex}));
     renderColorGrid();
     updateBarcodes();
     updateSummary();
@@ -1302,8 +1324,10 @@ function saveColor() {
         if (!d.ok) {
             // حتى لو فشل الحفظ بالجدول نضيفه محلياً
         }
-        allColors.push({id: d.id||0, name, hex});
-        selColors.push({name, hex});
+        const newId = parseInt(d.id) || 0;
+        allColors.push({id: newId, name, hex});
+        selColorIdxs.push(allColors.length - 1);
+        selColors = selColorIdxs.map(idx => ({id: allColors[idx].id, name: allColors[idx].name, hex: allColors[idx].hex}));
         renderColorGrid();
         hideColorModal();
         document.getElementById('colorName').value = '';
@@ -1324,7 +1348,7 @@ function copyLastProduct() {
         document.getElementById('pFabric').value = p.fabric_type || '';
         document.getElementById('pAgeType').value = p.age_type || 'سنة';
         if (p.category_id) document.getElementById('pCat').value = p.category_id;
-        sizeGroups = []; selColors = []; pricing = [];
+        sizeGroups = []; selColors = []; selColorIdxs = []; pricing = [];
         renderSizeGrid();
         renderColorGrid();
         updatePricing();
@@ -1475,9 +1499,11 @@ function removeImg() {
 
 // ── تهيئة بيانات التعديل ──
 sizeGroups   = <?= json_encode($editSizeGroups) ?>;
-activeGrpIdx = Math.max(0, sizeGroups.length - 1);
+activeGrpIdx = 0; // ابدأ بالكروب الأول
 pricing      = <?= json_encode($editPricing) ?>;
 pricing.forEach((p,i) => { if (sizeGroups[i]) p.group_key = sizeGroups[i].key; });
+// sync الـ select مع نوع الكروب الأول
+if (sizeGroups[0]) document.getElementById('pAgeType').value = sizeGroups[0].type;
 
 // تحميل الألوان
 (function(){

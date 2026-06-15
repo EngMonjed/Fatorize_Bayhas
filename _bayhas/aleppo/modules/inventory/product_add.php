@@ -161,15 +161,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         break;
                     }
                 }
+                $ageType   = $grp['type'] ?? 'سنة';
+                $costPrice = null;
+                $marginPct = null;
+                foreach ($pricing as $pr) {
+                    if ($pr['group_key'] === $grp['key']) {
+                        $costPrice = $pr['cost_price'] !== '' ? (float)$pr['cost_price'] : null;
+                        $marginPct = $pr['margin']     !== '' ? (float)$pr['margin']     : null;
+                        break;
+                    }
+                }
                 foreach ($grp['sizes'] as $szVal) {
                     $szLabel = trim((string)$szVal);
                     if (!$szLabel) continue;
                     try {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,sort_order,selling_price,packet_qty,is_active) VALUES (?,?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $sortOrder++, $sellPrice, $packetQty]);
+                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,cost_price,margin_pct,packet_qty,is_active) VALUES (?,?,?,?,?,?,?,?,1)")
+                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice, $marginPct, $packetQty]);
                     } catch (Exception $e) {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,sort_order,selling_price,is_active) VALUES (?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $sortOrder++, $sellPrice]);
+                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,is_active) VALUES (?,?,?,?,?,1)")
+                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice]);
                     }
                 }
             }
@@ -490,11 +500,12 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
             <div class="sec-body">
                 <div class="row g-3 mb-3">
                     <div class="col-md-4">
-                        <label class="field-lbl">نوع العمر</label>
-                        <select id="pAgeType" class="form-select form-select-sm" onchange="renderSizeGrid()">
+                        <label class="field-lbl">نوع عمر الكروب النشط</label>
+                        <select id="pAgeType" class="form-select form-select-sm" onchange="onAgeTypeChange()">
                             <option value="سنة" selected>سنة</option>
                             <option value="شهر">شهر</option>
                         </select>
+                        <div class="field-hint" id="ageTypeHint">يُطبّق على الكروب النشط</div>
                     </div>
                     <div class="col-md-4">
                         <label class="field-lbl">&nbsp;</label>
@@ -874,10 +885,38 @@ function toast(msg, type='success') {
 }
 
 // ── شبكة القياسات ──
+function getActiveType() {
+    // نوع الكروب النشط — أو قيمة الـ select إذا الكروب جديد
+    if (sizeGroups[activeGrpIdx]) return sizeGroups[activeGrpIdx].type;
+    return document.getElementById('pAgeType').value;
+}
+
+function onAgeTypeChange() {
+    // تغيير نوع الكروب النشط
+    const newType = document.getElementById('pAgeType').value;
+    if (sizeGroups[activeGrpIdx]) {
+        if (sizeGroups[activeGrpIdx].sizes.length > 0) {
+            if (!confirm('تغيير نوع العمر سيحذف أرقام الكروب النشط. متابعة؟')) {
+                document.getElementById('pAgeType').value = sizeGroups[activeGrpIdx].type;
+                return;
+            }
+            sizeGroups[activeGrpIdx].sizes = [];
+        }
+        sizeGroups[activeGrpIdx].type = newType;
+    }
+    renderSizeGrid();
+    updatePacket();
+    updatePricing();
+    updateSummary();
+}
+
 function renderSizeGrid() {
-    const ageType = document.getElementById('pAgeType').value;
-    const lbl     = document.getElementById('sizeGridLabel');
-    const grid    = document.getElementById('sizeGrid');
+    const ageType = getActiveType();
+    // sync select مع الكروب النشط
+    document.getElementById('pAgeType').value = ageType;
+
+    const lbl  = document.getElementById('sizeGridLabel');
+    const grid = document.getElementById('sizeGrid');
 
     if (ageType === 'سنة') {
         lbl.textContent = 'سنوات (1–30) — انقر لتحديد:';
@@ -908,6 +947,8 @@ function getNumGrpIdx(num, type) {
 }
 
 function toggleSize(num, type) {
+    // نوع العمر الفعلي = من الكروب النشط
+    if (sizeGroups[activeGrpIdx]) type = sizeGroups[activeGrpIdx].type;
     // هل هو مختار في أي كروب؟
     const existGrpIdx = getNumGrpIdx(num, type);
     if (existGrpIdx >= 0) {
@@ -946,17 +987,18 @@ function startNewGroup() {
     if (sizeGroups.length >= 4) {
         toast('الحد الأقصى 4 كروبات','danger'); return;
     }
-    // الكروب النشط يجب أن يكون فيه أرقام
     if (sizeGroups[activeGrpIdx] && sizeGroups[activeGrpIdx].sizes.length === 0) {
         toast('أضف أرقاماً للكروب الحالي أولاً','danger'); return;
     }
-    const type = document.getElementById('pAgeType').value;
+    // الكروب الجديد يبدأ بنوع العمر الافتراضي (سنة) — يمكن تغييره من الـ select
+    const type = 'سنة';
+    document.getElementById('pAgeType').value = type;
     sizeGroups.push({key: Date.now()+'', type, sizes:[], grpIdx: sizeGroups.length});
     activeGrpIdx = sizeGroups.length - 1;
     renderSizeGrid();
     updatePricing();
     updateBtnNewGrp();
-    toast('تم فتح كروب جديد — اختر أرقامه من الشبكة');
+    toast('كروب جديد — اختر نوع العمر من القائمة ثم حدد الأرقام');
 }
 
 function updateBtnNewGrp() {
@@ -976,16 +1018,16 @@ function renderGrpPills() {
         return;
     }
     container.innerHTML = sizeGroups.map((grp,i) => {
-        const isActive = i === activeGrpIdx && grp.sizes.length === 0;
         const isEmpty  = grp.sizes.length === 0;
         const minS = isEmpty ? '?' : Math.min(...grp.sizes);
         const maxS = isEmpty ? '?' : Math.max(...grp.sizes);
         const unit = grp.type === 'شهر' ? 'م' : ' سنة';
-        const lbl  = isEmpty ? 'يُكتب الآن...' : (minS === maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
+        const typeBadge = `<span style="font-size:.6rem;opacity:.75;margin-right:2px">(${grp.type})</span>`;
+        const lbl  = isEmpty ? 'يُكتب...' : (minS === maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
         const activeStyle = i === activeGrpIdx ? 'outline:2px solid #1e3a8a;outline-offset:1px;' : '';
-        return `<span class="grp-pill ${GRP_COLORS[i]}" style="${activeStyle}" onclick="setActiveGrp(${i})" title="${i===activeGrpIdx?'الكروب النشط — انقر مرتين لإزالته':'انقر للتبديل إليه'}">
+        return `<span class="grp-pill ${GRP_COLORS[i]}" style="${activeStyle}" onclick="setActiveGrp(${i})" title="${i===activeGrpIdx?'الكروب النشط':'انقر للتبديل'}">
             ${i===activeGrpIdx ? '<i class="bi bi-pencil-fill" style="font-size:.6rem"></i>' : ''}
-            ${GRP_NAMES[i]}: ${lbl}
+            ${GRP_NAMES[i]}: ${lbl} ${typeBadge}
             <i class="bi bi-x" style="font-size:.65rem;margin-right:2px" onclick="event.stopPropagation();removeGrp(${i})"></i>
         </span>`;
     }).join('');
@@ -1005,6 +1047,10 @@ function removeGrp(idx) {
 
 function setActiveGrp(idx) {
     activeGrpIdx = idx;
+    // sync الـ select مع نوع الكروب المختار
+    if (sizeGroups[idx]) {
+        document.getElementById('pAgeType').value = sizeGroups[idx].type;
+    }
     renderGrpPills();
     renderSizeGrid();
 }
@@ -1246,8 +1292,10 @@ function saveColor() {
         if (!d.ok) {
             // حتى لو فشل الحفظ بالجدول نضيفه محلياً
         }
-        allColors.push({id: d.id||0, name, hex});
-        selColors.push({name, hex});
+        const newId = parseInt(d.id) || 0;
+        allColors.push({id: newId, name, hex});
+        selColorIdxs.push(allColors.length - 1);
+        selColors = selColorIdxs.map(idx => ({id: allColors[idx].id, name: allColors[idx].name, hex: allColors[idx].hex}));
         renderColorGrid();
         hideColorModal();
         document.getElementById('colorName').value = '';
@@ -1268,7 +1316,7 @@ function copyLastProduct() {
         document.getElementById('pFabric').value = p.fabric_type || '';
         document.getElementById('pAgeType').value = p.age_type || 'سنة';
         if (p.category_id) document.getElementById('pCat').value = p.category_id;
-        sizeGroups = []; selColors = []; pricing = [];
+        sizeGroups = []; selColors = []; selColorIdxs = []; pricing = [];
         renderSizeGrid();
         renderColorGrid();
         updatePricing();
@@ -1371,7 +1419,7 @@ function onSupplierChange() {
 function onImgSelect(input) {
     if (!input.files || !input.files[0]) return;
     const file = input.files[0];
-    const maxMB = 5;
+    const maxMB = 50;
     if (file.size > maxMB * 1024 * 1024) {
         toast('حجم الصورة يتجاوز ' + maxMB + 'MB','danger'); return;
     }
