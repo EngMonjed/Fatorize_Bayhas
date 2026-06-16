@@ -92,17 +92,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (!$whId) throw new Exception('يجب اختيار المستودع');
             if (empty($rows)) throw new Exception('يجب إضافة مادة واحدة على الأقل');
 
-            // حساب الإجماليات
-            $subtotal = 0;
-            foreach ($rows as $r) { $subtotal += (float)$r['qty'] * (float)$r['unit_price']; }
-            $discPct  = (float)($_POST['discount_pct'] ?? 0);
-            $discAmt  = $subtotal * $discPct / 100;
-            $taxPct   = (float)($_POST['tax_pct'] ?? 0);
-            $taxAmt   = ($subtotal - $discAmt) * $taxPct / 100;
-            $total    = $subtotal - $discAmt + $taxAmt;
-            $paid     = (float)($_POST['paid_usd'] ?? 0);
-            $balance  = $total - $paid;
-            $status   = $paid >= $total ? 'paid' : ($paid > 0 ? 'partial' : 'confirmed');
+            // حساب الإجماليات بالعملتين
+            $subtotalOrig = 0;
+            foreach ($rows as $r) { $subtotalOrig += (float)$r['qty'] * (float)$r['unit_price']; }
+            $discPct    = (float)($_POST['discount_pct'] ?? 0);
+            $discOrig   = $subtotalOrig * $discPct / 100;
+            $taxPct     = (float)($_POST['tax_pct'] ?? 0);
+            $taxOrig    = ($subtotalOrig - $discOrig) * $taxPct / 100;
+            $totalOrig  = $subtotalOrig - $discOrig + $taxOrig;
+            $paidOrig   = (float)($_POST['paid_usd'] ?? 0); // المدفوع بعملة الفاتورة
+            $balanceOrig= $totalOrig - $paidOrig;
+
+            // التحويل للدولار
+            $rate       = $exRate > 0 ? $exRate : 1;
+            $subtotal   = $subtotalOrig / $rate;
+            $discAmt    = $discOrig     / $rate;
+            $taxAmt     = $taxOrig      / $rate;
+            $total      = $totalOrig    / $rate;
+            $paid       = $paidOrig     / $rate;
+            $balance    = $balanceOrig  / $rate;
+
+            $status = $paidOrig >= $totalOrig ? 'paid' : ($paidOrig > 0 ? 'partial' : 'draft');
 
             $invNo = generatePurchaseNo($pdo, $TP);
 
@@ -114,79 +124,150 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $pdo->prepare("INSERT INTO `{$TP}`
                 (invoice_no,supplier_ref,supplier_id,warehouse_id,currency,exchange_rate,
-                invoice_date,subtotal_usd,discount_pct,discount_usd,tax_pct,tax_usd,
-                total_usd,paid_usd,balance_usd,status,payment_method,notes,created_by)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                invoice_date,
+                subtotal_orig,subtotal_usd,
+                discount_pct,discount_orig,discount_usd,
+                tax_pct,tax_orig,tax_usd,
+                total_orig,total_usd,
+                paid_orig,paid_usd,
+                balance_orig,balance_usd,
+                status,payment_method,notes,created_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                 ->execute([$invNo,$suppRef,$supplierId,$whId,$currCode,$exRate,
-                    $invDate,$subtotal,$discPct,$discAmt,$taxPct,$taxAmt,
-                    $total,$paid,$balance,$status,$payMethod,$notes,$_SESSION['user_id']]);
+                    $invDate,
+                    $subtotalOrig,$subtotal,
+                    $discPct,$discOrig,$discAmt,
+                    $taxPct,$taxOrig,$taxAmt,
+                    $totalOrig,$total,
+                    $paidOrig,$paid,
+                    $balanceOrig,$balance,
+                    $status,$payMethod,$notes,$_SESSION['user_id']]);
             $purchaseId = (int)$pdo->lastInsertId();
 
-            // إدراج التفاصيل + حركات المخزون
+            // إدراج التفاصيل فقط — بدون تحديث المخزون حتى التأكيد
             foreach ($rows as $r) {
-                $itemId   = (int)$r['item_id'];
-                $qty      = (float)$r['qty'];
-                $price    = (float)$r['unit_price'];
-                $disc     = (float)($r['discount_pct'] ?? 0);
-                $lineTotal= $qty * $price * (1 - $disc/100);
-                // تحويل للدولار
-                $priceUsd = $exRate > 0 ? $price / $exRate : $price;
+                $itemId    = (int)$r['item_id'];
+                $qty       = (float)$r['qty'];
+                $price     = (float)$r['unit_price'];
+                $disc      = (float)($r['discount_pct'] ?? 0);
+                $lineTotal = $qty * $price * (1 - $disc/100);
+                $priceUsd  = $exRate > 0 ? $price / $exRate : $price;
 
-                // حركة مخزون
-                $qBefore = $pdo->prepare("SELECT COALESCE(SUM(quantity),0) FROM `{$TST}` WHERE item_id=? AND warehouse_id=?");
-                $qBefore->execute([$itemId,$whId]);
-                $before = (float)$qBefore->fetchColumn();
-
-                $movNo = 'MOV-'.date('Y').'-'.str_pad((int)$pdo->query("SELECT COUNT(*)+1 FROM `{$TM}`")->fetchColumn(), 5, '0', STR_PAD_LEFT);
+                // نسجل حركة معلقة (بدون تأثير على المخزون بعد)
+                $movNo = 'MOV-'.date('Y').'-'.str_pad(
+                    (int)$pdo->query("SELECT COUNT(*)+1 FROM `{$TM}`")->fetchColumn(), 5, '0', STR_PAD_LEFT);
                 $pdo->prepare("INSERT INTO `{$TM}`
                     (movement_no,item_id,warehouse_id,movement_type,direction,quantity,
                     unit_cost_usd,total_cost_usd,qty_before,qty_after,
-                    reference_type,reference_id,movement_date,created_by)
-                    VALUES (?,?,?,'receive','in',?,?,?,?,?,?,?,?,?)")
+                    reference_type,reference_id,movement_date,is_posted,created_by)
+                    VALUES (?,?,?,'receive','in',?,?,?,0,0,'purchase',?,?,0,?)")
                     ->execute([$movNo,$itemId,$whId,$qty,$priceUsd,$qty*$priceUsd,
-                        $before,$before+$qty,'purchase',$purchaseId,$invDate,$_SESSION['user_id']]);
+                        $purchaseId,$invDate,$_SESSION['user_id']]);
                 $movId = (int)$pdo->lastInsertId();
 
-                // تفاصيل الفاتورة
                 $pdo->prepare("INSERT INTO `{$TPI}` (purchase_id,item_id,quantity,unit_price_usd,discount_pct,total_usd,movement_id)
                     VALUES (?,?,?,?,?,?,?)")
                     ->execute([$purchaseId,$itemId,$qty,$priceUsd,$disc,$lineTotal,$movId]);
-
-                // تحديث المخزون (Weighted Average)
-                updateStock($pdo, $TST, $itemId, $whId, $qty, $priceUsd);
             }
+            // المخزون لا يتحدث هنا — ينتظر التأكيد
 
             echo json_encode(['ok'=>true,'invoice_no'=>$invNo,'id'=>$purchaseId,'msg'=>'تم حفظ الفاتورة بنجاح']);
+        }
+
+        // ── تأكيد فاتورة ──
+        elseif ($act === 'confirm_purchase') {
+            requirePermission('inventory.consumables','edit');
+            $id  = (int)$_POST['id'];
+            $pSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+            $pSt->execute([$id]);
+            $pur = $pSt->fetch();
+            if (!$pur) throw new Exception('الفاتورة غير موجودة');
+            if ($pur['status'] !== 'draft') throw new Exception('يمكن تأكيد المسودات فقط');
+
+            $whId  = (int)$pur['warehouse_id'];
+            $paid  = (float)($pur['paid_orig'] ?? $pur['paid_usd']);
+            $total = (float)($pur['total_orig'] ?? $pur['total_usd']);
+            $newStatus = $paid >= $total ? 'paid' : ($paid > 0 ? 'partial' : 'confirmed');
+
+            // جلب تفاصيل الفاتورة وتحديث المخزون
+            $items = $pdo->prepare("SELECT pi.*, m.id AS mov_id
+                FROM `{$TPI}` pi
+                LEFT JOIN `{$TM}` m ON m.id=pi.movement_id
+                WHERE pi.purchase_id=?");
+            $items->execute([$id]);
+            foreach ($items->fetchAll() as $row) {
+                $itemId   = (int)$row['item_id'];
+                $qty      = (float)$row['quantity'];
+                $priceUsd = (float)$row['unit_price_usd'];
+
+                // جلب الرصيد الحالي
+                $curSt = $pdo->prepare("SELECT quantity,avg_cost_usd FROM `{$TST}` WHERE item_id=? AND warehouse_id=?");
+                $curSt->execute([$itemId,$whId]);
+                $cur = $curSt->fetch();
+                $before   = $cur ? (float)$cur['quantity'] : 0;
+                $oldCost  = $cur ? (float)$cur['avg_cost_usd'] : 0;
+                $newQty   = $before + $qty;
+                $newCost  = $newQty > 0 ? (($before * $oldCost) + ($qty * $priceUsd)) / $newQty : $priceUsd;
+
+                // تحديث الحركة بالأرصدة الصحيحة
+                if ($row['mov_id']) {
+                    $pdo->prepare("UPDATE `{$TM}` SET qty_before=?,qty_after=?,is_posted=1 WHERE id=?")
+                        ->execute([$before, $newQty, $row['mov_id']]);
+                }
+
+                // تحديث المخزون
+                if ($cur) {
+                    $pdo->prepare("UPDATE `{$TST}` SET quantity=?,avg_cost_usd=?,last_movement=NOW() WHERE item_id=? AND warehouse_id=?")
+                        ->execute([$newQty,$newCost,$itemId,$whId]);
+                } else {
+                    $pdo->prepare("INSERT INTO `{$TST}` (item_id,warehouse_id,quantity,avg_cost_usd,last_movement) VALUES (?,?,?,?,NOW())")
+                        ->execute([$itemId,$whId,$qty,$priceUsd]);
+                }
+            }
+
+            $pdo->prepare("UPDATE `{$TP}` SET status=?,updated_by=?,updated_at=NOW() WHERE id=?")
+                ->execute([$newStatus,$_SESSION['user_id'],$id]);
+            echo json_encode(['ok'=>true,'msg'=>'تم تأكيد الفاتورة وتحديث المخزون']);
         }
 
         // ── إلغاء فاتورة ──
         elseif ($act === 'cancel_purchase') {
             requirePermission('inventory.consumables','edit');
-            $id = (int)$_POST['id'];
-            $p  = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
-            $p->execute([$id]);
-            $pur = $p->fetch();
+            $id  = (int)$_POST['id'];
+            $pSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+            $pSt->execute([$id]);
+            $pur = $pSt->fetch();
             if (!$pur) throw new Exception('الفاتورة غير موجودة');
             if ($pur['status'] === 'cancelled') throw new Exception('الفاتورة ملغاة مسبقاً');
 
-            // عكس حركات المخزون
-            $items = $pdo->prepare("SELECT pi.*, m.qty_before FROM `{$TPI}` pi
-                LEFT JOIN `{$TM}` m ON m.id=pi.movement_id WHERE pi.purchase_id=?");
-            $items->execute([$id]);
-            foreach ($items->fetchAll() as $row) {
-                // تحديث المخزون (خصم الكمية)
-                $pdo->prepare("UPDATE `{$TST}` SET quantity=quantity-?, last_movement=NOW()
-                    WHERE item_id=? AND warehouse_id=?")
-                    ->execute([$row['quantity'], $row['item_id'], $pur['warehouse_id']]);
-                // تحديث حالة الحركة
-                if ($row['movement_id']) {
-                    $pdo->prepare("UPDATE `{$TM}` SET movement_type='return_out', direction='out' WHERE id=?")
-                        ->execute([$row['movement_id']]);
+            $wasPosted = in_array($pur['status'], ['confirmed','partial','paid']);
+
+            if ($wasPosted) {
+                // عكس المخزون فقط إذا كانت مؤكدة
+                $items = $pdo->prepare("SELECT pi.* FROM `{$TPI}` pi WHERE pi.purchase_id=?");
+                $items->execute([$id]);
+                foreach ($items->fetchAll() as $row) {
+                    $pdo->prepare("UPDATE `{$TST}` SET quantity=GREATEST(0,quantity-?), last_movement=NOW()
+                        WHERE item_id=? AND warehouse_id=?")
+                        ->execute([$row['quantity'],$row['item_id'],$pur['warehouse_id']]);
                 }
+                // تحديث حالة الحركات
+                $pdo->prepare("UPDATE `{$TM}` m
+                    JOIN `{$TPI}` pi ON pi.movement_id=m.id
+                    SET m.is_posted=0, m.movement_type='return_out'
+                    WHERE pi.purchase_id=?")
+                    ->execute([$id]);
+                $msg = 'تم إلغاء الفاتورة وعكس المخزون';
+            } else {
+                // مسودة — فقط نلغيها بدون عكس مخزون
+                $pdo->prepare("UPDATE `{$TM}` m JOIN `{$TPI}` pi ON pi.movement_id=m.id
+                    SET m.is_posted=0 WHERE pi.purchase_id=?")->execute([$id]);
+                $msg = 'تم إلغاء المسودة';
             }
-            $pdo->prepare("UPDATE `{$TP}` SET status='cancelled', updated_by=?, updated_at=NOW() WHERE id=?")
-                ->execute([$_SESSION['user_id'], $id]);
-            echo json_encode(['ok'=>true,'msg'=>'تم إلغاء الفاتورة وعكس المخزون']);
+
+            $pdo->prepare("UPDATE `{$TP}` SET status='cancelled',updated_by=?,updated_at=NOW() WHERE id=?")
+                ->execute([$_SESSION['user_id'],$id]);
+            echo json_encode(['ok'=>true,'msg'=>$msg]);
         }
 
         // ── إضافة مورد جديد ──
@@ -283,14 +364,15 @@ table.mtbl tr:hover td{background:#f8faff}
 .act-btn{width:28px;height:28px;border-radius:7px;border:1px solid #e2e8f0;background:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.8rem;color:#64748b;cursor:pointer;transition:all .12s}
 .act-btn:hover{background:#f1f5f9;color:#1e293b}
 .act-btn.danger:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5}
+.act-btn.success-h:hover{background:#dcfce7;color:#16a34a;border-color:#86efac}
 /* ── فاتورة الإدخال ── */
-.inv-line{display:grid;grid-template-columns:minmax(0,2.5fr) 80px 100px 80px 90px 32px;gap:6px;align-items:center;margin-bottom:6px}
+.inv-line{display:grid;grid-template-columns:minmax(0,2.5fr) 80px 100px 80px 80px 90px 32px;gap:6px;align-items:center;margin-bottom:6px}
 .inv-line input,.inv-line select{font-size:.78rem;padding:4px 7px;border:1px solid #e2e8f0;border-radius:7px;width:100%}
 .inv-line input[readonly]{background:#f8fafc;color:#64748b}
 .inv-total{background:#f8fafc;border-radius:10px;padding:10px 14px;font-size:.82rem}
 .inv-total-row{display:flex;justify-content:space-between;padding:3px 0}
 .inv-total-row.final{font-weight:700;color:#1e293b;font-size:.9rem;border-top:1px solid #e2e8f0;padding-top:6px;margin-top:4px}
-.field-lbl{font-size:.74rem;font-weight:600;color:#64748b;margin-bottom:3px;display:block}
+.field-lbl{font-size:.76rem;font-weight:700;color:#475569;margin-bottom:4px;display:block}
 .req{color:#dc2626}
 .n{font-variant-numeric:tabular-nums}
 </style>
@@ -419,10 +501,15 @@ table.mtbl tr:hover td{background:#f8faff}
             <td class="text-muted"><?= $pur['invoice_date'] ?></td>
             <td><?= htmlspecialchars($pur['supplier_name'] ?? '—') ?></td>
             <td style="font-size:.78rem;color:#64748b"><?= htmlspecialchars($pur['wh_name'] ?? '—') ?></td>
-            <td class="n fw-600"><?= number_format($pur['total_usd'],2) ?> <?=$sym?></td>
-            <td class="n text-success fw-600"><?= number_format($pur['paid_usd'],2) ?> <?=$sym?></td>
-            <td class="n <?= $pur['balance_usd']>0?'text-danger fw-600':'' ?>">
-                <?= number_format($pur['balance_usd'],2) ?> <?=$sym?>
+            <?php
+                $tOrig = $pur['total_orig']   ?? $pur['total_usd'];
+                $pOrig = $pur['paid_orig']    ?? $pur['paid_usd'];
+                $bOrig = $pur['balance_orig'] ?? $pur['balance_usd'];
+            ?>
+            <td class="n fw-600"><?= number_format($tOrig,2) ?> <?=$sym?></td>
+            <td class="n text-success fw-600"><?= number_format($pOrig,2) ?> <?=$sym?></td>
+            <td class="n <?= $bOrig>0?'text-danger fw-600':'' ?>">
+                <?= number_format($bOrig,2) ?> <?=$sym?>
             </td>
             <td><span class="badge <?=$st['cls']?>" style="font-size:.68rem"><?=$st['label']?></span></td>
             <td>
@@ -430,6 +517,11 @@ table.mtbl tr:hover td{background:#f8faff}
                     <button class="act-btn" onclick="viewInvoice(<?=$pur['id']?>)" title="عرض" style="color:#0891b2;border-color:#a5f3fc">
                         <i class="bi bi-eye"></i>
                     </button>
+                    <?php if ($pur['status'] === 'draft'): ?>
+                    <button class="act-btn success-h" onclick="confirmInvoice(<?=$pur['id']?>, '<?=htmlspecialchars($pur['invoice_no'],ENT_QUOTES)?>')" title="تأكيد الفاتورة" style="color:#16a34a;border-color:#86efac">
+                        <i class="bi bi-check-circle"></i>
+                    </button>
+                    <?php endif; ?>
                     <?php if (!in_array($pur['status'],['cancelled','paid'])): ?>
                     <button class="act-btn danger" onclick="cancelInvoice(<?=$pur['id']?>, '<?=htmlspecialchars($pur['invoice_no'],ENT_QUOTES)?>')" title="إلغاء">
                         <i class="bi bi-x-circle"></i>
@@ -458,7 +550,7 @@ table.mtbl tr:hover td{background:#f8faff}
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body px-4 pt-3">
+      <div class="modal-body px-4 pt-3" style="font-size:.85rem;font-weight:500">
 
         <!-- بيانات رأس الفاتورة -->
         <div class="row g-3 mb-3 pb-3" style="border-bottom:1px solid #f1f5f9">
@@ -509,7 +601,10 @@ table.mtbl tr:hover td{background:#f8faff}
           </div>
           <div class="col-md-2">
             <label class="field-lbl">سعر الصرف (/$)</label>
-            <input type="number" id="iExRate" class="form-control form-control-sm" value="1" min="0.0001" step="0.0001">
+            <input type="number" id="iExRate" class="form-control form-control-sm" value="1" min="0.0001" step="0.0001" oninput="calcTotals()">
+            <div id="rateWarning" style="display:none;font-size:.68rem;color:#d97706;margin-top:2px">
+              <i class="bi bi-exclamation-triangle me-1"></i>تأكد من سعر الصرف
+            </div>
           </div>
           <div class="col-md-3">
             <label class="field-lbl">رقم فاتورة المورد</label>
@@ -525,8 +620,9 @@ table.mtbl tr:hover td{background:#f8faff}
             </select>
           </div>
           <div class="col-md-3">
-            <label class="field-lbl">المبلغ المدفوع</label>
+            <label class="field-lbl">المبلغ المدفوع <span id="iPaidCurLabel" style="color:#0891b2"></span></label>
             <input type="number" id="iPaid" class="form-control form-control-sm" min="0" step="0.01" placeholder="0.00" oninput="calcTotals()">
+            <div class="field-hint">بعملة الفاتورة</div>
           </div>
           <div class="col-md-3">
             <label class="field-lbl">ملاحظات</label>
@@ -546,8 +642,8 @@ table.mtbl tr:hover td{background:#f8faff}
         </div>
 
         <!-- رأس الجدول -->
-        <div class="inv-line mb-1" style="font-size:.7rem;color:#64748b;font-weight:600">
-          <span>اسم المادة</span><span>الكمية</span><span>سعر الوحدة</span><span>خصم %</span><span>الإجمالي</span><span></span>
+        <div style="display:grid;grid-template-columns:minmax(0,2.5fr) 80px 100px 80px 80px 90px 32px;gap:6px;margin-bottom:6px;font-size:.75rem;color:#334155;font-weight:700">
+          <span>اسم المادة</span><span>الكمية</span><span>السعر</span><span>خصم%</span><span>بالدولار</span><span>الإجمالي</span><span></span>
         </div>
         <div id="linesWrap"></div>
 
@@ -741,18 +837,25 @@ function onSupplierChange() {
 
 // ── تغيير العملة ──
 function onCurrencyChange() {
-    const sel = document.getElementById('iCurrency');
-    const opt = sel.options[sel.selectedIndex];
+    const sel  = document.getElementById('iCurrency');
+    const opt  = sel.options[sel.selectedIndex];
     const rate = parseFloat(opt.dataset.rate) || 1;
     symCur = opt.dataset.sym || '$';
     document.getElementById('iExRate').value = rate;
-    renderLines();
+    const lbl = document.getElementById('iPaidCurLabel');
+    if (lbl) lbl.textContent = '(' + (opt.text.split(' - ')[0]) + ')';
+    // تحذير إذا عملة غير USD وسعر صرف = 1
+    const warn = document.getElementById('rateWarning');
+    const isBase = opt.text.includes('USD');
+    warn.style.display = (!isBase && rate <= 1) ? 'block' : 'none';
+    refreshUsdFields();
     calcTotals();
 }
 
 // ── فتح مودال فاتورة جديدة ──
 function openNewInvoice() {
     lines = [];
+    document.getElementById('linesWrap').innerHTML = '';
     document.getElementById('iSupplier').value    = '';
     document.getElementById('iSupplierRef').value = '';
     document.getElementById('iDate').value        = new Date().toISOString().split('T')[0];
@@ -768,56 +871,107 @@ function openNewInvoice() {
 
 // ── إضافة سطر ──
 function addLine() {
+    const i = lines.length;
     lines.push({item_id:'', qty:1, unit_price:'', discount_pct:0, total:0});
-    renderLines();
-}
-
-function removeLine(i) {
-    lines.splice(i,1);
-    renderLines();
+    appendLineDOM(i);
     calcTotals();
 }
 
-function renderLines() {
+function removeLine(idx) {
+    lines.splice(idx, 1);
+    rebuildAllLines();
+    calcTotals();
+}
+
+function appendLineDOM(i) {
     const wrap = document.getElementById('linesWrap');
-    wrap.innerHTML = lines.map((l,i) => `
-    <div class="inv-line" id="line_${i}">
-      <select onchange="onItemSelect(${i},this.value)" class="form-select form-select-sm" style="font-size:.78rem">
+    const div  = document.createElement('div');
+    div.className = 'inv-line';
+    div.id = 'line_' + i;
+    div.innerHTML = `
+      <select class="form-select form-select-sm" style="font-size:.78rem">
         <option value="">— اختر المادة —</option>
-        ${ITEMS.map(it=>`<option value="${it.id}" ${l.item_id==it.id?'selected':''}>${it.name} (${it.unit})</option>`).join('')}
+        ${ITEMS.map(it=>`<option value="${it.id}">${it.name} (${it.unit})</option>`).join('')}
       </select>
-      <input type="number" min="0.001" step="0.001" value="${l.qty||1}"
-             oninput="updateLine(${i},'qty',this.value)" placeholder="الكمية">
-      <input type="number" min="0" step="0.0001" value="${l.unit_price||''}"
-             oninput="updateLine(${i},'unit_price',this.value)" placeholder="السعر">
-      <input type="number" min="0" max="100" step="0.01" value="${l.discount_pct||0}"
-             oninput="updateLine(${i},'discount_pct',this.value)" placeholder="0">
-      <input type="number" value="${l.total||''}" readonly placeholder="0.00">
-      <button onclick="removeLine(${i})" style="width:28px;height:28px;border-radius:7px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.82rem">
+      <input type="number" min="0.001" step="0.001" value="1" placeholder="الكمية">
+      <input type="number" min="0" step="0.01" value="" placeholder="السعر">
+      <input type="number" min="0" max="100" step="0.01" value="0" placeholder="0">
+      <input type="number" readonly placeholder="$" style="background:#f0fdf4;color:#16a34a;font-size:.72rem">
+      <input type="number" readonly placeholder="0.00">
+      <button type="button" onclick="removeLine(${i})" style="width:28px;height:28px;border-radius:7px;border:1px solid #fca5a5;background:#fff;color:#dc2626;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.82rem">
         <i class="bi bi-x-lg"></i>
-      </button>
-    </div>`).join('');
-}
+      </button>`;
+    wrap.appendChild(div);
 
-function onItemSelect(i, itemId) {
-    const it = ITEMS.find(x => x.id == itemId);
-    lines[i].item_id = itemId;
-    if (it && it.estimated_cost > 0) {
-        lines[i].unit_price = it.estimated_cost;
+    const inputs = div.querySelectorAll('input, select');
+    const selEl  = inputs[0];
+    const qtyEl  = inputs[1];
+    const prEl   = inputs[2];
+    const discEl = inputs[3];
+    const usdEl  = inputs[4];
+    const totEl  = inputs[5];
+
+    function recalc() {
+        const qty  = parseFloat(qtyEl.value)  || 0;
+        const pr   = parseFloat(prEl.value)   || 0;
+        const disc = parseFloat(discEl.value) || 0;
+        const rate = parseFloat(document.getElementById('iExRate').value) || 1;
+        lines[i].qty          = qty;
+        lines[i].unit_price   = pr;
+        lines[i].discount_pct = disc;
+        lines[i].total        = qty * pr * (1 - disc/100);
+        usdEl.value = pr > 0 ? (pr / rate).toFixed(4) : '';
+        totEl.value = lines[i].total > 0 ? lines[i].total.toFixed(2) : '';
+        calcTotals();
     }
-    renderLines();
-    calcTotals();
+
+    selEl.addEventListener('change', function() {
+        const it = ITEMS.find(x => x.id == this.value);
+        lines[i].item_id = this.value;
+        if (it && parseFloat(it.estimated_cost) > 0) {
+            prEl.value = it.estimated_cost;
+            lines[i].unit_price = parseFloat(it.estimated_cost);
+        }
+        recalc();
+    });
+    qtyEl.addEventListener('input',  recalc);
+    prEl.addEventListener('input',   recalc);
+    discEl.addEventListener('input', recalc);
+    // حفظ recalc للتحديث من الخارج (سعر الصرف)
+    div._recalc = recalc;
 }
 
-function updateLine(i, field, val) {
-    lines[i][field] = parseFloat(val) || 0;
-    const qty   = parseFloat(lines[i].qty)        || 0;
-    const price = parseFloat(lines[i].unit_price) || 0;
-    const disc  = parseFloat(lines[i].discount_pct) || 0;
-    lines[i].total = qty * price * (1 - disc/100);
-    renderLines();
-    calcTotals();
+function rebuildAllLines() {
+    const saved = JSON.parse(JSON.stringify(lines));
+    document.getElementById('linesWrap').innerHTML = '';
+    lines = [];
+    saved.forEach((l, i) => {
+        lines.push(l);
+        appendLineDOM(i);
+        const div = document.getElementById('line_' + i);
+        if (!div) return;
+        const inputs = div.querySelectorAll('input, select');
+        inputs[0].value = l.item_id || '';
+        inputs[1].value = l.qty     || 1;
+        inputs[2].value = l.unit_price || '';
+        inputs[3].value = l.discount_pct || 0;
+        if (div._recalc) div._recalc();
+    });
 }
+
+function refreshUsdFields() {
+    document.querySelectorAll('#linesWrap .inv-line').forEach(div => {
+        if (div._recalc) div._recalc();
+    });
+}
+
+function checkRateWarning() {
+    const exRate = parseFloat(document.getElementById('iExRate').value) || 1;
+    const sel    = document.getElementById('iCurrency');
+    const isBase = sel.options[sel.selectedIndex]?.text.includes('USD');
+    document.getElementById('rateWarning').style.display = (!isBase && exRate <= 1) ? 'block' : 'none';
+}
+document.getElementById('iExRate')?.addEventListener('input', () => { checkRateWarning(); refreshUsdFields(); calcTotals(); });
 
 function calcTotals() {
     const subtotal = lines.reduce((s,l) => s + (parseFloat(l.total)||0), 0);
@@ -879,37 +1033,73 @@ function viewInvoice(id) {
         const st=STATUS_MAP[p.status]||STATUS_MAP['draft'];
         const sym=p.currency_symbol||'$';
         document.getElementById('vTitle').textContent='فاتورة: '+p.invoice_no;
-        const itemsHtml=(p.items||[]).map(it=>`
-            <tr>
+        const exRateV = parseFloat(p.exchange_rate||1);
+        const itemsHtml=(p.items||[]).map(it=>{
+            const unitOrig  = parseFloat(it.unit_price_usd) * exRateV;
+            const totalOrig = parseFloat(it.total_usd)      * exRateV;
+            const isUSDv    = p.currency === 'USD';
+            return `<tr>
                 <td>${it.item_name}</td>
                 <td class="n text-center">${parseFloat(it.quantity).toFixed(3)} ${it.unit}</td>
-                <td class="n text-center">${parseFloat(it.unit_price_usd).toFixed(4)} ${sym}</td>
+                <td class="n text-center">${unitOrig.toFixed(2)} ${sym}</td>
                 <td class="n text-center">${parseFloat(it.discount_pct).toFixed(0)}%</td>
-                <td class="n text-end fw-600">${parseFloat(it.total_usd).toFixed(2)} ${sym}</td>
-            </tr>`).join('');
+                <td class="n text-end fw-600">${totalOrig.toFixed(2)} ${sym}</td>
+                ${!isUSDv?`<td class="n text-end" style="color:#94a3b8;font-size:.72rem">${parseFloat(it.total_usd).toFixed(2)} $</td>`:''}
+            </tr>`;}).join('');
+        // استخدام المبالغ الأصلية بعملة الفاتورة
+        const tOrig = parseFloat(p.total_orig   || p.total_usd);
+        const pOrig = parseFloat(p.paid_orig    || p.paid_usd);
+        const bOrig = parseFloat(p.balance_orig || p.balance_usd);
+        const sOrig = parseFloat(p.subtotal_orig|| p.subtotal_usd);
+        const dOrig = parseFloat(p.discount_orig|| p.discount_usd);
+        const xOrig = parseFloat(p.tax_orig     || p.tax_usd);
+        const exRate= parseFloat(p.exchange_rate|| 1);
+        const isUSD = p.currency === 'USD';
+
         document.getElementById('vBody').innerHTML=`
         <div class="row g-2 mb-3">
             <div class="col-6"><span style="font-size:.72rem;color:#64748b">المورد</span><div class="fw-600" style="font-size:.84rem">${p.supplier_name||'—'}</div></div>
             <div class="col-6"><span style="font-size:.72rem;color:#64748b">المستودع</span><div class="fw-600" style="font-size:.84rem">${p.wh_name||'—'}</div></div>
             <div class="col-6"><span style="font-size:.72rem;color:#64748b">التاريخ</span><div style="font-size:.84rem">${p.invoice_date}</div></div>
             <div class="col-6"><span style="font-size:.72rem;color:#64748b">الحالة</span><div><span class="badge ${st.cls}" style="font-size:.7rem">${st.label}</span></div></div>
-            ${p.supplier_ref?`<div class="col-12"><span style="font-size:.72rem;color:#64748b">رقم فاتورة المورد</span><div dir="ltr" style="font-size:.82rem">${p.supplier_ref}</div></div>`:''}
+            <div class="col-6"><span style="font-size:.72rem;color:#64748b">العملة</span><div style="font-size:.82rem">${p.currency_code||'USD'} ${!isUSD?`(1$ = ${exRate} ${sym})`:''}  </div></div>
+            ${p.supplier_ref?`<div class="col-6"><span style="font-size:.72rem;color:#64748b">رقم فاتورة المورد</span><div dir="ltr" style="font-size:.82rem">${p.supplier_ref}</div></div>`:''}
         </div>
         <table class="mtbl mb-3" style="font-size:.78rem">
             <thead><tr style="background:#f8fafc">
-                <th>المادة</th><th class="text-center">الكمية</th><th class="text-center">سعر الوحدة</th><th class="text-center">خصم</th><th class="text-end">الإجمالي</th>
+                <th>المادة</th><th class="text-center">الكمية</th>
+                <th class="text-center">سعر الوحدة (${sym})</th>
+                <th class="text-center">خصم</th>
+                <th class="text-end">الإجمالي (${sym})</th>
+                ${!isUSD?`<th class="text-end">بالدولار</th>`:''}
             </tr></thead>
             <tbody>${itemsHtml}</tbody>
         </table>
         <div style="background:#f8fafc;border-radius:10px;padding:10px 14px">
-            <div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#64748b">المجموع</span><span class="n">${parseFloat(p.subtotal_usd).toFixed(2)} ${sym}</span></div>
-            ${p.discount_usd>0?`<div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#64748b">خصم (${p.discount_pct}%)</span><span class="n text-danger">-${parseFloat(p.discount_usd).toFixed(2)} ${sym}</span></div>`:''}
-            ${p.tax_usd>0?`<div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#64748b">ضريبة (${p.tax_pct}%)</span><span class="n">+${parseFloat(p.tax_usd).toFixed(2)} ${sym}</span></div>`:''}
-            <div class="d-flex justify-content-between mb-1 fw-700" style="font-size:.86rem;border-top:1px solid #e2e8f0;padding-top:6px"><span>الإجمالي</span><span class="n">${parseFloat(p.total_usd).toFixed(2)} ${sym}</span></div>
-            <div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#16a34a">المدفوع</span><span class="n text-success">${parseFloat(p.paid_usd).toFixed(2)} ${sym}</span></div>
-            <div class="d-flex justify-content-between" style="font-size:.8rem"><span style="color:#dc2626">المتبقي</span><span class="n text-danger">${parseFloat(p.balance_usd).toFixed(2)} ${sym}</span></div>
+            <div class="d-flex justify-content-between mb-1" style="font-size:.8rem">
+                <span style="color:#64748b">المجموع</span>
+                <span class="n">${sOrig.toFixed(2)} ${sym} ${!isUSD?`<span style="color:#94a3b8;font-size:.7rem">(${parseFloat(p.subtotal_usd).toFixed(2)} $)</span>`:''}</span>
+            </div>
+            ${dOrig>0?`<div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#64748b">خصم (${p.discount_pct}%)</span><span class="n text-danger">-${dOrig.toFixed(2)} ${sym}</span></div>`:''}
+            ${xOrig>0?`<div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#64748b">ضريبة (${p.tax_pct}%)</span><span class="n">+${xOrig.toFixed(2)} ${sym}</span></div>`:''}
+            <div class="d-flex justify-content-between mb-1 fw-700" style="font-size:.86rem;border-top:1px solid #e2e8f0;padding-top:6px">
+                <span>الإجمالي</span>
+                <span class="n">${tOrig.toFixed(2)} ${sym} ${!isUSD?`<span style="color:#94a3b8;font-size:.7rem">(${parseFloat(p.total_usd).toFixed(2)} $)</span>`:''}</span>
+            </div>
+            <div class="d-flex justify-content-between mb-1" style="font-size:.8rem"><span style="color:#16a34a">المدفوع</span><span class="n text-success">${pOrig.toFixed(2)} ${sym}</span></div>
+            <div class="d-flex justify-content-between" style="font-size:.8rem"><span style="color:#dc2626">المتبقي</span><span class="n text-danger">${bOrig.toFixed(2)} ${sym}</span></div>
         </div>
         ${p.notes?`<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${p.notes}</div>`:''}`;
+    });
+}
+
+// ── تأكيد فاتورة ──
+function confirmInvoice(id, no) {
+    if(!confirm(`تأكيد الفاتورة "${no}"؟
+سيتم اعتماد الفاتورة وتسجيل المخزون نهائياً.`)) return;
+    post({_action:'confirm_purchase',id}).then(d=>{
+        if(d.ok){toast('✅ '+d.msg);setTimeout(()=>location.reload(),700);}
+        else toast(d.msg,'danger');
     });
 }
 

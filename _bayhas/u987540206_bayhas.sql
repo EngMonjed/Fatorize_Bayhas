@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1:3306
--- Generation Time: Jun 15, 2026 at 11:56 AM
+-- Generation Time: Jun 16, 2026 at 07:20 AM
 -- Server version: 11.8.6-MariaDB-log
 -- PHP Version: 7.2.34
 
@@ -228,7 +228,10 @@ CREATE TABLE `consumable_items_alp` (
 --
 
 INSERT INTO `consumable_items_alp` (`id`, `name`, `category`, `unit`, `estimated_cost`, `currency_id`, `notes`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES
-(2, 'قهوة', 'food', 'علبة', 2.50, 1, '', 1, 1, '2026-06-15 11:35:23', NULL);
+(2, 'قهوة', 'food', 'علبة', 2.50, 1, '', 1, 1, '2026-06-15 11:35:23', NULL),
+(3, 'لاصق كبير', 'supplies', 'قطعة', 50000.00, 4, '', 1, 1, '2026-06-16 05:24:57', NULL),
+(4, 'إبرة لماكينة العنقبة', 'maintenance', 'علية', 175000.00, 4, '', 1, 1, '2026-06-16 05:25:37', NULL),
+(5, 'خيط دهبي عيار 27', 'maintenance', 'كونة', 2.00, 1, '', 1, 1, '2026-06-16 05:26:01', NULL);
 
 -- --------------------------------------------------------
 
@@ -382,7 +385,11 @@ CREATE TABLE `consumable_stock_alp` (
 --
 
 INSERT INTO `consumable_stock_alp` (`id`, `item_id`, `warehouse_id`, `quantity`, `min_quantity`, `avg_cost_usd`, `last_movement`, `updated_at`) VALUES
-(3, 2, 2, 0.000, 2.000, 0.0000, NULL, NULL);
+(3, 2, 2, 0.000, 2.000, 0.0000, NULL, NULL),
+(4, 3, 1, 0.000, 5.000, 0.0000, NULL, NULL),
+(5, 4, 2, 10.000, 5.000, 87506.0345, '2026-06-16 07:04:44', '2026-06-16 07:04:44'),
+(6, 5, 2, 0.000, 15.000, 0.0000, NULL, NULL),
+(7, 3, 2, 0.000, 0.000, 3.4483, '2026-06-16 07:05:17', '2026-06-16 07:05:17');
 
 -- --------------------------------------------------------
 
@@ -1207,6 +1214,7 @@ CREATE TABLE `product_suppliers_alp` (
   `address` text DEFAULT NULL,
   `tax_number` varchar(50) DEFAULT NULL,
   `type` enum('manufacturer','distributor','wholesaler','retailer') DEFAULT 'wholesaler',
+  `supplier_type` enum('product','consumable','both') NOT NULL DEFAULT 'product',
   `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `credit_limit` decimal(12,2) DEFAULT 0.00,
   `discount_percentage` decimal(5,2) DEFAULT 0.00,
@@ -1221,8 +1229,10 @@ CREATE TABLE `product_suppliers_alp` (
 -- Dumping data for table `product_suppliers_alp`
 --
 
-INSERT INTO `product_suppliers_alp` (`id`, `account_id`, `prepaid_account_id`, `name`, `contact_person`, `phone`, `email`, `address`, `tax_number`, `type`, `status`, `credit_limit`, `discount_percentage`, `notes`, `created_by`, `updated_by`, `created_at`, `updated_at`) VALUES
-(1, NULL, NULL, 'بيهس', 'أبو يوسف', '', NULL, NULL, NULL, 'wholesaler', 'active', 0.00, 0.00, 'يرءؤر', 1, NULL, '2026-06-14 10:06:41', NULL);
+INSERT INTO `product_suppliers_alp` (`id`, `account_id`, `prepaid_account_id`, `name`, `contact_person`, `phone`, `email`, `address`, `tax_number`, `type`, `supplier_type`, `status`, `credit_limit`, `discount_percentage`, `notes`, `created_by`, `updated_by`, `created_at`, `updated_at`) VALUES
+(1, NULL, NULL, 'بيهس', 'أبو يوسف', '', NULL, NULL, NULL, 'wholesaler', 'product', 'active', 0.00, 0.00, 'يرءؤر', 1, NULL, '2026-06-14 10:06:41', NULL),
+(2, NULL, NULL, 'شركة القلم لبيع المواد اللاصقة', 'محمد القلم', '', NULL, NULL, NULL, 'retailer', 'consumable', 'active', 0.00, 0.00, '', 1, NULL, '2026-06-16 05:23:37', '2026-06-16 05:23:54'),
+(3, NULL, NULL, 'شركة البيك للمستلزمات الماكينات', 'محمود بيك', '', NULL, NULL, NULL, 'retailer', 'consumable', 'active', 0.00, 0.00, '', 1, NULL, '2026-06-16 05:26:36', NULL);
 
 -- --------------------------------------------------------
 
@@ -2565,25 +2575,25 @@ ALTER TABLE `consumable_issue_items_alp`
 -- AUTO_INCREMENT for table `consumable_items_alp`
 --
 ALTER TABLE `consumable_items_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `consumable_movements_alp`
 --
 ALTER TABLE `consumable_movements_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `consumable_purchases_alp`
 --
 ALTER TABLE `consumable_purchases_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `consumable_purchase_items_alp`
 --
 ALTER TABLE `consumable_purchase_items_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `consumable_sales_alp`
@@ -2601,7 +2611,7 @@ ALTER TABLE `consumable_sale_items_alp`
 -- AUTO_INCREMENT for table `consumable_stock_alp`
 --
 ALTER TABLE `consumable_stock_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `currencies`
@@ -2769,7 +2779,7 @@ ALTER TABLE `product_sizes_alp`
 -- AUTO_INCREMENT for table `product_suppliers_alp`
 --
 ALTER TABLE `product_suppliers_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `product_variants_alp`
