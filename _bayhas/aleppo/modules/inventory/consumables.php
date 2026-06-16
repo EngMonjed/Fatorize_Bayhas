@@ -220,6 +220,40 @@ table.mtbl tr:hover td{background:#f8faff}
     </div>
 </div>
 
+<!-- التبويبات -->
+<ul class="nav nav-tabs mb-3" id="mainTabs" style="border-bottom:2px solid #e2e8f0">
+    <li class="nav-item">
+        <a class="nav-link active fw-600" id="tab-items" href="#" onclick="switchTab('items',this)"
+           style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
+            <i class="bi bi-box-seam me-1"></i>المواد الاستهلاكية
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link fw-600" id="tab-purchases" href="consumable_purchases.php"
+           style="border:none;color:#64748b;font-size:.83rem">
+            <i class="bi bi-cart-plus me-1"></i>فواتير الشراء
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link fw-600" id="tab-issues" href="consumable_issues.php"
+           style="border:none;color:#64748b;font-size:.83rem">
+            <i class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link fw-600" id="tab-sales" href="consumable_sales.php"
+           style="border:none;color:#64748b;font-size:.83rem">
+            <i class="bi bi-receipt me-1"></i>فواتير البيع
+        </a>
+    </li>
+    <li class="nav-item ms-auto">
+        <a class="nav-link fw-600" href="consumable_movements.php"
+           style="border:none;color:#0891b2;font-size:.83rem">
+            <i class="bi bi-arrow-left-right me-1"></i>سجل الحركات
+        </a>
+    </li>
+</ul>
+
 <!-- الجدول -->
 <div class="tbl-wrap">
     <div class="tbl-hdr">
@@ -419,6 +453,16 @@ table.mtbl tr:hover td{background:#f8faff}
 const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
 function sbOpen()  { sb.classList.add('open');  ov.classList.add('show'); }
 function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+window.addEventListener('resize', () => { if(window.innerWidth>991) sbClose(); });
+function toggleGroup(g) {
+    const o = g.classList.contains('open');
+    document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
+    g.classList.toggle('open', !o);
+    localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());
+}
+document.querySelectorAll('.sb-group').forEach(g => {
+    if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');
+});
 
 const itemModal = new bootstrap.Modal(document.getElementById('itemModal'));
 const viewModal = new bootstrap.Modal(document.getElementById('viewModal'));

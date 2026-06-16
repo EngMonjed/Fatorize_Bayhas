@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1:3306
--- Generation Time: Jun 15, 2026 at 11:31 AM
+-- Generation Time: Jun 15, 2026 at 11:56 AM
 -- Server version: 11.8.6-MariaDB-log
 -- PHP Version: 7.2.34
 
@@ -223,6 +223,13 @@ CREATE TABLE `consumable_items_alp` (
   `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستهلكات — فرع حلب';
 
+--
+-- Dumping data for table `consumable_items_alp`
+--
+
+INSERT INTO `consumable_items_alp` (`id`, `name`, `category`, `unit`, `estimated_cost`, `currency_id`, `notes`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES
+(2, 'قهوة', 'food', 'علبة', 2.50, 1, '', 1, 1, '2026-06-15 11:35:23', NULL);
+
 -- --------------------------------------------------------
 
 --
@@ -369,6 +376,13 @@ CREATE TABLE `consumable_stock_alp` (
   `last_movement` datetime DEFAULT NULL COMMENT 'تاريخ آخر حركة',
   `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أرصدة المستهلكات لكل مستودع';
+
+--
+-- Dumping data for table `consumable_stock_alp`
+--
+
+INSERT INTO `consumable_stock_alp` (`id`, `item_id`, `warehouse_id`, `quantity`, `min_quantity`, `avg_cost_usd`, `last_movement`, `updated_at`) VALUES
+(3, 2, 2, 0.000, 2.000, 0.0000, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -2551,7 +2565,7 @@ ALTER TABLE `consumable_issue_items_alp`
 -- AUTO_INCREMENT for table `consumable_items_alp`
 --
 ALTER TABLE `consumable_items_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `consumable_movements_alp`
@@ -2587,7 +2601,7 @@ ALTER TABLE `consumable_sale_items_alp`
 -- AUTO_INCREMENT for table `consumable_stock_alp`
 --
 ALTER TABLE `consumable_stock_alp`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `currencies`

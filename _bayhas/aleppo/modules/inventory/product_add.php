@@ -279,7 +279,7 @@ try {
 $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
 
 // جلب الموردين
-$suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}` WHERE status='active' ORDER BY name")->fetchAll();
+$suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}` WHERE status='active' AND supplier_type IN ('product','both') ORDER BY name")->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
