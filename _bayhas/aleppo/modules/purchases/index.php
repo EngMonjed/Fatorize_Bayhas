@@ -4,8 +4,8 @@
  * المسار: /bayhas/aleppo/modules/purchases/index.php
  */
 session_start();
-require_once __DIR__ . '/../../../../config/database.php';
-require_once __DIR__ . '/../../../../config/auth.php';
+require_once __DIR__ . '/../../../config/database.php';
+require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
@@ -200,7 +200,7 @@ table.mtbl tr:hover td{background:#f8faff}
 </head>
 <body>
 <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
-<?php require_once __DIR__ . '/../../../../includes/sidebar.php'; ?>
+<?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
 <header class="topbar">
     <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
     <span class="tb-title"><i class="bi bi-cart-plus me-1 text-primary"></i>فواتير الشراء</span>
