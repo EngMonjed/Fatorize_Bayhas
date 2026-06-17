@@ -669,10 +669,10 @@ function onExRateChange(){
     const editRows = <?= json_encode(array_values($editRows)) ?>;
     if(!editRows.length) return;
 
-    // نجمع بـ (product × unit_price × age_type) فقط — كروب واحد بدون تكرار اللون
+    // كروب × لون = سطر — نفس منطق invoice_new
     const grpMap = {};
     editRows.forEach(row => {
-        const gk = `${row.product_id}_${row.unit_price}_${row.age_type||'سنة'}`;
+        const gk = `${row.product_id}_${row.unit_price}_${row.age_type||'سنة'}_${row.color_id||0}`;
         if(!grpMap[gk]){
             grpMap[gk] = {
                 product_id:   row.product_id,
@@ -680,40 +680,58 @@ function onExRateChange(){
                 model_number: row.model_number||'',
                 selling_price:parseFloat(row.unit_price),
                 age_type:     row.age_type||'سنة',
-                color_id:     0,
-                color_name:   '',
-                color_hex:    '',
+                color_id:     row.color_id||0,
+                color_name:   row.color_name||'',
+                color_hex:    row.color_hex||'',
                 cost_price:   row.unit_price,
                 qty:          parseFloat(row.quantity),
                 unit_price:   parseFloat(row.unit_price),
                 discount_pct: 0,
                 variants:     [],
+                sizes:        [],
             };
         } else {
             grpMap[gk].qty += parseFloat(row.quantity);
         }
-        grpMap[gk].variants.push({
-            variant_id: row.variant_id,
-            size:       row.size,
-            barcode:    row.barcode||'',
-            age_type:   row.age_type||'سنة',
-        });
+        grpMap[gk].variants.push({variant_id:row.variant_id,size:row.size,barcode:row.barcode||'',age_type:row.age_type||'سنة'});
+        if(!grpMap[gk].sizes.includes(row.size)) grpMap[gk].sizes.push(row.size);
     });
 
+    // ترتيب القياسات رقمياً
+    Object.values(grpMap).forEach(g=>{ g.sizes.sort((a,b)=>parseFloat(a)-parseFloat(b)); });
+
     Object.values(grpMap).forEach(g => {
-        addLine(g);
+        // نستخدم addLine مع بيانات الكروب×لون
+        const item = {
+            variant_id:   g.variants[0].variant_id,
+            product_id:   g.product_id,
+            product_name: g.product_name,
+            model_number: g.model_number,
+            selling_price:g.selling_price,
+            age_type:     g.age_type,
+            color_id:     g.color_id,
+            color_name:   g.color_name,
+            color_hex:    g.color_hex,
+            size:         g.sizes[0]||'',
+            barcode:      g.variants[0].barcode||'',
+            cost_price:   g.unit_price,
+        };
+        addLine(item);
         const line = lines[lines.length-1];
-        if(line){
-            line.qty          = g.qty;
-            line.unit_price   = g.unit_price;
-            line.discount_pct = 0;
-            const row = document.getElementById(line.row_id);
-            if(row){
-                row.querySelector('.q-input').value = g.qty;
-                row.querySelector('.p-input').value = g.unit_price||'';
-                row.querySelector('.d-input').value = 0;
-                recalcLine(line, row);
-            }
+        if(!line) return;
+        // تحديث بيانات السطر
+        line.variants   = g.variants;
+        line.sizes      = g.sizes;
+        line.qty        = g.qty;
+        line.unit_price = g.unit_price;
+        const rowEl = document.getElementById(line.row_id);
+        if(rowEl){
+            rowEl.querySelector('.q-input').value = g.qty;
+            rowEl.querySelector('.p-input').value = g.unit_price||'';
+            rowEl.querySelector('.d-input').value = 0;
+            const szLbl = rowEl.querySelector('.sizes-lbl');
+            if(szLbl) szLbl.textContent = g.sizes.join(' · ') + ' ' + g.age_type;
+            recalcLine(line, rowEl);
         }
     });
     calcTotals();
