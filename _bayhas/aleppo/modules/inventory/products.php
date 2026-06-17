@@ -48,10 +48,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $sizes = $szSt->fetchAll();
             $grpMap = [];
             foreach ($sizes as $s) {
-                $key = (string) $s['selling_price'];
+                $ageType = $s['age_type'] ?? 'سنة';
+                $key = $s['selling_price'] . '_' . $ageType;
                 if (!isset($grpMap[$key]))
-                    $grpMap[$key] = ['sizes' => [], 'selling_price' => $s['selling_price'], 'packet_qty' => 0];
-                $grpMap[$key]['sizes'][] = $s['size'];
+                    $grpMap[$key] = [
+                        'sizes'         => [],
+                        'selling_price' => $s['selling_price'],
+                        'age_type'      => $ageType,
+                        'packet_qty'    => 0,
+                    ];
+                $grpMap[$key]['sizes'][]    = $s['size'];
                 $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
             }
             $prod['groups'] = array_values($grpMap);
@@ -799,15 +805,16 @@ $catColors = [
                                 $stock = (float) $prod['total_stock'];
 
                                 // جلب المقاسات بكروبات
-                                $grps = [];
-                                $minSell = null;
+                                $grps = []; $grpAges = []; $minSell = null;
                                 try {
-                                    $szSt = $pdo->prepare("SELECT size, selling_price FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+                                    $szSt = $pdo->prepare("SELECT size, selling_price, age_type FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
                                     $szSt->execute([$prod['id']]);
                                     $pSizes = $szSt->fetchAll();
                                     foreach ($pSizes as $s) {
-                                        $k = (string) $s['selling_price'];
-                                        $grps[$k][] = $s['size'];
+                                        $ageT = $s['age_type'] ?? 'سنة';
+                                        $k    = $s['selling_price'] . '_' . $ageT;
+                                        $grps[$k][]  = $s['size'];
+                                        $grpAges[$k] = $ageT;
                                         if ($minSell === null || (float) $s['selling_price'] < $minSell)
                                             $minSell = (float) $s['selling_price'];
                                     }
@@ -860,10 +867,12 @@ $catColors = [
                                             <span class="text-muted" style="font-size:.75rem">—</span>
                                         <?php else:
                                             $gi = 0;
-                                            foreach ($grps as $price => $sizes):
-                                                $gcls = ['', 'g2', 'g3', 'g4'][$gi] ?? ''; ?>
-                                                <span class="grp-tag <?= $gcls ?>" style="margin-bottom:2px;display:inline-flex">
+                                            foreach ($grps as $k => $sizes):
+                                                $gcls = ['', 'g2', 'g3', 'g4'][$gi] ?? '';
+                                                $at   = $grpAges[$k] ?? ''; ?>
+                                                <span class="grp-tag <?= $gcls ?>" style="margin-bottom:2px;display:inline-flex;gap:2px">
                                                     <?= implode('·', $sizes) ?>
+                                                    <span style="opacity:.6;font-size:.6rem"><?= $at ?></span>
                                                 </span>
                                                 <?php $gi++; endforeach; endif; ?>
                                     </td>
@@ -1430,12 +1439,14 @@ $catColors = [
                     const grpsHtml = (p.groups || []).map((g, i) => {
                         const [bg, clr, br] = GRP_COLORS[i % 4];
                         const szTags = g.sizes.map(s => `<span class="sz-mini">${s}</span>`).join('');
+                const ageLabel = g.age_type ? `<span style="font-size:.65rem;color:#94a3b8;background:#f1f5f9;border-radius:5px;padding:1px 5px;margin-right:4px">${g.age_type}</span>` : '';
                         return `<div class="grp-block">
                     <div class="d-flex align-items-center gap-2 mb-2">
                         <span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.7rem;padding:1px 8px;font-weight:700">
                             الكروب ${i + 1}
                         </span>
                         <span style="font-size:.74rem;color:#64748b">${g.sizes.length} قطعة بالباكيت</span>
+                        ${ageLabel}
                         <span style="margin-right:auto;font-size:.8rem;font-weight:700;color:#1e293b">
                             ${parseFloat(g.selling_price || 0).toFixed(2)} $
                         </span>

@@ -1,7 +1,7 @@
 <?php
 /**
- * purchases/invoice_new.php — فاتورة شراء جديدة
- * المسار: /bayhas/aleppo/modules/purchases/invoice_new.php
+ * purchases/invoice_edit.php — تعديل فاتورة شراء
+ * المسار: /bayhas/aleppo/modules/purchases/invoice_edit.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -9,7 +9,7 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('purchases.invoices', 'create');
+requirePermission('purchases.invoices', 'edit');
 $currentModule = 'purchases.invoices';
 
 $TS    = $_SESSION['table_suffix'];
@@ -23,6 +23,30 @@ $TSZ   = "product_sizes_{$TS}";
 $TPROD = "products_{$TS}";
 $TCL   = "product_colors_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
+
+// ── جلب الفاتورة للتعديل ─────────────────────────────────────────
+$editId  = (int)($_GET['id'] ?? 0);
+if (!$editId) { header('Location: index.php'); exit; }
+
+$purSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+$purSt->execute([$editId]);
+$editPur = $purSt->fetch();
+if (!$editPur) { header('Location: index.php'); exit; }
+if ($editPur['status'] !== 'draft') {
+    header('Location: index.php?err=cant_edit');
+    exit;
+}
+
+// جلب بنود الفاتورة
+$editItems = $pdo->prepare("SELECT pi.*, v.color_id,
+    s.age_type, pc.name AS color_name, pc.hex_code AS color_hex
+    FROM `{$TPI}` pi
+    JOIN `{$TV}` v ON v.id=pi.variant_id
+    JOIN `{$TSZ}` s ON s.id=v.size_id
+    LEFT JOIN product_colors_{$TS} pc ON pc.id=v.color_id
+    WHERE pi.purchase_id=? ORDER BY pi.id");
+$editItems->execute([$editId]);
+$editRows = $editItems->fetchAll();
 
 // ── توليد رقم الفاتورة ──────────────────────────────────────────
 function genPurchaseNo(PDO $pdo, string $table): string {
@@ -85,72 +109,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ── حفظ الفاتورة ──
         elseif ($act === 'save_invoice') {
-            $supplierId  = (int)($_POST['supplier_id'] ?? 0) ?: null;
-            $whId        = (int)($_POST['warehouse_id'] ?? 0);
-            $currency    = $_POST['currency'] ?? 'USD';
-            $exRate      = max(0.0001, (float)($_POST['exchange_rate'] ?? 1));
-            $invDate     = $_POST['invoice_date'] ?? date('Y-m-d');
-            $dueDate     = $_POST['due_date'] ?? null ?: null;
-            $payMethod   = 'deferred'; // يُحدَّد لاحقاً عند الدفع
-            $notes       = trim($_POST['notes'] ?? '');
-            $discPct     = (float)($_POST['discount_pct'] ?? 0);
-            $taxPct      = (float)($_POST['tax_pct'] ?? 0);
-            $saveAs      = 'draft'; // دائماً مسودة — التأكيد من صفحة المشتريات
-            $rows        = json_decode($_POST['rows'] ?? '[]', true);
+            $purId       = (int)($_POST['purchase_id'] ?? 0);
+            if (!$purId) throw new Exception('معرّف الفاتورة مفقود');
+            $chkSt = $pdo->prepare("SELECT status FROM `{$TP}` WHERE id=?");
+            $chkSt->execute([$purId]);
+            if ($chkSt->fetchColumn() !== 'draft') throw new Exception('لا يمكن تعديل فاتورة مؤكدة');
+
+            $supplierId = (int)($_POST['supplier_id'] ?? 0) ?: null;
+            $whId       = (int)($_POST['warehouse_id'] ?? 0);
+            $currency   = $_POST['currency'] ?? 'USD';
+            $exRate     = max(0.0001, (float)($_POST['exchange_rate'] ?? 1));
+            $invDate    = $_POST['invoice_date'] ?? date('Y-m-d');
+            $dueDate    = $_POST['due_date'] ?? null ?: null;
+            $notes      = trim($_POST['notes'] ?? '');
+            $discPct    = (float)($_POST['discount_pct'] ?? 0);
+            $taxPct     = (float)($_POST['tax_pct'] ?? 0);
+            $rows       = json_decode($_POST['rows'] ?? '[]', true);
 
             if (!$supplierId) throw new Exception('يجب اختيار المورد');
-            if (!$whId) throw new Exception('يجب اختيار المستودع');
+            if (!$whId)       throw new Exception('يجب اختيار المستودع');
             if (empty($rows)) throw new Exception('يجب إضافة منتج واحد على الأقل');
 
-            // حساب الإجماليات
             $totalAmt = 0;
             foreach ($rows as $r) {
-                $lineTotal = (float)$r['qty'] * (float)$r['unit_price'] * (1 - (float)($r['discount_pct']??0)/100);
-                $totalAmt += $lineTotal;
+                $totalAmt += (float)$r['qty'] * (float)$r['unit_price'] * (1 - (float)($r['discount_pct']??0)/100);
             }
-            $discAmt   = $totalAmt * $discPct / 100;
-            $taxAmt    = ($totalAmt - $discAmt) * $taxPct / 100;
-            $finalAmt  = $totalAmt - $discAmt + $taxAmt;
-            $finalUsd  = $finalAmt / $exRate;
+            $discAmt  = $totalAmt * $discPct / 100;
+            $taxAmt   = ($totalAmt - $discAmt) * $taxPct / 100;
+            $finalAmt = $totalAmt - $discAmt + $taxAmt;
+            $finalUsd = $finalAmt / $exRate;
 
-            // استخدام الرقم المعروض أو توليد جديد كضمان
-            $purNo = trim($_POST['invoice_no'] ?? '');
-            if (!$purNo) $purNo = genPurchaseNo($pdo, $TP);
-            // التحقق من الفرادة
-            $chk = $pdo->prepare("SELECT COUNT(*) FROM `{$TP}` WHERE purchase_number=?");
-            $chk->execute([$purNo]);
-            if ($chk->fetchColumn() > 0) $purNo = genPurchaseNo($pdo, $TP);
-
-            $pdo->prepare("INSERT INTO `{$TP}`
-                (purchase_number, supplier_id, purchase_date, due_date,
-                 total_amount, tax_amount, discount_amount, final_amount, final_amount_usd,
-                 paid_amount, balance_amount,
-                 currency, exchange_rate, payment_status,
-                 notes, status, user_id)
-                VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,'pending',?,?,?)")
+            // تحديث رأس الفاتورة
+            $pdo->prepare("UPDATE `{$TP}` SET
+                supplier_id=?, purchase_date=?, due_date=?,
+                total_amount=?, tax_amount=?, discount_amount=?,
+                final_amount=?, final_amount_usd=?, balance_amount=?,
+                currency=?, exchange_rate=?,
+                notes=?, updated_by=?, updated_at=NOW()
+                WHERE id=?")
                 ->execute([
-                    $purNo, $supplierId, $invDate, $dueDate,
-                    $totalAmt, $taxAmt, $discAmt, $finalAmt, $finalUsd,
-                    $finalAmt,   // balance = كامل المبلغ حتى يتم الدفع
+                    $supplierId, $invDate, $dueDate,
+                    $totalAmt, $taxAmt, $discAmt,
+                    $finalAmt, $finalUsd, $finalAmt,
                     $currency, $exRate,
-                    $notes, $saveAs, $_SESSION['user_id']
+                    $notes, $_SESSION['user_id'], $purId
                 ]);
-            $purId = (int)$pdo->lastInsertId();
 
-            // حفظ البنود فقط — بدون أي تأثير على المخزون أو الحسابات
+            // حذف البنود القديمة وإعادة إدراجها
+            $pdo->prepare("DELETE FROM `{$TPI}` WHERE purchase_id=?")->execute([$purId]);
+
             foreach ($rows as $r) {
-                $qty       = (float)$r['qty'];
-                $unitPr    = (float)$r['unit_price'];
-                $disc      = (float)($r['discount_pct'] ?? 0);
-                $unitPrUsd = $unitPr / $exRate;
-                $lineTot   = $qty * $unitPr * (1 - $disc/100);
-                $variantIds= $r['variant_ids'] ?? [$r['variant_id'] ?? 0];
+                $qty        = (float)$r['qty'];
+                $unitPr     = (float)$r['unit_price'];
+                $disc       = (float)($r['discount_pct'] ?? 0);
+                $unitPrUsd  = $unitPr / $exRate;
+                $lineTot    = $qty * $unitPr * (1 - $disc/100);
+                $variantIds = $r['variant_ids'] ?? [$r['variant_id'] ?? 0];
 
                 foreach ($variantIds as $variantId) {
                     $variantId = (int)$variantId;
                     if (!$variantId) continue;
-
-                    // جلب بيانات الـ variant
                     $vSt = $pdo->prepare("SELECT v.*, s.size, s.age_type, c.name AS color_name
                         FROM `{$TV}` v
                         JOIN `{$TSZ}` s ON s.id=v.size_id
@@ -159,29 +177,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $vSt->execute([$variantId]);
                     $vRow = $vSt->fetch();
                     if (!$vRow) continue;
-
                     $pdo->prepare("INSERT INTO `{$TPI}`
-                        (purchase_id, product_id, variant_id, product_name, model_number,
-                         size, color, barcode, quantity, unit_price, unit_price_usd,
-                         total_price, tax_percentage, tax_amount, discount_amount, warehouse_id)
+                        (purchase_id,product_id,variant_id,product_name,model_number,
+                         size,color,barcode,quantity,unit_price,unit_price_usd,
+                         total_price,tax_percentage,tax_amount,discount_amount,warehouse_id)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,?)")
                         ->execute([
-                            $purId, (int)$r['product_id'], $variantId,
-                            $r['product_name'], $r['model_number'] ?? '',
-                            $vRow['size'] ?? '', $vRow['color_name'] ?? '',
-                            $vRow['barcode'] ?? '', $qty, $unitPr, $unitPrUsd,
-                            $lineTot, $whId
+                            $purId,(int)$r['product_id'],$variantId,
+                            $r['product_name'],$r['model_number']??'',
+                            $vRow['size']??'',$vRow['color_name']??'',
+                            $vRow['barcode']??'',$qty,$unitPr,$unitPrUsd,
+                            $lineTot,$whId
                         ]);
                 }
             }
-            // الفاتورة تُحفظ دائماً كمسودة — التأكيد من صفحة المشتريات
-
-            echo json_encode([
-                'ok'  => true,
-                'id'  => $purId,
-                'no'  => $purNo,
-                'msg' => $saveAs === 'confirmed' ? 'تم حفظ وتأكيد الفاتورة' : 'تم حفظ الفاتورة كمسودة'
-            ]);
+            echo json_encode(['ok'=>true,'id'=>$purId,'msg'=>'تم حفظ التعديلات بنجاح']);
         }
 
         // ── إضافة مورد جديد ──
@@ -217,7 +227,7 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>فاتورة شراء جديدة — <?= htmlspecialchars($branchName) ?></title>
+<title>تعديل فاتورة #<?= htmlspecialchars($editPur['purchase_number']) ?> — <?= htmlspecialchars($branchName) ?></title>
 <link rel="icon" href="/bayhas/assets/images/logo.png">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -282,12 +292,12 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
 
 <header class="topbar">
     <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-    <span class="tb-title"><i class="bi bi-plus-circle me-1 text-primary"></i>فاتورة شراء جديدة</span>
+    <span class="tb-title"><i class="bi bi-pencil me-1 text-primary"></i>تعديل فاتورة: <?= htmlspecialchars($editPur['purchase_number']) ?></span>
     <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
     <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
         <a href="index.php" style="color:#64748b;text-decoration:none">فواتير الشراء</a>
         <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
-        <span class="text-primary">فاتورة جديدة</span>
+        <span class="text-primary">تعديل فاتورة</span>
     </nav>
 </header>
 
@@ -306,11 +316,12 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
         <div class="row g-3">
             <div class="col-md-4">
                 <label class="field-lbl">المورد</label>
+                <input type="hidden" id="iPurchaseId" value="<?= $editId ?>">
                 <div class="d-flex gap-1">
                     <select id="iSupplier" class="form-select form-select-sm" style="flex:1" onchange="onSupplierChange()">
                         <option value="">— بدون مورد —</option>
                         <?php foreach ($suppliers as $sp): ?>
-                        <option value="<?=$sp['id']?>"
+                        <option value="<?=$sp['id']?>" <?= $sp['id']==$editPur['supplier_id']?'selected':'' ?>
                             data-phone="<?= htmlspecialchars($sp['phone']??'') ?>">
                             <?= htmlspecialchars($sp['name']) ?>
                         </option>
@@ -328,7 +339,7 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
                 <select id="iWarehouse" class="form-select form-select-sm">
                     <option value="">— اختر المستودع —</option>
                     <?php foreach ($warehouses as $wh): ?>
-                    <option value="<?=$wh['id']?>" <?= $wh['id']==1?'selected':'' ?>>
+                    <option value="<?=$wh['id']?>" <?= $wh['id']==$editPur['warehouse_id']?'selected':'' ?>>
                         <?= htmlspecialchars($wh['name']) ?>
                     </option>
                     <?php endforeach; ?>
@@ -357,7 +368,7 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
                     <option value="<?=$cu['code']?>"
                         data-rate="<?=$cu['exchange_rate']?>"
                         data-sym="<?= htmlspecialchars($cu['symbol']) ?>"
-                        <?= $cu['is_base']?'selected':'' ?>>
+                        <?= $cu['code']==$editPur['currency']?'selected':'' ?>>
                         <?= htmlspecialchars($cu['code'].' — '.$cu['name']) ?>
                     </option>
                     <?php endforeach; ?>
@@ -371,7 +382,7 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
             </div>
             <div class="col-12">
                 <label class="field-lbl">ملاحظات</label>
-                <input type="text" id="iNotes" class="form-control form-control-sm" placeholder="اختياري">
+                <input type="text" id="iNotes" class="form-control form-control-sm" placeholder="اختياري" value="<?= htmlspecialchars($editPur['notes']??'')?>">
             </div>
         </div>
     </div>
@@ -513,8 +524,8 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
         <div class="d-grid gap-2">
             <button class="btn btn-sm fw-600"
                     style="border-radius:9px;background:#1e3a8a;color:#fff;padding:8px"
-                    onclick="saveInvoice('draft')">
-                <i class="bi bi-floppy me-1"></i>حفظ الفاتورة
+                    onclick="saveInvoice()">
+                <i class="bi bi-floppy me-1"></i>حفظ التعديلات
             </button>
             <a href="index.php" class="btn btn-sm"
                style="border-radius:9px;border:1px solid #e2e8f0;color:#64748b;padding:8px;text-decoration:none;text-align:center">
@@ -648,8 +659,65 @@ function onExRateChange(){
     refreshLineUsd();
     calcTotals();
 }
-// تهيئة
-onCurrencyChange();
+// تهيئة من بيانات الفاتورة
+(function initEdit(){
+    const er = <?= (float)$editPur['exchange_rate'] ?>;
+    document.getElementById('iExRate').value = er;
+    exRate = er;
+    onCurrencyChange();
+
+    const editRows = <?= json_encode(array_values($editRows)) ?>;
+    if(!editRows.length) return;
+
+    // نجمع بـ (product × unit_price × age_type) فقط — كروب واحد بدون تكرار اللون
+    const grpMap = {};
+    editRows.forEach(row => {
+        const gk = `${row.product_id}_${row.unit_price}_${row.age_type||'سنة'}`;
+        if(!grpMap[gk]){
+            grpMap[gk] = {
+                product_id:   row.product_id,
+                product_name: row.product_name,
+                model_number: row.model_number||'',
+                selling_price:parseFloat(row.unit_price),
+                age_type:     row.age_type||'سنة',
+                color_id:     0,
+                color_name:   '',
+                color_hex:    '',
+                cost_price:   row.unit_price,
+                qty:          parseFloat(row.quantity),
+                unit_price:   parseFloat(row.unit_price),
+                discount_pct: 0,
+                variants:     [],
+            };
+        } else {
+            grpMap[gk].qty += parseFloat(row.quantity);
+        }
+        grpMap[gk].variants.push({
+            variant_id: row.variant_id,
+            size:       row.size,
+            barcode:    row.barcode||'',
+            age_type:   row.age_type||'سنة',
+        });
+    });
+
+    Object.values(grpMap).forEach(g => {
+        addLine(g);
+        const line = lines[lines.length-1];
+        if(line){
+            line.qty          = g.qty;
+            line.unit_price   = g.unit_price;
+            line.discount_pct = 0;
+            const row = document.getElementById(line.row_id);
+            if(row){
+                row.querySelector('.q-input').value = g.qty;
+                row.querySelector('.p-input').value = g.unit_price||'';
+                row.querySelector('.d-input').value = 0;
+                recalcLine(line, row);
+            }
+        }
+    });
+    calcTotals();
+})();
 
 // ── بيانات البنود ──
 
@@ -1072,21 +1140,19 @@ function calcTotals(){
 }
 
 // ── حفظ الفاتورة ──
-function saveInvoice(saveAs){
+function saveInvoice(){
     if(!document.getElementById('iSupplier').value){toast('يجب اختيار المورد','danger');document.getElementById('iSupplier').focus();return;}
     if(!document.getElementById('iWarehouse').value){toast('يجب اختيار المستودع','danger');return;}
     const valid=lines.filter(l=>l.qty>0&&l.unit_price>0);
     if(!valid.length){toast('يجب إضافة منتج واحد على الأقل بسعر وكمية','danger');return;}
 
-    const btn = saveAs==='confirmed'
-        ? document.querySelector('[onclick="saveInvoice(\'confirmed\')"]')
-        : document.querySelector('[onclick="saveInvoice(\'draft\')"]');
-    const origHTML = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>جارٍ الحفظ...';
-    btn.disabled = true;
+    const btn=document.querySelector('[onclick="saveInvoice()"]');
+    const origHTML=btn?btn.innerHTML:'';
+    if(btn){btn.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>جارٍ الحفظ...';btn.disabled=true;}
 
     post({
         _action:        'save_invoice',
+        purchase_id:    document.getElementById('iPurchaseId').value,
         supplier_id:    document.getElementById('iSupplier').value,
         warehouse_id:   document.getElementById('iWarehouse').value,
         invoice_no:     document.getElementById('iInvNo').value,
@@ -1097,13 +1163,11 @@ function saveInvoice(saveAs){
         notes:          document.getElementById('iNotes').value,
         discount_pct:   document.getElementById('discPct').value,
         tax_pct:        document.getElementById('taxPct').value,
-        save_as:        saveAs,
         rows:           JSON.stringify(valid.map(l=>({...l, variant_ids: l.variants.map(v=>v.variant_id)}))),
     }).then(d=>{
-        btn.innerHTML=origHTML;
-        btn.disabled=false;
+        if(btn){btn.innerHTML=origHTML;btn.disabled=false;}
         if(d.ok){
-            toast('✅ '+d.msg+' — '+d.no);
+            toast('✅ '+d.msg);
             setTimeout(()=>window.location.href='index.php',1200);
         } else toast(d.msg,'danger');
     });
@@ -1274,15 +1338,15 @@ function refreshProducts(){
         taxPct:    document.getElementById('taxPct').value,
         lines:     lines,
     };
-    sessionStorage.setItem('inv_draft', JSON.stringify(state));
+    sessionStorage.setItem('inv_draft_edit', JSON.stringify(state));
     location.reload();
 }
 
 // استعادة الحالة بعد التحديث
 (function restoreDraft(){
-    const saved = sessionStorage.getItem('inv_draft');
+    const saved = sessionStorage.getItem('inv_draft_edit');
     if(!saved) return;
-    sessionStorage.removeItem('inv_draft');
+    sessionStorage.removeItem('inv_draft_edit');
     try {
         const s = JSON.parse(saved);
         if(s.supplier)  document.getElementById('iSupplier').value  = s.supplier;
@@ -1314,7 +1378,7 @@ function refreshProducts(){
                     <td class="text-muted" style="font-size:.75rem">${lines.length}</td>
                     <td><div class="fw-600" style="font-size:.8rem">${l.product_name}</div>
                         <div class="text-muted" style="font-size:.7rem" dir="ltr">${l.model_number}</div></td>
-                    <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx+1} — ${parseFloat(l.selling_price||0).toFixed(2)} ${symCur}</span>
+                    <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx+1}</span>
                         <div class="sizes-lbl mt-1" style="font-size:.72rem;color:#334155;font-weight:600">${l.sizes.join(' · ')} ${l.age_type}</div></td>
                     <td><div class="d-flex align-items-center gap-1">${colorDot}<span style="font-size:.78rem">${l.color_name||'—'}</span></div></td>
                     <td style="width:70px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"

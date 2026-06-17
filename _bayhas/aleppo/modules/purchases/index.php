@@ -50,35 +50,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         elseif ($act === 'confirm_purchase') {
             requirePermission('purchases.invoices','edit');
-            $id      = (int)$_POST['id'];
-            $paidAmt = (float)($_POST['paid_amount'] ?? 0);
-            $pSt     = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+            $id  = (int)$_POST['id'];
+            $pSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
             $pSt->execute([$id]);
             $pur = $pSt->fetch();
             if (!$pur) throw new Exception('الفاتورة غير موجودة');
-            if (!in_array($pur['status'],['draft','confirmed']))
-                throw new Exception('لا يمكن تأكيد هذه الفاتورة');
+            if ($pur['status'] !== 'draft')
+                throw new Exception('يمكن تأكيد المسودات فقط');
 
-            $items = $pdo->prepare("SELECT * FROM `{$TPI}` WHERE purchase_id=?");
-            $items->execute([$id]);
-            foreach ($items->fetchAll() as $row) {
-                if (!$row['variant_id'] || !$row['warehouse_id']) continue;
-                $vr = $pdo->prepare("SELECT product_id FROM `{$TV}` WHERE id=?");
-                $vr->execute([$row['variant_id']]);
-                $prodId = (int)$vr->fetchColumn();
-                $pdo->prepare("INSERT INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,min_quantity)
-                    VALUES (?,?,?,?,0)
-                    ON DUPLICATE KEY UPDATE quantity=quantity+?")
-                    ->execute([$row['warehouse_id'],$row['variant_id'],$prodId,
-                        $row['quantity'],$row['quantity']]);
+            $pdo->beginTransaction();
+            try {
+                // 1. تحديث المخزون (warehouse_items)
+                $items = $pdo->prepare("SELECT * FROM `{$TPI}` WHERE purchase_id=?");
+                $items->execute([$id]);
+                foreach ($items->fetchAll() as $row) {
+                    if (!$row['variant_id'] || !$row['warehouse_id']) continue;
+                    $vr = $pdo->prepare("SELECT product_id FROM `{$TV}` WHERE id=?");
+                    $vr->execute([$row['variant_id']]);
+                    $prodId = (int)$vr->fetchColumn();
+                    $pdo->prepare("INSERT INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,min_quantity)
+                        VALUES (?,?,?,?,0)
+                        ON DUPLICATE KEY UPDATE quantity=quantity+?")
+                        ->execute([$row['warehouse_id'],$row['variant_id'],$prodId,
+                            $row['quantity'],$row['quantity']]);
+                }
+
+                // 2. تحديث حالة الفاتورة + المبالغ
+                // paid_amount=0, balance_amount=final_amount (المستحق للمورد)
+                $pdo->prepare("UPDATE `{$TP}` SET
+                    status='received',
+                    payment_status='pending',
+                    paid_amount=0,
+                    balance_amount=final_amount,
+                    updated_by=?, updated_at=NOW()
+                    WHERE id=?")
+                    ->execute([$_SESSION['user_id'],$id]);
+
+                $pdo->commit();
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
             }
-
-            $total = (float)$pur['final_amount'];
-            $payStatus = $paidAmt>=$total ? 'paid' : ($paidAmt>0 ? 'partial' : 'pending');
-            $pdo->prepare("UPDATE `{$TP}` SET status='received', payment_status=?,
-                updated_by=?, updated_at=NOW() WHERE id=?")
-                ->execute([$payStatus,$_SESSION['user_id'],$id]);
-            echo json_encode(['ok'=>true,'msg'=>'تم تأكيد الاستلام وتحديث المخزون']);
+            echo json_encode(['ok'=>true,'msg'=>'تم تأكيد الفاتورة وتحديث المخزون — المبلغ المستحق: '.number_format($pur['final_amount'],2).' '.$pur['currency']]);
         }
 
         elseif ($act === 'cancel_purchase') {
@@ -346,10 +359,10 @@ table.mtbl tr:hover td{background:#f8faff}
                         <i class="bi bi-pencil"></i>
                     </a>
                     <?php endif; ?>
-                    <?php if (in_array($pur['status'],['draft','confirmed'])): ?>
+                    <?php if ($pur['status']==='draft'): ?>
                     <button class="act-btn success-h"
-                        onclick="openConfirmModal(<?=$pur['id']?>,'<?=htmlspecialchars($pur['purchase_number'],ENT_QUOTES)?>',<?=$pur['final_amount']?>,'<?=$sym?>')"
-                        title="تأكيد الاستلام"><i class="bi bi-check-circle"></i>
+                        onclick="confirmInvoice(<?=$pur['id']?>,'<?=htmlspecialchars($pur['purchase_number'],ENT_QUOTES)?>')"
+                        title="تأكيد الفاتورة"><i class="bi bi-check-circle"></i>
                     </button>
                     <?php endif; ?>
                     <?php if ($pur['status']!=='cancelled'): ?>
@@ -406,17 +419,14 @@ table.mtbl tr:hover td{background:#f8faff}
       </div>
       <div class="modal-body px-4 py-3">
         <input type="hidden" id="cId">
-        <div class="mb-3 p-3" style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">
+        <div class="p-3" style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">
           <div class="fw-600" style="color:#065f46" id="cInvNo"></div>
-          <div style="font-size:.8rem;color:#64748b;margin-top:3px">سيتم تحديث كميات المخزون بعد التأكيد</div>
-        </div>
-        <div class="mb-3">
-          <label class="field-lbl">إجمالي الفاتورة</label>
-          <input type="text" id="cTotal" class="form-control form-control-sm" readonly style="background:#f8fafc;font-weight:700">
-        </div>
-        <div>
-          <label class="field-lbl">المبلغ المدفوع عند الاستلام <small class="text-muted">(0 = آجل كامل)</small></label>
-          <input type="number" id="cPaid" class="form-control form-control-sm" min="0" step="0.01" value="0">
+          <div style="font-size:.8rem;color:#64748b;margin-top:6px">
+            <i class="bi bi-info-circle me-1"></i>سيتم تحديث المخزون فور التأكيد
+          </div>
+          <div style="font-size:.8rem;color:#64748b;margin-top:3px">
+            <i class="bi bi-clock me-1"></i>حالة الدفع ستبقى <b>معلقة</b> حتى تسجيل الدفعة من قسم المحاسبة
+          </div>
         </div>
       </div>
       <div class="modal-footer border-0 px-4 pb-4">
@@ -484,19 +494,45 @@ function viewInvoice(id){
             eb.href=`invoice_edit.php?id=${p.id}`;
             eb.style.display='';
         }
-        const itemsHtml=(p.items||[]).map(it=>{
-            const uOrig=parseFloat(it.unit_price);
-            const uUsd=parseFloat(it.unit_price_usd||(uOrig/rate));
-            const tot=parseFloat(it.total_price);
+        // تجميع البنود بـ (product × unit_price × color)
+        const GRP_COLORS=[['#eff6ff','#1e3a8a','#bfdbfe'],['#f0fdf4','#065f46','#bbf7d0'],
+            ['#fff7ed','#7c2d12','#fed7aa'],['#f5f3ff','#4c1d95','#ddd6fe']];
+        const grpMap={};
+        (p.items||[]).forEach(it=>{
+            const k=`${it.product_id||it.product_name}_${it.unit_price}_${it.color||''}`;
+            if(!grpMap[k]) grpMap[k]={
+                product_name:it.product_name, model_number:it.model_number||'',
+                unit_price:parseFloat(it.unit_price), unit_price_usd:parseFloat(it.unit_price_usd||(parseFloat(it.unit_price)/rate)),
+                color:it.color||'—', wh_name:it.wh_name||'—',
+                qty:0, total:0, sizes:[]
+            };
+            grpMap[k].qty   += parseFloat(it.quantity);
+            grpMap[k].total += parseFloat(it.total_price);
+            if(it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
+        });
+
+        // ترتيب الكروبات بالسعر ثم اللون
+        const grpRows=Object.values(grpMap).sort((a,b)=>a.unit_price-b.unit_price||(a.color||'').localeCompare(b.color||''));
+        // تلوين الكروبات بحسب السعر
+        const priceList=[...new Set(grpRows.map(g=>g.unit_price))];
+        const itemsHtml=grpRows.map(g=>{
+            const pi=priceList.indexOf(g.unit_price);
+            const [bg,clr,br]=GRP_COLORS[pi%4];
+            const grpBadge=`<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${pi+1} — ${g.unit_price.toFixed(2)} ${sym}</span>`;
             return `<tr>
-                <td>${it.product_name} <small style="color:#94a3b8">${it.model_number||''}</small></td>
-                <td class="text-center">${it.size||'—'}</td>
-                <td class="text-center">${it.color||'—'}</td>
-                <td class="n text-center">${parseFloat(it.quantity).toFixed(0)}</td>
-                <td class="n text-center">${uOrig.toFixed(4)} ${sym}</td>
-                <td class="n text-center" style="color:#16a34a;font-size:.72rem">${uUsd.toFixed(4)} $</td>
-                <td class="n text-end fw-600">${tot.toFixed(2)} ${sym}</td>
-                <td style="font-size:.75rem;color:#64748b">${it.wh_name||'—'}</td>
+                <td>
+                    <div class="fw-600" style="font-size:.8rem">${g.product_name}</div>
+                    <div style="font-size:.7rem;color:#94a3b8" dir="ltr">${g.model_number}</div>
+                </td>
+                <td>${grpBadge}
+                    <div style="font-size:.72rem;font-weight:600;color:#334155;margin-top:3px">${g.sizes.join(' · ')}</div>
+                </td>
+                <td class="text-center" style="font-size:.78rem">${g.color}</td>
+                <td class="n text-center fw-600">${g.qty.toFixed(0)}</td>
+                <td class="n text-center">${g.unit_price.toFixed(4)} ${sym}</td>
+                <td class="n text-center" style="color:#16a34a;font-size:.72rem">${g.unit_price_usd.toFixed(4)} $</td>
+                <td class="n text-end fw-600">${g.total.toFixed(2)} ${sym}</td>
+                <td style="font-size:.75rem;color:#64748b">${g.wh_name}</td>
             </tr>`;
         }).join('');
         document.getElementById('vBody').innerHTML=`
@@ -541,7 +577,17 @@ function viewInvoice(id){
             </div>
           </div>
         </div>
-        ${p.notes?`<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${p.notes}</div>`:''}`;
+        ${p.notes?`<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${p.notes}</div>`:''}
+        ${p.status==='draft'?`<div style="margin-top:12px;display:flex;gap:8px">
+            <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;flex:1;font-size:.8rem"
+                onclick="confirmInvoice(${p.id},'${p.purchase_number}')">
+                <i class="bi bi-check-circle me-1"></i>تأكيد الفاتورة
+            </button>
+            <a href="invoice_edit.php?id=${p.id}" class="btn btn-sm fw-600"
+               style="border-radius:8px;border:1px solid #1e3a8a;color:#1e3a8a;flex:1;font-size:.8rem;text-decoration:none;text-align:center">
+                <i class="bi bi-pencil me-1"></i>تعديل
+            </a>
+        </div>`:''}`;
     });
 }
 let _cId=0;
@@ -555,13 +601,20 @@ function openConfirmModal(id,no,total,sym){
 function doConfirm(){
     document.getElementById('confirmTxt').style.opacity='0';
     document.getElementById('confirmSpin').style.display='inline-block';
-    post({_action:'confirm_purchase',id:_cId,paid_amount:document.getElementById('cPaid').value})
+    post({_action:'confirm_purchase',id:_cId})
     .then(d=>{
         document.getElementById('confirmTxt').style.opacity='1';
         document.getElementById('confirmSpin').style.display='none';
         if(d.ok){toast('✅ '+d.msg);confirmModal.hide();setTimeout(()=>location.reload(),800);}
         else toast(d.msg,'danger');
     });
+}
+
+function confirmInvoice(id,no){
+    _cId=id;
+    document.getElementById('cInvNo').textContent='فاتورة: '+no;
+    document.getElementById('cTotal').value='';
+    confirmModal.show();
 }
 function cancelInvoice(id,no){
     if(!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المستلمة سيتم عكس مخزونها.`))return;

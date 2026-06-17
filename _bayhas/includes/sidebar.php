@@ -98,7 +98,16 @@ function injectInternalOrdersToMenu(array &$menu): void
             foreach (array_reverse($toAdd) as $item) {
                 array_unshift($section['children'], $item);
             }
-            return;
+        }
+        if ($section['key'] === 'purchases') {
+            $existing = array_column($section['children'], 'key');
+            $toAdd = [];
+            if (!in_array('purchases.suppliers', $existing)) {
+                $toAdd[] = ['key' => 'purchases.suppliers', 'label' => 'إدارة الموردين', 'icon' => 'bi-truck'];
+            }
+            foreach (array_reverse($toAdd) as $item) {
+                array_unshift($section['children'], $item);
+            }
         }
     }
 }
@@ -123,8 +132,9 @@ function moduleUrl(string $key): string
     'sales.invoices.new' => 'sales/invoices.php?action=new',
     'sales.returns' => 'sales/returns.php',
     // المشتريات
-    'purchases.invoices' => 'purchases/index.php',
-    'purchases.returns' => 'purchases/returns.php',
+    'purchases.invoices'   => 'purchases/index.php',
+    'purchases.returns'    => 'purchases/returns.php',
+    'purchases.suppliers'  => 'purchases/suppliers.php',
     // المخزون
     'inventory.products' => 'inventory/products.php',
     'inventory.warehouse' => 'inventory/warehouse.php',
@@ -132,9 +142,6 @@ function moduleUrl(string $key): string
     'inventory.raw_materials' => 'inventory/raw_materials.php',
     'inventory.operations' => 'inventory/operations.php',
     'inventory.consumables' => 'inventory/consumables.php',
-    'inventory.consumables.issues' => 'inventory/consumable_issues.php',
-    'inventory.consumables.purchases' => 'inventory/consumable_purchases.php',
-    'inventory.consumables.sales' => 'inventory/consumable_sales.php',
     // المالية
     'finance.accounts' => 'accounting/accounts.php',
     'finance.journal' => 'accounting/journal.php',
