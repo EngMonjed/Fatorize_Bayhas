@@ -101,6 +101,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $TV = "product_variants_{$factorySuffix}";
             $TW = "warehouse_items_{$factorySuffix}";
             try {
+                // التحقق من وجود الجدول أولاً
+                $tableCheck = $pdo->query("SHOW TABLES LIKE '{$TP}'")->fetchColumn();
+                if (!$tableCheck) {
+                    echo json_encode(['ok'=>true,'data'=>[],'msg'=>'لا توجد منتجات مسجلة في المعمل بعد']);
+                    exit;
+                }
                 $stmt = $pdo->query("
                     SELECT p.id, p.model_number, p.name, p.age_type, p.age_from, p.age_to,
                         COUNT(DISTINCT v.id) AS variant_count,

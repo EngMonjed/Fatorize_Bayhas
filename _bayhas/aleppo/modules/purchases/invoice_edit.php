@@ -38,12 +38,14 @@ if ($editPur['status'] !== 'draft') {
 }
 
 // جلب بنود الفاتورة
-$editItems = $pdo->prepare("SELECT pi.*, v.color_id,
-    s.age_type, pc.name AS color_name, pc.hex_code AS color_hex
+$editItems = $pdo->prepare("SELECT pi.*,
+    v.color_id,
+    s.age_type,
+    pc.name AS color_name, pc.hex_code AS color_hex
     FROM `{$TPI}` pi
-    JOIN `{$TV}` v ON v.id=pi.variant_id
-    JOIN `{$TSZ}` s ON s.id=v.size_id
-    LEFT JOIN product_colors_{$TS} pc ON pc.id=v.color_id
+    JOIN `{$TV}` v  ON v.id = pi.variant_id
+    JOIN `{$TSZ}` s ON s.id = v.size_id
+    LEFT JOIN product_colors_{$TS} pc ON pc.id = v.color_id
     WHERE pi.purchase_id=? ORDER BY pi.id");
 $editItems->execute([$editId]);
 $editRows = $editItems->fetchAll();
@@ -166,7 +168,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $lineTot    = $qty * $unitPr * (1 - $disc/100);
                 $variantIds = $r['variant_ids'] ?? [$r['variant_id'] ?? 0];
 
-                foreach ($variantIds as $variantId) {
+                // كمية كل variant = qty (المستخدم أدخل كمية لكل كروب×لون)
+                    $variantCount = count($variantIds);
+                    foreach ($variantIds as $variantId) {
                     $variantId = (int)$variantId;
                     if (!$variantId) continue;
                     $vSt = $pdo->prepare("SELECT v.*, s.size, s.age_type, c.name AS color_name
@@ -177,6 +181,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $vSt->execute([$variantId]);
                     $vRow = $vSt->fetch();
                     if (!$vRow) continue;
+                    // الكمية لكل variant = qty مباشرة (لأن qty = كمية هذا اللون كاملاً)
+                    $varQty     = $qty;
+                    $varLineTot = $varQty * $unitPr * (1 - $disc/100);
                     $pdo->prepare("INSERT INTO `{$TPI}`
                         (purchase_id,product_id,variant_id,product_name,model_number,
                          size,color,barcode,quantity,unit_price,unit_price_usd,
@@ -186,8 +193,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             $purId,(int)$r['product_id'],$variantId,
                             $r['product_name'],$r['model_number']??'',
                             $vRow['size']??'',$vRow['color_name']??'',
-                            $vRow['barcode']??'',$qty,$unitPr,$unitPrUsd,
-                            $lineTot,$whId
+                            $vRow['barcode']??'',$varQty,$unitPr,$unitPrUsd,
+                            $varLineTot,$whId
                         ]);
                 }
             }
@@ -661,6 +668,15 @@ function onExRateChange(){
 }
 // تهيئة من بيانات الفاتورة
 (function initEdit(){
+    // خريطة variant_id → color
+    const variantColors = {};
+    <?php foreach ($editRows as $er): ?>
+    variantColors[<?= (int)$er['variant_id'] ?>] = {
+        color_id:   <?= (int)($er['color_id']??0) ?>,
+        color_name: <?= json_encode($er['color_name']??'') ?>,
+        color_hex:  <?= json_encode($er['color_hex']??'') ?>,
+    };
+    <?php endforeach; ?>
     const er = <?= (float)$editPur['exchange_rate'] ?>;
     document.getElementById('iExRate').value = er;
     exRate = er;
@@ -673,6 +689,7 @@ function onExRateChange(){
     const grpMap = {};
     editRows.forEach(row => {
         const gk = `${row.product_id}_${row.unit_price}_${row.age_type||'سنة'}_${row.color_id||0}`;
+        const vc = variantColors[row.variant_id] || {};
         if(!grpMap[gk]){
             grpMap[gk] = {
                 product_id:   row.product_id,
@@ -680,19 +697,19 @@ function onExRateChange(){
                 model_number: row.model_number||'',
                 selling_price:parseFloat(row.unit_price),
                 age_type:     row.age_type||'سنة',
-                color_id:     row.color_id||0,
-                color_name:   row.color_name||'',
-                color_hex:    row.color_hex||'',
+                color_id:     vc.color_id || row.color_id||0,
+                color_name:   vc.color_name || row.color_name||'',
+                color_hex:    vc.color_hex  || row.color_hex||'',
                 cost_price:   row.unit_price,
+                // كمية كروب×لون = كمية أول سطر (كل variants لها نفس الكمية)
                 qty:          parseFloat(row.quantity),
                 unit_price:   parseFloat(row.unit_price),
                 discount_pct: 0,
                 variants:     [],
                 sizes:        [],
             };
-        } else {
-            grpMap[gk].qty += parseFloat(row.quantity);
         }
+        // لا نجمع الكميات — كل كروب×لون له كميته من DB
         grpMap[gk].variants.push({variant_id:row.variant_id,size:row.size,barcode:row.barcode||'',age_type:row.age_type||'سنة'});
         if(!grpMap[gk].sizes.includes(row.size)) grpMap[gk].sizes.push(row.size);
     });
@@ -702,6 +719,8 @@ function onExRateChange(){
 
     Object.values(grpMap).forEach(g => {
         // نستخدم addLine مع بيانات الكروب×لون
+        // نجلب color من editRows مباشرة بناءً على color_id
+        const colorRow = editRows.find(r=>r.color_id==g.color_id) || {};
         const item = {
             variant_id:   g.variants[0].variant_id,
             product_id:   g.product_id,
@@ -710,8 +729,8 @@ function onExRateChange(){
             selling_price:g.selling_price,
             age_type:     g.age_type,
             color_id:     g.color_id,
-            color_name:   g.color_name,
-            color_hex:    g.color_hex,
+            color_name:   g.color_name || colorRow.color_name || g.color || '',
+            color_hex:    g.color_hex  || colorRow.color_hex  || '',
             size:         g.sizes[0]||'',
             barcode:      g.variants[0].barcode||'',
             cost_price:   g.unit_price,
@@ -1342,19 +1361,17 @@ function refreshProducts(){
     const btn=document.getElementById('btnRefresh');
     btn.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>جارٍ التحديث...';
     btn.disabled=true;
-    // إعادة تحميل الصفحة مع الحفاظ على بيانات الفاتورة في sessionStorage
     const state={
-        supplier:  document.getElementById('iSupplier').value,
-        warehouse: document.getElementById('iWarehouse').value,
-        currency:  document.getElementById('iCurrency').value,
-        exRate:    document.getElementById('iExRate').value,
-        date:      document.getElementById('iDate').value,
-        dueDate:   document.getElementById('iDueDate').value,
-        payMethod: document.getElementById('iPayMethod').value,
-        notes:     document.getElementById('iNotes').value,
-        discPct:   document.getElementById('discPct').value,
-        taxPct:    document.getElementById('taxPct').value,
-        lines:     lines,
+        supplier:  document.getElementById('iSupplier')?.value||'',
+        warehouse: document.getElementById('iWarehouse')?.value||'',
+        currency:  document.getElementById('iCurrency')?.value||'',
+        exRate:    document.getElementById('iExRate')?.value||'1',
+        date:      document.getElementById('iDate')?.value||'',
+        dueDate:   document.getElementById('iDueDate')?.value||'',
+        notes:     document.getElementById('iNotes')?.value||'',
+        discPct:   document.getElementById('discPct')?.value||'0',
+        taxPct:    document.getElementById('taxPct')?.value||'0',
+        lines,
     };
     sessionStorage.setItem('inv_draft_edit', JSON.stringify(state));
     location.reload();
@@ -1373,8 +1390,7 @@ function refreshProducts(){
         if(s.exRate)    document.getElementById('iExRate').value    = s.exRate;
         if(s.date)      document.getElementById('iDate').value      = s.date;
         if(s.dueDate)   document.getElementById('iDueDate').value   = s.dueDate;
-        if(s.payMethod) document.getElementById('iPayMethod').value = s.payMethod;
-        if(s.notes)     document.getElementById('iNotes').value     = s.notes;
+        if(s.notes)     document.getElementById('iNotes')?.value && (document.getElementById('iNotes').value=s.notes);
         if(s.discPct)   document.getElementById('discPct').value    = s.discPct;
         if(s.taxPct)    document.getElementById('taxPct').value     = s.taxPct;
         onCurrencyChange();

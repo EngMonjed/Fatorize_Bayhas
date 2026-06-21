@@ -500,15 +500,20 @@ function viewInvoice(id){
         const grpMap={};
         (p.items||[]).forEach(it=>{
             const k=`${it.product_id||it.product_name}_${it.unit_price}_${it.color||''}`;
-            if(!grpMap[k]) grpMap[k]={
-                product_name:it.product_name, model_number:it.model_number||'',
-                unit_price:parseFloat(it.unit_price), unit_price_usd:parseFloat(it.unit_price_usd||(parseFloat(it.unit_price)/rate)),
-                color:it.color||'—', wh_name:it.wh_name||'—',
-                qty:0, total:0, sizes:[]
-            };
-            grpMap[k].qty   += parseFloat(it.quantity);
+            if(!grpMap[k]){
+                grpMap[k]={
+                    product_name:it.product_name, model_number:it.model_number||'',
+                    unit_price:parseFloat(it.unit_price),
+                    unit_price_usd:parseFloat(it.unit_price_usd||(parseFloat(it.unit_price)/rate)),
+                    color:it.color||'—', wh_name:it.wh_name||'—',
+                    qty:parseFloat(it.quantity), // كمية أول سطر = كمية اللون
+                    total:0, sizes:[], sizeCount:0
+                };
+            }
+            // نجمع الإجمالي من total_price مباشرة
             grpMap[k].total += parseFloat(it.total_price);
             if(it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
+            grpMap[k].sizeCount++;
         });
 
         // ترتيب الكروبات بالسعر ثم اللون
@@ -518,7 +523,7 @@ function viewInvoice(id){
         const itemsHtml=grpRows.map(g=>{
             const pi=priceList.indexOf(g.unit_price);
             const [bg,clr,br]=GRP_COLORS[pi%4];
-            const grpBadge=`<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${pi+1} — ${g.unit_price.toFixed(2)} ${sym}</span>`;
+            const grpBadge=`<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${pi+1}</span>`;
             return `<tr>
                 <td>
                     <div class="fw-600" style="font-size:.8rem">${g.product_name}</div>
@@ -571,7 +576,7 @@ function viewInvoice(id){
                 ${parseFloat(p.tax_amount)>0?`<div class="det-row"><span style="color:#64748b">الضريبة</span><span class="n">+${parseFloat(p.tax_amount).toFixed(2)} ${sym}</span></div>`:''}
                 <div class="det-row" style="font-weight:700;font-size:.9rem;border-top:1px solid #e2e8f0;padding-top:6px">
                     <span>الصافي</span>
-                    <span class="n">${parseFloat(p.final_amount).toFixed(2)} ${sym}
+                    <span class="n">${grpRows.reduce((s,g)=>s+g.total,0).toFixed(2)} ${sym}
                     ${!isUSD&&p.final_amount_usd?`<small style="color:#94a3b8;font-weight:400"> (${parseFloat(p.final_amount_usd).toFixed(2)} $)</small>`:''}</span>
                 </div>
             </div>

@@ -369,40 +369,57 @@ $months = ['','يناير','فبراير','مارس','أبريل','مايو','ي
                         <input type="text" id="f_city" class="form-control">
                     </div>
                 </div>
-                <!-- §2 ربط فرع المعمل -->
-                <div class="section-label mt-4">
-                    <i class="bi bi-link-45deg"></i> ربط فرع المعمل / المصدر
-                </div>
-                <div class="factory-link-card" id="factoryCard" onclick="openFactoryPicker()">
-                    <div id="factoryEmpty">
-                        <i class="bi bi-plus-circle text-muted fs-4 d-block mb-1"></i>
-                        <div class="text-muted small">اضغط لربط فرع المعمل أو المصدر لهذا الفرع</div>
-                        <div class="text-muted" style="font-size:.72rem;margin-top:.3rem">
-                            سيُستخدم لإنشاء الطلبيات والفواتير الداخلية بين الفروع
+                <!-- §2 ربط المعمل — يتحكم به JS حسب نوع الفرع -->
+
+                <!-- فرع البيع: يختار معملاً -->
+                <div id="retailLinkSection" style="display:none">
+                    <div class="section-label mt-4">
+                        <i class="bi bi-link-45deg"></i> ربط فرع المعمل / المصدر
+                    </div>
+                    <div class="factory-link-card" id="factoryCard" onclick="openFactoryPicker()">
+                        <div id="factoryEmpty">
+                            <i class="bi bi-plus-circle text-muted fs-4 d-block mb-1"></i>
+                            <div class="text-muted small">اضغط لربط فرع المعمل أو المصدر لهذا الفرع</div>
+                            <div class="text-muted" style="font-size:.72rem;margin-top:.3rem">
+                                سيُستخدم لإنشاء الطلبيات والفواتير الداخلية بين الفروع
+                            </div>
+                        </div>
+                        <div id="factoryLinked" style="display:none">
+                            <div class="factory-badge" id="factoryBadgeInner">
+                                <i class="bi bi-gear-fill"></i>
+                                <span id="factoryName"></span>
+                            </div>
+                            <div class="text-muted mt-2" style="font-size:.72rem">
+                                اضغط لتغيير الفرع المرتبط
+                            </div>
                         </div>
                     </div>
-                    <div id="factoryLinked" style="display:none">
-                        <div class="factory-badge" id="factoryBadgeInner">
-                            <i class="bi bi-gear-fill"></i>
-                            <span id="factoryName"></span>
-                        </div>
-                        <div class="text-muted mt-2" style="font-size:.72rem">
-                            اضغط لتغيير الفرع المرتبط
+                    <input type="hidden" id="f_factory_branch_id">
+                    <select id="factoryPickerSelect" class="form-select mt-2"
+                            style="display:none" onchange="setFactory(this.value)"
+                            size="<?= count($branches) + 1 ?>">
+                        <option value="">— بدون ربط —</option>
+                        <?php foreach ($branches as $b): ?>
+                        <option value="<?= $b['id'] ?>">
+                            <?= htmlspecialchars($b['name']) ?>
+                            (<?= $branchTypes[$b['branch_type'] ?? 'retail'][0] ?>)
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- فرع التصنيع: يعرض فروع البيع المرتبطة به -->
+                <div id="factoryLinkedRetailSection" style="display:none">
+                    <div class="section-label mt-4">
+                        <i class="bi bi-diagram-3"></i> فروع البيع المرتبطة بهذا المعمل
+                    </div>
+                    <div id="linkedRetailList" style="background:#f8fafc;border-radius:10px;padding:12px;border:1px solid #e2e8f0">
+                        <div class="text-muted" style="font-size:.8rem">
+                            <i class="bi bi-info-circle me-1"></i>
+                            فروع البيع التي تربط بهذا المعمل تظهر هنا تلقائياً
                         </div>
                     </div>
                 </div>
-                <input type="hidden" id="f_factory_branch_id">
-                <select id="factoryPickerSelect" class="form-select mt-2"
-                        style="display:none" onchange="setFactory(this.value)"
-                        size="<?= count($branches) + 1 ?>">
-                    <option value="">— بدون ربط —</option>
-                    <?php foreach ($branches as $b): ?>
-                    <option value="<?= $b['id'] ?>">
-                        <?= htmlspecialchars($b['name']) ?>
-                        (<?= $branchTypes[$b['branch_type'] ?? 'retail'][0] ?>)
-                    </option>
-                    <?php endforeach; ?>
-                </select>
 
                 <!-- §3 العملة والتسعير -->
                 <div class="section-label mt-4">
@@ -694,8 +711,52 @@ function fillForm(b) {
     setCheck('f_notify_internal_order',  b.notify_internal_order == 1);
 
     updateIconPreview(b.icon || 'bi-building');
+
+    // إظهار القسم المناسب حسب نوع الفرع
+    updateBranchTypeSections(b.branch_type || 'retail', b);
     setFactory(b.factory_branch_id);
 }
+
+function updateBranchTypeSections(type, b) {
+    const retailSection  = document.getElementById('retailLinkSection');
+    const factorySection = document.getElementById('factoryLinkedRetailSection');
+    if (type === 'retail') {
+        retailSection.style.display  = '';
+        factorySection.style.display = 'none';
+    } else if (type === 'factory') {
+        retailSection.style.display  = 'none';
+        factorySection.style.display = '';
+        // جلب فروع البيع المرتبطة
+        if (b && b.id) loadLinkedRetailBranches(b.id);
+    } else {
+        retailSection.style.display  = 'none';
+        factorySection.style.display = 'none';
+    }
+}
+
+function loadLinkedRetailBranches(factoryId) {
+    const list = document.getElementById('linkedRetailList');
+    // نفلتر من branchesData فروع البيع التي ربطت بهذا المعمل
+    const linked = Object.values(branchesData).filter(b => b.factory_branch_id == factoryId);
+    if (!linked.length) {
+        list.innerHTML = '<div class="text-muted" style="font-size:.8rem"><i class="bi bi-info-circle me-1"></i>لا توجد فروع بيع مرتبطة بهذا المعمل بعد</div>';
+        return;
+    }
+    list.innerHTML = linked.map(b => `
+        <div class="d-flex align-items-center gap-2 mb-2 p-2" style="background:#fff;border-radius:8px;border:1px solid #e2e8f0">
+            <i class="bi bi-shop text-primary"></i>
+            <div>
+                <div class="fw-600" style="font-size:.82rem">${b.name}</div>
+                <div style="font-size:.7rem;color:#64748b">${b.city||''} — ${b.code||''}</div>
+            </div>
+        </div>`).join('');
+}
+
+// تحديث الأقسام عند تغيير نوع الفرع
+document.getElementById('f_branch_type')?.addEventListener('change', function() {
+    const b = currentBranchId && branchesData[currentBranchId] ? branchesData[currentBranchId] : {};
+    updateBranchTypeSections(this.value, b);
+});
 
 function setVal(id, val) {
     const el = document.getElementById(id);
