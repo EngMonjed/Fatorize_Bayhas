@@ -602,7 +602,7 @@ function openPayrollModal(empId) {
         '<div class="text-center nm py-3"><span class="spinner-border spinner-border-sm"></span></div>';
     payModal.show();
 
-    post({_action:'get_emp_periods', employee_id:empId}).then(d => {
+    post({_action:'get_emp_periods', employee_id:empId, month:'<?= $sel_month ?>'}).then(d => {
         if (!d.ok) { toast(d.msg,'danger'); payModal.hide(); return; }
         mCurrentEmp = d.emp;
         document.getElementById('mEmpName').textContent = d.emp.full_name;
@@ -666,7 +666,7 @@ function calcSelected() {
     // لكنها محفوظة في الـ DOM — نقرأها من attr بديل
     const opts = document.querySelectorAll('.period-opt');
     // نُعيد جلب الفترة من AJAX المحفوظ
-    post({_action:'get_emp_periods', employee_id:document.getElementById('mEmpId').value})
+    post({_action:'get_emp_periods', employee_id:document.getElementById('mEmpId').value, month:'<?= $sel_month ?>'})
     .then(d => {
         const p = d.periods[idx];
         return post({
@@ -736,8 +736,11 @@ function confirmPay() {
         employee_id:   emp.id,
         payroll_month: p.month,
         week_number:   p.week_num,
+        period_from:   p.from,
+        period_to:     p.to,
         method:        document.getElementById('mPayMethod').value,
         notes:         document.getElementById('mPayNotes').value,
+        calc_data:     JSON.stringify(mCalcData.r || {}),
     }).then(d => {
         document.getElementById('mPayTxt').style.opacity = '1';
         document.getElementById('mPaySpin').style.display = 'none';

@@ -57,6 +57,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     try {
         $act = $_POST['_action'];
 
+        // ── تسجيل دوام جماعي ──────────────────────────────────
+        if ($act === 'bulk_attendance') {
+            requirePermission('hr.attendance', 'create');
+            $date      = $_POST['date'] ?? date('Y-m-d');
+            $overwrite = $_POST['overwrite'] ?? '0';
+            $dayName   = strtolower(date('l', strtotime($date)));
+
+            // جدول أعمدة الأيام
+            $dayMap = [
+                'monday'    => 'monday',
+                'tuesday'   => 'tuesday',
+                'wednesday' => 'wednesday',
+                'thursday'  => 'thursday',
+                'friday'    => 'friday',
+                'saturday'  => 'saturday',
+                'sunday'    => 'sunday',
+            ];
+
+            // جلب كل الموظفين النشطين
+            $emps = $pdo->query("SELECT * FROM `{$T}` WHERE status='active' AND hire_date<='{$date}'")->fetchAll();
+
+            $saved = 0; $skipped = 0;
+            foreach ($emps as $emp) {
+                $fromCol = $dayName.'_from';
+                $toCol   = $dayName.'_to';
+                $dayFrom = $emp[$fromCol] ?? null;
+                $dayTo   = $emp[$toCol]   ?? null;
+
+                // يوم إجازة = ما في وقت
+                if ($dayFrom === null || $dayFrom === '') {
+                    $status   = 'absent';
+                    $checkIn  = null; $checkOut = null;
+                    $hw = 0; $ot = 0;
+                } else {
+                    $status   = 'present';
+                    $checkIn  = sprintf('%02d:00:00', (int)$dayFrom);
+                    $checkOut = sprintf('%02d:00:00', (int)$dayTo);
+                    $hw       = max(0, (int)$dayTo - (int)$dayFrom);
+                    // لا أوفرتايم — الدوام الجماعي يسجل الساعات المقررة فقط
+                    $ot = 0;
+                }
+
+                // تحقق من وجود سجل
+                $ex = $pdo->prepare("SELECT id FROM `{$TA}` WHERE employee_id=? AND attendance_date=?");
+                $ex->execute([$emp['id'], $date]);
+                $existId = $ex->fetchColumn();
+
+                if ($existId && $overwrite === '0') {
+                    $skipped++; continue;
+                }
+
+                if ($existId) {
+                    $pdo->prepare("UPDATE `{$TA}` SET check_in=?,check_out=?,hours_worked=?,
+                        overtime_hours=?,attendance_status=? WHERE id=?")
+                        ->execute([$checkIn,$checkOut,$hw,$ot,$status,$existId]);
+                } else {
+                    $pdo->prepare("INSERT INTO `{$TA}` (employee_id,attendance_date,check_in,check_out,
+                        hours_worked,overtime_hours,attendance_status,created_by)
+                        VALUES (?,?,?,?,?,?,?,?)")
+                        ->execute([$emp['id'],$date,$checkIn,$checkOut,$hw,$ot,$status,$_SESSION['user_id']]);
+                }
+                $saved++;
+            }
+            echo json_encode(['ok'=>true,'saved'=>$saved,'skipped'=>$skipped,
+                'msg'=>"تم تسجيل {$saved} موظف".($skipped>0?" (تجاوز {$skipped})":"")]);
+            exit;
+        }
+
         // ── جلب بيانات الموظف ──
         // ── إدارة العطل الرسمية ──
         if ($act === 'get_holidays') {
@@ -127,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if ($ex->fetch()) {
                 $pdo->prepare("UPDATE `{$TA}` SET check_in=?,check_out=?,hours_worked=?,
                     overtime_hours=0,attendance_status='present',notes=NULL,
-                    created_by=?,updated_at=NOW() WHERE employee_id=? AND attendance_date=?")
+                    created_by=? WHERE employee_id=? AND attendance_date=?")
                     ->execute([$ci,$co,$hours,$_SESSION['user_id'],$emp_id,$date]);
             } else {
                 $pdo->prepare("INSERT INTO `{$TA}`
@@ -219,7 +287,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $ex->execute([$emp_id,$date]);
             if ($ex->fetch()) {
                 $pdo->prepare("UPDATE `{$TA}` SET check_in=?,check_out=?,hours_worked=?,
-                    overtime_hours=?,attendance_status=?,notes=?,created_by=?,updated_at=NOW()
+                    overtime_hours=?,attendance_status=?,notes=?,created_by=?
                     WHERE employee_id=? AND attendance_date=?")
                     ->execute([$check_in,$check_out,$hw,$ot,$st,$notes,$_SESSION['user_id'],$emp_id,$date]);
             } else {
@@ -459,7 +527,13 @@ foreach ($employees as $emp) {
             <i class="bi bi-calendar-x me-1"></i>العطل الرسمية
         </button>
         <?php endif; ?>
-        <button class="btn-save-all ms-auto" onclick="saveAllPending()">
+        <button class="btn btn-sm fw-600 ms-auto"
+                style="border-radius:8px;background:#16a34a;color:#fff;font-size:.8rem;border:none"
+                onclick="openBulkModal()">
+            <i class="bi bi-people-fill me-1"></i>دوام جماعي
+        </button>
+
+        <button class="btn-save-all" onclick="saveAllPending()">
             <i class="bi bi-check2-all"></i>
             حفظ دوام الكل
             <span id="saveAllSpin" class="spinner-border spinner-border-sm ms-1" style="display:none"></span>
@@ -771,6 +845,51 @@ foreach ($employees as $emp) {
             جاري التحميل...
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- مودال الدوام الجماعي -->
+<div class="modal fade" id="bulkModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="border-radius:16px;border:none">
+      <div class="modal-header py-3 px-4 border-0"
+           style="background:linear-gradient(135deg,#065f46,#16a34a);border-radius:16px 16px 0 0">
+        <h6 class="modal-title text-white fw-700 mb-0">
+            <i class="bi bi-people-fill me-2"></i>تسجيل دوام جماعي
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body px-4 py-3">
+        <div style="background:#f0fdf4;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:.8rem;color:#065f46">
+            <i class="bi bi-info-circle me-1"></i>
+            سيتم تسجيل دوام لكل الموظفين النشطين حسب ساعاتهم المقررة في ملف كل موظف
+        </div>
+        <div class="mb-3">
+            <label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:4px">التاريخ <span style="color:#dc2626">*</span></label>
+            <input type="date" id="bulkDate" class="form-control form-control-sm">
+        </div>
+        <div class="mb-3">
+            <label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:6px">الموظفون الذين سُجِّل دوامهم مسبقاً</label>
+            <div class="d-flex gap-3">
+                <label style="cursor:pointer;font-size:.82rem">
+                    <input type="radio" name="overwrite" value="0" checked class="me-1"> تجاوز (skip)
+                </label>
+                <label style="cursor:pointer;font-size:.82rem">
+                    <input type="radio" name="overwrite" value="1" class="me-1"> استبدال
+                </label>
+            </div>
+        </div>
+        <div id="bulkResult" style="display:none"></div>
+      </div>
+      <div class="modal-footer border-0 px-4 pb-4">
+        <button class="btn btn-sm btn-light" style="border-radius:8px" data-bs-dismiss="modal">إلغاء</button>
+        <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;min-width:130px;border:none"
+                onclick="doBulkAttendance()" id="btnBulk">
+            <span id="bulkTxt"><i class="bi bi-check-all me-1"></i>تسجيل الدوام</span>
+            <span id="bulkSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
+        </button>
       </div>
     </div>
   </div>
@@ -1202,6 +1321,49 @@ function toast(msg, type) {
     t.innerHTML = `<i class="bi bi-${ic} me-2"></i>${msg}`;
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 3000);
+}
+// ── الدوام الجماعي ──
+const bulkModal = new bootstrap.Modal(document.getElementById('bulkModal'));
+function openBulkModal(){
+    document.getElementById('bulkDate').value = SEL_DATE || new Date().toISOString().split('T')[0];
+    document.getElementById('bulkResult').style.display='none';
+    document.getElementById('btnBulk').disabled=false;
+    document.getElementById('bulkTxt').style.opacity='1';
+    document.getElementById('bulkSpin').style.display='none';
+    bulkModal.show();
+}
+function doBulkAttendance(){
+    const date = document.getElementById('bulkDate').value;
+    const ow   = document.querySelector('input[name="overwrite"]:checked').value;
+    if(!date){alert('اختر التاريخ');return;}
+    document.getElementById('bulkTxt').style.opacity='0';
+    document.getElementById('bulkSpin').style.display='inline-block';
+    document.getElementById('btnBulk').disabled=true;
+    document.getElementById('bulkResult').style.display='none';
+
+    const fd=new FormData();
+    fd.append('_action','bulk_attendance');
+    fd.append('date',date);
+    fd.append('overwrite',ow);
+    fetch(location.href,{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+        document.getElementById('bulkTxt').style.opacity='1';
+        document.getElementById('bulkSpin').style.display='none';
+        document.getElementById('btnBulk').disabled=false;
+        const res=document.getElementById('bulkResult');
+        res.style.display='block';
+        if(d.ok){
+            res.innerHTML=`<div style="background:#f0fdf4;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#065f46">
+                <i class="bi bi-check-circle-fill me-1"></i> <b>تم بنجاح</b><br>
+                سُجِّل: <b>${d.saved}</b> موظف
+                ${d.skipped>0?` · تجاوز: <b>${d.skipped}</b>`:''}
+            </div>`;
+            setTimeout(()=>{bulkModal.hide();location.reload();},1800);
+        } else {
+            res.innerHTML=`<div style="background:#fee2e2;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#dc2626">
+                <i class="bi bi-exclamation-triangle me-1"></i>${d.msg}
+            </div>`;
+        }
+    });
 }
 </script>
 </body>

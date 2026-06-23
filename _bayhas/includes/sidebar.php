@@ -164,8 +164,8 @@ function moduleUrl(string $key): string
     // المالية
     'finance.accounts' => 'accounting/accounts.php',
     'finance.journal' => 'accounting/journal.php',
-    'finance.receipts' => 'receipts/index.php',
-    'finance.expenses' => 'expenses/index.php',
+    'finance.receipts' => 'accounting/receipts.php',
+    'finance.expenses' => 'accounting/expenses.php',
     'finance.reports' => 'reports/index.php',
     // العملاء والموردون
     'crm.customers' => 'customers/index.php',
