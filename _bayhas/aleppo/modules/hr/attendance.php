@@ -1345,7 +1345,9 @@ function doBulkAttendance(){
     fd.append('_action','bulk_attendance');
     fd.append('date',date);
     fd.append('overwrite',ow);
-    fetch(location.href,{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    fetch(location.href,{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{
         document.getElementById('bulkTxt').style.opacity='1';
         document.getElementById('bulkSpin').style.display='none';
         document.getElementById('btnBulk').disabled=false;
@@ -1363,6 +1365,14 @@ function doBulkAttendance(){
                 <i class="bi bi-exclamation-triangle me-1"></i>${d.msg}
             </div>`;
         }
+    })
+    .catch(()=>{
+        document.getElementById('bulkTxt').style.opacity='1';
+        document.getElementById('bulkSpin').style.display='none';
+        document.getElementById('btnBulk').disabled=false;
+        const res=document.getElementById('bulkResult');
+        res.style.display='block';
+        res.innerHTML='<div style="background:#fee2e2;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#dc2626"><i class="bi bi-exclamation-triangle me-1"></i>حدث خطأ غير متوقع</div>';
     });
 }
 </script>

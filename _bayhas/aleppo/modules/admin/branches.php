@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 'name', 'name_en', 'branch_type', 'code',
                 'phone', 'email', 'address', 'city', 'country', 'tax_number',
                 'factory_branch_id',
-                'base_currency', 'local_currency',
+                'base_currency', 'local_currency', 'base_currency_id', 'local_currency_id',
                 'pricing_method', 'default_margin_pct', 'tax_rate_default',
                 'allow_negative_stock',
                 'notify_low_stock', 'low_stock_threshold',
@@ -103,7 +103,12 @@ $branchTypes = [
     'lab'       => ['مختبر',     'bi-flask',        '#8b5cf6', '#fdf4ff'],
     'office'    => ['مكتب',      'bi-briefcase',    '#64748b', '#f8fafc'],
 ];
-$currencies = ['USD'=>'دولار $','TRY'=>'ليرة تركية ₺','SYP'=>'ليرة سورية','EUR'=>'يورو €'];
+// جلب العملات من DB بالـ id
+$currencies_db = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
+$currencies = []; // id => label
+foreach($currencies_db as $cur){
+    $currencies[$cur['id']] = $cur['code'].' — '.$cur['name'].' '.$cur['symbol'];
+}
 $pricingMethods = [
     'cost_plus' => 'تكلفة + هامش ربح',
     'fixed'     => 'سعر ثابت',
@@ -369,57 +374,40 @@ $months = ['','يناير','فبراير','مارس','أبريل','مايو','ي
                         <input type="text" id="f_city" class="form-control">
                     </div>
                 </div>
-                <!-- §2 ربط المعمل — يتحكم به JS حسب نوع الفرع -->
-
-                <!-- فرع البيع: يختار معملاً -->
-                <div id="retailLinkSection" style="display:none">
-                    <div class="section-label mt-4">
-                        <i class="bi bi-link-45deg"></i> ربط فرع المعمل / المصدر
-                    </div>
-                    <div class="factory-link-card" id="factoryCard" onclick="openFactoryPicker()">
-                        <div id="factoryEmpty">
-                            <i class="bi bi-plus-circle text-muted fs-4 d-block mb-1"></i>
-                            <div class="text-muted small">اضغط لربط فرع المعمل أو المصدر لهذا الفرع</div>
-                            <div class="text-muted" style="font-size:.72rem;margin-top:.3rem">
-                                سيُستخدم لإنشاء الطلبيات والفواتير الداخلية بين الفروع
-                            </div>
-                        </div>
-                        <div id="factoryLinked" style="display:none">
-                            <div class="factory-badge" id="factoryBadgeInner">
-                                <i class="bi bi-gear-fill"></i>
-                                <span id="factoryName"></span>
-                            </div>
-                            <div class="text-muted mt-2" style="font-size:.72rem">
-                                اضغط لتغيير الفرع المرتبط
-                            </div>
-                        </div>
-                    </div>
-                    <input type="hidden" id="f_factory_branch_id">
-                    <select id="factoryPickerSelect" class="form-select mt-2"
-                            style="display:none" onchange="setFactory(this.value)"
-                            size="<?= count($branches) + 1 ?>">
-                        <option value="">— بدون ربط —</option>
-                        <?php foreach ($branches as $b): ?>
-                        <option value="<?= $b['id'] ?>">
-                            <?= htmlspecialchars($b['name']) ?>
-                            (<?= $branchTypes[$b['branch_type'] ?? 'retail'][0] ?>)
-                        </option>
-                        <?php endforeach; ?>
-                    </select>
+                <!-- §2 ربط فرع المعمل -->
+                <div class="section-label mt-4">
+                    <i class="bi bi-link-45deg"></i> ربط فرع المعمل / المصدر
                 </div>
-
-                <!-- فرع التصنيع: يعرض فروع البيع المرتبطة به -->
-                <div id="factoryLinkedRetailSection" style="display:none">
-                    <div class="section-label mt-4">
-                        <i class="bi bi-diagram-3"></i> فروع البيع المرتبطة بهذا المعمل
+                <div class="factory-link-card" id="factoryCard" onclick="openFactoryPicker()">
+                    <div id="factoryEmpty">
+                        <i class="bi bi-plus-circle text-muted fs-4 d-block mb-1"></i>
+                        <div class="text-muted small">اضغط لربط فرع المعمل أو المصدر لهذا الفرع</div>
+                        <div class="text-muted" style="font-size:.72rem;margin-top:.3rem">
+                            سيُستخدم لإنشاء الطلبيات والفواتير الداخلية بين الفروع
+                        </div>
                     </div>
-                    <div id="linkedRetailList" style="background:#f8fafc;border-radius:10px;padding:12px;border:1px solid #e2e8f0">
-                        <div class="text-muted" style="font-size:.8rem">
-                            <i class="bi bi-info-circle me-1"></i>
-                            فروع البيع التي تربط بهذا المعمل تظهر هنا تلقائياً
+                    <div id="factoryLinked" style="display:none">
+                        <div class="factory-badge" id="factoryBadgeInner">
+                            <i class="bi bi-gear-fill"></i>
+                            <span id="factoryName"></span>
+                        </div>
+                        <div class="text-muted mt-2" style="font-size:.72rem">
+                            اضغط لتغيير الفرع المرتبط
                         </div>
                     </div>
                 </div>
+                <input type="hidden" id="f_factory_branch_id">
+                <select id="factoryPickerSelect" class="form-select mt-2"
+                        style="display:none" onchange="setFactory(this.value)"
+                        size="<?= count($branches) + 1 ?>">
+                    <option value="">— بدون ربط —</option>
+                    <?php foreach ($branches as $b): ?>
+                    <option value="<?= $b['id'] ?>">
+                        <?= htmlspecialchars($b['name']) ?>
+                        (<?= $branchTypes[$b['branch_type'] ?? 'retail'][0] ?>)
+                    </option>
+                    <?php endforeach; ?>
+                </select>
 
                 <!-- §3 العملة والتسعير -->
                 <div class="section-label mt-4">
@@ -428,17 +416,17 @@ $months = ['','يناير','فبراير','مارس','أبريل','مايو','ي
                 <div class="row g-3">
                     <div class="col-md-6">
                         <label class="form-label-sm">العملة الأساسية (التقارير)</label>
-                        <select id="f_base_currency" class="form-select">
-                            <?php foreach ($currencies as $k=>$v): ?>
-                            <option value="<?= $k ?>"><?= $v ?></option>
+                        <select id="f_base_currency_id" class="form-select">
+                            <?php foreach ($currencies as $id=>$label): ?>
+                            <option value="<?= $id ?>"><?= htmlspecialchars($label) ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label-sm">العملة المحلية (المعاملات)</label>
-                        <select id="f_local_currency" class="form-select">
-                            <?php foreach ($currencies as $k=>$v): ?>
-                            <option value="<?= $k ?>"><?= $v ?></option>
+                        <select id="f_local_currency_id" class="form-select">
+                            <?php foreach ($currencies as $id=>$label): ?>
+                            <option value="<?= $id ?>"><?= htmlspecialchars($label) ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -690,8 +678,8 @@ function fillForm(b) {
     setVal('f_email',                  b.email);
     setVal('f_address',                b.address);
     setVal('f_city',                   b.city);
-    setVal('f_base_currency',          b.base_currency || 'USD');
-    setVal('f_local_currency',         b.local_currency || 'SYP');
+    setVal('f_base_currency_id', b.base_currency_id || 1);
+    setVal('f_local_currency_id', b.local_currency_id || 4);
     setVal('f_pricing_method',         b.pricing_method || 'cost_plus');
     setVal('f_default_margin_pct',     b.default_margin_pct || 20);
     setVal('f_tax_rate_default',       b.tax_rate_default || 0);
@@ -711,52 +699,8 @@ function fillForm(b) {
     setCheck('f_notify_internal_order',  b.notify_internal_order == 1);
 
     updateIconPreview(b.icon || 'bi-building');
-
-    // إظهار القسم المناسب حسب نوع الفرع
-    updateBranchTypeSections(b.branch_type || 'retail', b);
     setFactory(b.factory_branch_id);
 }
-
-function updateBranchTypeSections(type, b) {
-    const retailSection  = document.getElementById('retailLinkSection');
-    const factorySection = document.getElementById('factoryLinkedRetailSection');
-    if (type === 'retail') {
-        retailSection.style.display  = '';
-        factorySection.style.display = 'none';
-    } else if (type === 'factory') {
-        retailSection.style.display  = 'none';
-        factorySection.style.display = '';
-        // جلب فروع البيع المرتبطة
-        if (b && b.id) loadLinkedRetailBranches(b.id);
-    } else {
-        retailSection.style.display  = 'none';
-        factorySection.style.display = 'none';
-    }
-}
-
-function loadLinkedRetailBranches(factoryId) {
-    const list = document.getElementById('linkedRetailList');
-    // نفلتر من branchesData فروع البيع التي ربطت بهذا المعمل
-    const linked = Object.values(branchesData).filter(b => b.factory_branch_id == factoryId);
-    if (!linked.length) {
-        list.innerHTML = '<div class="text-muted" style="font-size:.8rem"><i class="bi bi-info-circle me-1"></i>لا توجد فروع بيع مرتبطة بهذا المعمل بعد</div>';
-        return;
-    }
-    list.innerHTML = linked.map(b => `
-        <div class="d-flex align-items-center gap-2 mb-2 p-2" style="background:#fff;border-radius:8px;border:1px solid #e2e8f0">
-            <i class="bi bi-shop text-primary"></i>
-            <div>
-                <div class="fw-600" style="font-size:.82rem">${b.name}</div>
-                <div style="font-size:.7rem;color:#64748b">${b.city||''} — ${b.code||''}</div>
-            </div>
-        </div>`).join('');
-}
-
-// تحديث الأقسام عند تغيير نوع الفرع
-document.getElementById('f_branch_type')?.addEventListener('change', function() {
-    const b = currentBranchId && branchesData[currentBranchId] ? branchesData[currentBranchId] : {};
-    updateBranchTypeSections(this.value, b);
-});
 
 function setVal(id, val) {
     const el = document.getElementById(id);
@@ -817,7 +761,8 @@ function saveBranch() {
         phone: g('f_phone'), email: g('f_email'),
         address: g('f_address'), city: g('f_city'),
         factory_branch_id: g('f_factory_branch_id') || '',
-        base_currency: g('f_base_currency'), local_currency: g('f_local_currency'),
+        base_currency: g('f_base_currency_id'), local_currency: g('f_local_currency_id'),
+        base_currency_id: g('f_base_currency_id'), local_currency_id: g('f_local_currency_id'),
         pricing_method: g('f_pricing_method'),
         default_margin_pct: g('f_default_margin_pct'),
         tax_rate_default: g('f_tax_rate_default'),

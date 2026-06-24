@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $name     = trim($_POST['name'] ?? '');
             $parentId = (int)($_POST['parent_id'] ?? 0) ?: null;
             $type     = $_POST['account_type'] ?? 'asset';
-            $currency = $_POST['currency'] ?? 'USD';
+            $currency_id = (int)($_POST['currency_id'] ?? 1);
             $desc     = trim($_POST['description'] ?? '');
 
             if (!$code) throw new Exception('رمز الحساب مطلوب');
@@ -51,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 if ($locked->fetchColumn()) throw new Exception('هذا الحساب مقفل ولا يمكن تعديله');
 
                 $pdo->prepare("UPDATE `{$TAC}` SET code=?,name=?,parent_id=?,account_type=?,
-                    currency=?,level=?,description=?,updated_by=?,updated_at=NOW() WHERE id=?")
-                    ->execute([$code,$name,$parentId,$type,$currency,$level,$desc,$_SESSION['user_id'],$id]);
+                    currency_id=?,level=?,description=?,updated_by=?,updated_at=NOW() WHERE id=?")
+                    ->execute([$code,$name,$parentId,$type,$currency_id,$level,$desc,$_SESSION['user_id'],$id]);
             } else {
                 requirePermission('finance.accounts', 'create');
                 // التحقق من تكرار الكود
@@ -60,9 +60,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $dup->execute([$code]);
                 if ($dup->fetchColumn()) throw new Exception("رمز الحساب {$code} مستخدم مسبقاً");
 
-                $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency,level,description,created_by)
+                $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,description,created_by)
                     VALUES (?,?,?,?,?,?,?,?)")
-                    ->execute([$code,$name,$parentId,$type,$currency,$level,$desc,$_SESSION['user_id']]);
+                    ->execute([$code,$name,$parentId,$type,$currency_id,$level,$desc,$_SESSION['user_id']]);
                 $id = (int)$pdo->lastInsertId();
             }
             echo json_encode(['ok'=>true,'id'=>$id]);
@@ -108,7 +108,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ──
-$accounts = $pdo->query("SELECT * FROM `{$TAC}` ORDER BY code")->fetchAll();
+$accounts = $pdo->query("SELECT ac.*, c.code AS cur_code, c.symbol AS cur_sym
+    FROM `{$TAC}` ac LEFT JOIN currencies c ON c.id=ac.currency_id
+    ORDER BY ac.code")->fetchAll();
 
 // بناء الشجرة
 $tree = [];
@@ -142,7 +144,7 @@ function renderTree(array $nodes, array $TYPE_MAP, array $CURRENCY_MAP, int $dep
         $hasKids = !empty($acc['children']);
         $locked  = $acc['is_locked'];
         $active  = $acc['is_active'];
-        $sym     = $CURRENCY_MAP[$acc['currency']] ?? '$';
+        $sym     = $acc['cur_sym'] ?? '$';
         ?>
         <tr class="acc-row lvl-<?= $acc['level'] ?> <?= !$active?'text-muted':'' ?>"
             data-id="<?= $acc['id'] ?>" data-parent="<?= $acc['parent_id']??'' ?>">
@@ -378,11 +380,13 @@ table.mtbl td{padding:6px 12px;border-bottom:1px solid #f8fafc;vertical-align:mi
           </div>
           <div class="col-md-6">
             <label class="field-lbl">العملة</label>
-            <select id="mCurrency" class="form-select form-select-sm">
-                <option value="USD">USD — دولار أمريكي</option>
-                <option value="SYP">SYP — ليرة سورية</option>
-                <option value="TRY">TRY — ليرة تركية</option>
-                <option value="EUR">EUR — يورو</option>
+            <select id="mCurrencyId" class="form-select form-select-sm">
+                <?php
+                $curs=$pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
+                foreach($curs as $cur):
+                ?>
+                <option value="<?=$cur['id']?>"><?=htmlspecialchars($cur['code'].' — '.$cur['name'].' '.$cur['symbol'])?></option>
+                <?php endforeach; ?>
             </select>
           </div>
           <div class="col-12">
@@ -520,7 +524,7 @@ function saveAccount(){
         code,name,
         parent_id:   document.getElementById('mParent').value,
         account_type:document.getElementById('mType').value,
-        currency:    document.getElementById('mCurrency').value,
+        currency_id: document.getElementById('mCurrencyId').value,
         description: document.getElementById('mDesc').value,
     }).then(d=>{
         document.getElementById('saveTxt').style.opacity='1';

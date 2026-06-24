@@ -105,11 +105,38 @@ $bonuses_all = $pdo->query("SELECT b.*,e.full_name,c.symbol AS cur_sym
 
 $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY is_base DESC")->fetchAll();
 
+// عملة الفرع الأساسية — بالـ id ثم الكود
+$branchCurrSt=$pdo->prepare("SELECT b.base_currency_id, COALESCE(c.code,b.base_currency,'USD') AS base_curr_code,
+    COALESCE(c.id,1) AS base_curr_id
+    FROM branches b LEFT JOIN currencies c ON c.id=b.base_currency_id
+    WHERE b.table_suffix=? LIMIT 1");
+$branchCurrSt->execute([$TS]);
+$branchRow=$branchCurrSt->fetch();
+$branchBaseCurr=$branchRow['base_curr_code']??'USD';
+$branchBaseCurrId=(int)($branchRow['base_curr_id']??1);
+
+// حسابات الصندوق والبنك — ربط بـ currency_id مباشرة
+$cash_accounts = $pdo->query("SELECT ac.id, ac.code, ac.name,
+    ac.currency_id, c.code AS currency_code, c.symbol AS currency_symbol, c.name AS currency_name
+    FROM `account_charts_{$TS}` ac
+    LEFT JOIN currencies c ON c.id=ac.currency_id
+    WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
+    AND (ac.code LIKE '111%' OR ac.code LIKE '112%')
+    ORDER BY ac.code")->fetchAll();
+
 // إحصائيات
-$total_net     = 0; $paid_c = 0; $pending_c = 0;
-foreach ($payrolls as $emp_rows) {
+$totals_by_cur = []; $paid_c = 0; $pending_c = 0;
+
+// جلب عملة كل موظف
+$emp_cur_map = [];
+foreach ($employees as $e) {
+    $emp_cur_map[$e['id']] = $e['cur_sym'] ?? '$';
+}
+
+foreach ($payrolls as $emp_id => $emp_rows) {
+    $cur_sym = $emp_cur_map[$emp_id] ?? '$';
     foreach ($emp_rows as $r) {
-        $total_net += (float)$r['net_salary'];
+        $totals_by_cur[$cur_sym] = ($totals_by_cur[$cur_sym] ?? 0) + (float)$r['net_salary'];
         if ($r['payment_status']==='paid')    $paid_c++;
         if ($r['payment_status']==='pending') $pending_c++;
     }
@@ -197,19 +224,40 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
 
 <!-- إحصائيات -->
 <div class="row g-3 mb-3">
-    <?php foreach ([
-        [number_format($total_net,0), 'إجمالي الرواتب', 'bi-cash-stack', '#16a34a','#f0fdf4'],
-        [$paid_c,    'تم صرفها',      'bi-check-circle-fill','#2563eb','#eff6ff'],
-        [$pending_c, 'بانتظار الصرف', 'bi-hourglass-split',  '#d97706','#fffbeb'],
-        [number_format($total_loan_ded,0), 'أقساط السلف', 'bi-credit-card','#dc2626','#fef2f2'],
-    ] as [$v,$l,$ic,$clr,$bg]): ?>
+    <!-- إجمالي الرواتب حسب العملة — بطاقة واحدة -->
     <div class="col-6 col-md-3">
         <div class="stat-card">
-            <div class="stat-icon" style="background:<?=$bg?>;color:<?=$clr?>"><i class="bi <?=$ic?>"></i></div>
-            <div><div class="stat-val" style="color:<?=$clr?>"><?=$v?></div><div class="stat-lbl"><?=$l?></div></div>
+            <div class="stat-icon" style="background:#f0fdf4;color:#16a34a"><i class="bi bi-cash-stack"></i></div>
+            <div>
+                <?php if(empty($totals_by_cur)): ?>
+                <div class="stat-val" style="color:#16a34a">—</div>
+                <?php else: ?>
+                <?php foreach($totals_by_cur as $sym=>$tot): ?>
+                <div class="stat-val" style="color:#16a34a;font-size:1rem"><?= number_format($tot,0) ?> <?= htmlspecialchars($sym) ?></div>
+                <?php endforeach; ?>
+                <?php endif; ?>
+                <div class="stat-lbl">إجمالي الرواتب</div>
+            </div>
         </div>
     </div>
-    <?php endforeach; ?>
+    <div class="col-6 col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon" style="background:#eff6ff;color:#2563eb"><i class="bi bi-check-circle-fill"></i></div>
+            <div><div class="stat-val" style="color:#2563eb"><?=$paid_c?></div><div class="stat-lbl">تم صرفها</div></div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon" style="background:#fffbeb;color:#d97706"><i class="bi bi-hourglass-split"></i></div>
+            <div><div class="stat-val" style="color:#d97706"><?=$pending_c?></div><div class="stat-lbl">بانتظار الصرف</div></div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon" style="background:#fef2f2;color:#dc2626"><i class="bi bi-credit-card"></i></div>
+            <div><div class="stat-val" style="color:#dc2626"><?=number_format($total_loan_ded,0)?></div><div class="stat-lbl">أقساط السلف</div></div>
+        </div>
+    </div>
 </div>
 
 <!-- شريط التحكم -->
@@ -219,9 +267,23 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
         <button class="t-btn"     id="tabLoans"    onclick="switchTab('Loans')"><i class="bi bi-credit-card me-1"></i>السلف</button>
         <button class="t-btn"     id="tabBonuses"  onclick="switchTab('Bonuses')"><i class="bi bi-trophy me-1"></i>المكافآت</button>
     </div>
-    <input type="month" id="monthPicker" class="form-control form-control-sm"
-           style="width:155px;border-radius:8px" value="<?= $sel_month ?>"
-           onchange="location.href='?month='+this.value">
+    <select id="monthPicker" class="form-select form-select-sm"
+            style="width:155px;border-radius:8px"
+            onchange="location.href='?month='+this.value">
+        <?php
+        $months_ar=['01'=>'يناير','02'=>'فبراير','03'=>'مارس','04'=>'أبريل',
+                    '05'=>'مايو','06'=>'يونيو','07'=>'يوليو','08'=>'أغسطس',
+                    '09'=>'سبتمبر','10'=>'أكتوبر','11'=>'نوفمبر','12'=>'ديسمبر'];
+        $cur_y=(int)date('Y');
+        for($yr=$cur_y-1;$yr<=$cur_y+1;$yr++){
+            foreach($months_ar as $mn=>$ml){
+                $mval=$yr.'-'.$mn;
+                $msel=($mval===$sel_month)?'selected':'';
+                echo '<option value="'.$mval.'" '.$msel.'>'.$ml.' '.$yr.'</option>';
+            }
+        }
+        ?>
+    </select>
 </div>
 
 <!-- ══ تبويب الرواتب ══ -->
@@ -230,7 +292,7 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
     <div class="sec-hdr">
         <span style="font-size:.88rem;font-weight:700;color:#1e293b">
             <i class="bi bi-table me-2 text-primary"></i>
-            كشف رواتب <?= date('F Y', strtotime($month_from)) ?>
+            كشف رواتب <?= $sy.'-'.$sm ?>
         </span>
     </div>
     <div class="table-responsive">
@@ -273,7 +335,7 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
                 <div class="d-flex align-items-center gap-1">
                     <?php foreach ($emp_rows as $r):
                         $isPaid = $r['payment_status']==='paid';
-                        $lbl    = $is_wk ? 'أ'.($r['week_number']) : date('M',strtotime($r['period_from']));
+                        $lbl    = $is_wk ? 'أ'.($r['week_number']) : date('Y-m',strtotime($r['period_from']));
                     ?>
                     <span style="font-size:.72rem;padding:2px 6px;border-radius:5px;
                           background:<?=$isPaid?'#f0fdf4':'#fffbeb'?>;
@@ -423,6 +485,31 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
                 <option value="bank_transfer">تحويل بنكي</option>
               </select>
             </div>
+            <div class="col-12">
+              <label class="form-label small fw-600 text-secondary mb-1">حساب الدفع (الصندوق/البنك)</label>
+              <select id="mCashAccount" class="form-select form-select-sm">
+                <option value="">— اختر حساب الدفع —</option>
+                <?php foreach($cash_accounts as $ca): ?>
+                <option value="<?=$ca['id']?>"
+                        data-currency-id="<?=(int)$ca['currency_id']?>">
+                    <?=htmlspecialchars($ca['code'].' — '.$ca['name'])?> (<?=htmlspecialchars($ca['currency_code']??'')?> <?=htmlspecialchars($ca['currency_symbol']??'')?>)
+                </option>
+                <?php endforeach; ?>
+              </select>
+              <div id="mCashAccountHint" style="font-size:.72rem;color:#94a3b8;margin-top:3px"></div>
+            </div>
+            <div class="col-12" id="mExchangeRateWrap" style="display:none">
+              <label class="form-label small fw-600 text-secondary mb-1">
+                سعر الصرف
+                <span id="mExchangeRateLabel" style="color:#64748b;font-weight:400"></span>
+              </label>
+              <input type="number" id="mExchangeRate" class="form-control form-control-sm fw-600"
+                     min="0.000001" step="0.01" dir="ltr" placeholder="1.00000" value="1">
+              <div style="font-size:.73rem;color:#64748b;margin-top:3px">
+                <i class="bi bi-info-circle me-1"></i>
+                <span id="mExchangeRateHint"></span>
+              </div>
+            </div>
             <div class="col-6">
               <label class="form-label small fw-600 text-secondary mb-1">تاريخ الصرف</label>
               <input type="date" id="mPayDate" class="form-control form-control-sm" value="<?=date('Y-m-d')?>">
@@ -565,7 +652,10 @@ function switchTab(t) {
     });
 }
 
-const WEEK_START_DAY = <?= $_SESSION['week_start_day'] ?? 1 ?>;
+const WEEK_START_DAY   = <?= $_SESSION['week_start_day'] ?? 1 ?>;
+const BRANCH_BASE_CURR    = '<?= $branchBaseCurr ?>';
+const BRANCH_BASE_CURR_ID = <?= $branchBaseCurrId ?>;
+const CASH_ACCOUNTS = <?= json_encode(array_values($cash_accounts), JSON_UNESCAPED_UNICODE) ?>;
 const payModal   = new bootstrap.Modal(document.getElementById('payrollModal'));
 const loanModal  = new bootstrap.Modal(document.getElementById('loanModal'));
 const bonusModal = new bootstrap.Modal(document.getElementById('bonusModal'));
@@ -598,6 +688,8 @@ function openPayrollModal(empId) {
     document.getElementById('mEmpSub').textContent  = '...';
     document.getElementById('mStep1').style.display = '';
     document.getElementById('mStep2').style.display = 'none';
+    document.getElementById('mExchangeRateWrap').style.display = 'none';
+    document.getElementById('mExchangeRate').value = '1';
     document.getElementById('mPeriodsList').innerHTML =
         '<div class="text-center nm py-3"><span class="spinner-border spinner-border-sm"></span></div>';
     payModal.show();
@@ -608,6 +700,8 @@ function openPayrollModal(empId) {
         document.getElementById('mEmpName').textContent = d.emp.full_name;
         document.getElementById('mEmpSub').textContent  =
             (d.emp.salary_type==='weekly'?'أسبوعي':'شهري') + ' · ' + fmt(d.emp.basic_salary) + ' ' + (d.emp.cur_sym||'');
+
+
 
         // عرض الفترات
         const list = document.getElementById('mPeriodsList');
@@ -683,6 +777,42 @@ function calcSelected() {
         btn.innerHTML = '<i class="bi bi-calculator me-1"></i>احتساب';
         if (!r.ok) { toast(r.msg,'danger'); return; }
         mCalcData = {r, p, emp};
+        // تحذير فقط عند راتب صفر — لا يمنع الصرف
+        if (!r.net || r.net <= 0) {
+            toast('تنبيه: الراتب الصافي 0 (غياب أو إجازة بدون راتب)', 'warning');
+        }
+        // فلترة حسابات الدفع حسب عملة الموظف
+        const empCurId2 = r.emp_cur_id || 1;
+        const cashSel   = document.getElementById('mCashAccount');
+        cashSel.innerHTML = '<option value="">— اختر حساب الدفع —</option>';
+        let firstMatch = null;
+        CASH_ACCOUNTS.forEach(ca=>{
+            const caOpt=document.createElement('option');
+            caOpt.value=ca.id;
+            caOpt.dataset.currencyId=ca.currency_id||0;
+            caOpt.textContent=ca.code+' — '+ca.name+(ca.currency_code?' ('+ca.currency_code+' '+ca.currency_symbol+')':'');
+            const matches = parseInt(ca.currency_id)===parseInt(empCurId2);
+            if(matches && !firstMatch){ firstMatch=ca.id; }
+            // إظهار الكل لكن تمييز المطابق
+            if(matches) caOpt.style.fontWeight='700';
+            cashSel.appendChild(caOpt);
+        });
+        if(firstMatch) cashSel.value=firstMatch;
+        document.getElementById('mCashAccountHint').textContent =
+            firstMatch ? '✓ تم اختيار الحساب المطابق لعملة الموظف' : '⚠ لا يوجد حساب بعملة الموظف — اختر يدوياً';
+
+        // إظهار سعر الصرف إذا العملات مختلفة
+        const rateWrap2=document.getElementById('mExchangeRateWrap');
+        if(r.needs_rate_input){
+            rateWrap2.style.display='';
+            document.getElementById('mExchangeRateLabel').textContent=
+                ' (1 '+r.currency+' = ? '+BRANCH_BASE_CURR+')';
+            document.getElementById('mExchangeRateHint').textContent=
+                'كم '+BRANCH_BASE_CURR+' يساوي 1 '+r.currency+' — مثال SYP→USD: 1÷13000 = 0.000077';
+        } else {
+            rateWrap2.style.display='none';
+            document.getElementById('mExchangeRate').value='1';
+        }
 
         // عرض الملخص
         const sym = r.currency;
@@ -738,9 +868,11 @@ function confirmPay() {
         week_number:   p.week_num,
         period_from:   p.from,
         period_to:     p.to,
-        method:        document.getElementById('mPayMethod').value,
-        notes:         document.getElementById('mPayNotes').value,
-        calc_data:     JSON.stringify(mCalcData.r || {}),
+        method:          document.getElementById('mPayMethod').value,
+        cash_account_id: document.getElementById('mCashAccount').value,
+        exchange_rate:   document.getElementById('mExchangeRate').value || '1',
+        notes:           document.getElementById('mPayNotes').value,
+        calc_data:       JSON.stringify(mCalcData.r || {}),
     }).then(d => {
         document.getElementById('mPayTxt').style.opacity = '1';
         document.getElementById('mPaySpin').style.display = 'none';
