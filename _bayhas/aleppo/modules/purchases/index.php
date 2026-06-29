@@ -3,6 +3,8 @@
  * purchases/index.php — فواتير شراء المنتجات النهائية
  * المسار: /bayhas/aleppo/modules/purchases/index.php
  */
+ini_set('display_errors',1);
+error_reporting(E_ALL);
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
 require_once __DIR__ . '/../../../config/auth.php';
@@ -21,6 +23,33 @@ $TWI   = "warehouse_items_{$TS}";
 $TV    = "product_variants_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
+// بيانات الفرع للطباعة
+$branchInfo = $pdo->prepare("SELECT * FROM branches WHERE table_suffix=? LIMIT 1");
+$branchInfo->execute([$TS]);
+$branchInfo = $branchInfo->fetch(PDO::FETCH_ASSOC) ?: [];
+
+// شركات الشحن
+try {
+    $shippingCarriers = $pdo->query("SELECT id,name,contact_person,phone FROM shipping_carriers WHERE status='active' ORDER BY name")->fetchAll();
+} catch(Exception $e){ $shippingCarriers=[]; }
+
+// بيانات المودال
+try { $warehouses = $pdo->query("SELECT id,name FROM `{$TW}` WHERE status='active' ORDER BY name")->fetchAll(); }
+catch(Exception $e){ $warehouses=[]; }
+
+try { $currencies = $pdo->query("SELECT id,code,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC")->fetchAll(); }
+catch(Exception $e){ $currencies=[]; }
+
+$TIAS = "invoice_account_settings_{$TS}";
+$TAC  = "account_charts_{$TS}";
+try {
+    $cashAccounts=$pdo->query("SELECT ac.id,ac.code,ac.name,c.code AS cur_code,c.symbol AS cur_sym
+        FROM `{$TAC}` ac
+        LEFT JOIN currencies c ON c.id=ac.currency_id
+        WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
+        ORDER BY ac.code")->fetchAll();
+} catch(Exception $e){ $cashAccounts=[]; }
+
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -30,10 +59,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         if ($act === 'get_purchase') {
             $id = (int)$_POST['id'];
             $st = $pdo->prepare("SELECT p.*, s.name AS supplier_name,
-                c.symbol AS currency_symbol
+                s.phone AS supplier_phone,
+                s.email AS supplier_email,
+                s.address AS supplier_address,
+                s.tax_number AS supplier_tax,
+                c.symbol AS currency_symbol,
+                w.name AS warehouse_name,
+                pi_w.warehouse_id AS warehouse_id
                 FROM `{$TP}` p
                 LEFT JOIN `{$TSP}` s ON s.id=p.supplier_id
                 LEFT JOIN currencies c ON c.code=p.currency
+                LEFT JOIN (SELECT purchase_id, warehouse_id FROM `{$TPI}` GROUP BY purchase_id) pi_w ON pi_w.purchase_id=p.id
+                LEFT JOIN `{$TW}` w ON w.id=pi_w.warehouse_id
                 WHERE p.id=?");
             $st->execute([$id]);
             $pur = $st->fetch();
@@ -407,31 +444,264 @@ table.mtbl tr:hover td{background:#f8faff}
 </div>
 
 <!-- مودال تأكيد الاستلام -->
-<div class="modal fade" id="confirmModal" tabindex="-1">
-  <div class="modal-dialog">
+<div class="modal fade" id="confirmModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-xl">
     <div class="modal-content" style="border-radius:16px;border:none">
       <div class="modal-header py-3 px-4 border-0"
            style="background:linear-gradient(135deg,#065f46,#16a34a);border-radius:16px 16px 0 0">
-        <h6 class="modal-title text-white fw-700 mb-0">
-            <i class="bi bi-check-circle me-2"></i>تأكيد استلام الفاتورة
-        </h6>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <div>
+          <h6 class="modal-title text-white fw-700 mb-0">
+              <i class="bi bi-check-circle me-2"></i>تأكيد استلام الفاتورة
+          </h6>
+          <div id="cInvNo" style="font-size:.78rem;color:rgba(255,255,255,.8);margin-top:2px"></div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <button class="btn btn-sm" style="background:rgba(255,255,255,.2);color:#fff;border-radius:8px"
+                    onclick="printPurchaseInvoice()" title="طباعة الفاتورة">
+                <i class="bi bi-printer me-1"></i>طباعة
+            </button>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
       </div>
       <div class="modal-body px-4 py-3">
         <input type="hidden" id="cId">
-        <div class="p-3" style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">
-          <div class="fw-600" style="color:#065f46" id="cInvNo"></div>
-          <div style="font-size:.8rem;color:#64748b;margin-top:6px">
-            <i class="bi bi-info-circle me-1"></i>سيتم تحديث المخزون فور التأكيد
+        <input type="hidden" id="cCurCode">
+        <input type="hidden" id="cInvTotal">
+        <input type="hidden" id="cCurSym">
+
+        <div class="row g-3">
+
+          <!-- ── بنود الفاتورة ── -->
+          <div class="col-12">
+            <div style="background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;overflow:hidden">
+              <div style="padding:8px 14px;background:#f1f5f9;font-size:.8rem;font-weight:700;color:#1e293b;border-bottom:1px solid #e2e8f0">
+                <i class="bi bi-list-ul me-1 text-primary"></i>بنود الفاتورة
+              </div>
+              <div class="table-responsive">
+                <table style="width:100%;font-size:.78rem;border-collapse:collapse" id="cItemsTable">
+                  <thead>
+                    <tr style="background:#f8fafc">
+                      <th style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">#</th>
+                      <th style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">بيان القطعة</th>
+                      <th style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">الكمية</th>
+                      <th style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">سعر الوحدة</th>
+                      <th style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">الإجمالي</th>
+                    </tr>
+                  </thead>
+                  <tbody id="cItemsBody"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div style="font-size:.8rem;color:#64748b;margin-top:3px">
-            <i class="bi bi-clock me-1"></i>حالة الدفع ستبقى <b>معلقة</b> حتى تسجيل الدفعة من قسم المحاسبة
+
+          <!-- ── ملخص المبالغ ── -->
+          <div class="col-md-6">
+            <div style="background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;padding:10px 14px;font-size:.8rem">
+              <div class="d-flex justify-content-between mb-1">
+                <span class="text-muted">المبلغ الصافي للمنتجات</span>
+                <span class="fw-600" id="cSumProducts">—</span>
+              </div>
+              <div class="d-flex justify-content-between mb-1">
+                <span class="text-muted">نسبة الخصم</span>
+                <span class="fw-600 text-danger" id="cSumDiscount">0%</span>
+              </div>
+              <div class="d-flex justify-content-between mb-1">
+                <span class="text-muted">قيمة الخصم</span>
+                <span class="fw-600 text-danger" id="cSumDiscountAmt">0.00</span>
+              </div>
+              <div class="d-flex justify-content-between mb-1">
+                <span class="text-muted">الضريبة</span>
+                <span class="fw-600" id="cSumTax">0.00</span>
+              </div>
+              <hr style="margin:5px 0;border-color:#e2e8f0">
+              <div class="d-flex justify-content-between fw-700">
+                <span>المبلغ الإجمالي النهائي</span>
+                <span style="color:#1e3a8a" id="cSumFinal">—</span>
+              </div>
+            </div>
           </div>
+
+          <!-- ── تكاليف الشحن ── -->
+          <div class="col-md-6">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-truck me-1 text-warning"></i>تكاليف الشحن والنقلية
+            </label>
+            <div class="row g-2">
+              <div class="col-12">
+                <div class="btn-group w-100 mb-2" role="group">
+                  <input type="radio" class="btn-check" name="shippingOn" id="shipOnUs" value="us" checked onchange="updateTotal()">
+                  <label class="btn btn-sm btn-outline-danger fw-600" for="shipOnUs" style="border-radius:8px 0 0 8px">
+                    <i class="bi bi-arrow-down-circle me-1"></i>علينا (تُضاف للتكلفة)
+                  </label>
+                  <input type="radio" class="btn-check" name="shippingOn" id="shipOnThem" value="them" onchange="updateTotal()">
+                  <label class="btn btn-sm btn-outline-success fw-600" for="shipOnThem" style="border-radius:0 8px 8px 0">
+                    <i class="bi bi-arrow-up-circle me-1"></i>على البائع (مجانية)
+                  </label>
+                </div>
+              </div>
+              <div class="col-7" id="shippingAmtWrap">
+                <div class="input-group input-group-sm">
+                  <input type="number" id="cShipping" class="form-control" placeholder="0.00"
+                         min="0" step="0.01" oninput="updateTotal()">
+                  <select id="cShippingCur" class="form-select" style="max-width:85px" onchange="updateTotal()">
+                    <?php foreach($currencies as $cur): ?>
+                    <option value="<?=$cur['code']?>"><?=$cur['code']?></option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+              </div>
+              <div class="col-5" id="shippingAmtWrap2">
+                <div class="input-group input-group-sm">
+                    <select id="cShippingCarrier" class="form-select form-select-sm"
+                            onchange="onCarrierChange(this)">
+                        <option value="">— شركة الشحن —</option>
+                        <?php foreach($shippingCarriers as $sc): ?>
+                        <option value="<?=$sc['id']?>"
+                                data-name="<?=htmlspecialchars($sc['name'],ENT_QUOTES)?>"
+                                data-phone="<?=htmlspecialchars($sc['phone']??'',ENT_QUOTES)?>"
+                                data-payable-id="<?=$sc['payable_account_id']??0?>">
+                            <?=htmlspecialchars($sc['name'])?>
+                            <?php if($sc['contact_person']): ?>(<?=htmlspecialchars($sc['contact_person'])?>)<?php endif; ?>
+                        </option>
+                        <?php endforeach; ?>
+                        <?php if(empty($shippingCarriers)): ?>
+                        <option value="" disabled>لا توجد شركات — أضف من الإعدادات</option>
+                        <?php endif; ?>
+                    </select>
+                    <a href="/bayhas/aleppo/modules/accounting/shipping_carriers.php" target="_blank"
+                       class="btn btn-sm btn-outline-warning" style="padding:3px 7px" title="إدارة شركات الشحن">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                </div>
+                <input type="hidden" id="cShippingDesc">
+                <input type="hidden" id="cShippingPayableId">
+              </div>
+              <!-- طريقة دفع الشحن -->
+              <div class="col-12" id="shippingPayWrap">
+                <div class="btn-group w-100" role="group">
+                  <input type="radio" class="btn-check" name="shippingPay" id="shipPayCash" value="cash" checked onchange="onShipPayChange()">
+                  <label class="btn btn-sm btn-outline-success fw-600" for="shipPayCash" style="border-radius:8px 0 0 8px;font-size:.75rem">
+                    <i class="bi bi-cash me-1"></i>دفع نقدي (يُخصم من الصندوق)
+                  </label>
+                  <input type="radio" class="btn-check" name="shippingPay" id="shipPayCredit" value="credit" onchange="onShipPayChange()">
+                  <label class="btn btn-sm btn-outline-warning fw-600" for="shipPayCredit" style="border-radius:0 8px 8px 0;font-size:.75rem">
+                    <i class="bi bi-clock-history me-1"></i>آجل (ذمة شركة الشحن)
+                  </label>
+                </div>
+                <!-- حساب الصندوق عند الدفع النقدي -->
+                <div id="shipCashAccWrap" class="mt-1">
+                  <select id="cShipCashAccount" class="form-select form-select-sm">
+                    <option value="">— حساب الصندوق —</option>
+                    <?php foreach($cashAccounts as $ca): ?>
+                    <option value="<?=$ca['id']?>"
+                            data-cur="<?=htmlspecialchars($ca['cur_code']??'')?>">
+                        <?=htmlspecialchars($ca['code'].' — '.$ca['name'])?> (<?=htmlspecialchars($ca['cur_sym']??'')?>)
+                    </option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+                <!-- تنبيه الذمة -->
+                <div id="shipCreditNote" class="mt-1" style="display:none;font-size:.72rem;color:#d97706;background:#fffbeb;border-radius:6px;padding:4px 8px">
+                  <i class="bi bi-info-circle me-1"></i>
+                  سيُسجَّل المبلغ كذمة لشركة الشحن في حسابها بشجرة الحسابات
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── تاريخ الاستلام + مستودع ── -->
+          <div class="col-md-4">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-calendar-check me-1 text-success"></i>تاريخ الاستلام
+            </label>
+            <input type="date" id="cReceiveDate" class="form-control form-control-sm"
+                   value="<?= date('Y-m-d') ?>">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-building me-1 text-primary"></i>مستودع الاستلام
+            </label>
+            <div id="cWarehouseDisplay" style="background:#f1f5f9;border-radius:8px;padding:6px 10px;font-size:.82rem;color:#1e293b;font-weight:600">
+                <i class="bi bi-building me-1 text-primary"></i><span id="cWarehouseName">جارٍ التحميل...</span>
+            </div>
+            <input type="hidden" id="cWarehouse">
+          </div>
+
+          <!-- ── دفع جزئي ── -->
+          <div class="col-md-4">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-cash me-1 text-success"></i>دفع جزئي عند الاستلام
+                <span style="font-size:.68rem;color:#94a3b8">(اختياري)</span>
+            </label>
+            <div class="input-group input-group-sm">
+              <input type="number" id="cPaidAmt" class="form-control fw-600" placeholder="0.00"
+                     min="0" step="0.01" oninput="updateTotal()">
+              <select id="cPaidCur" class="form-select" style="max-width:80px">
+                <?php foreach($currencies as $cur): ?>
+                <option value="<?=$cur['code']?>"><?=$cur['code']?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+          </div>
+
+          <!-- حساب الدفع -->
+          <div class="col-md-6">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-safe me-1"></i>حساب الدفع (صندوق/بنك)
+            </label>
+            <select id="cCashAccount" class="form-select form-select-sm">
+                <option value="">— اختر حساب الدفع —</option>
+                <?php foreach($cashAccounts as $ca): ?>
+                <option value="<?=$ca['id']?>"
+                        data-cur="<?=htmlspecialchars($ca['cur_code']??'')?>">
+                    <?=htmlspecialchars($ca['code'].' — '.$ca['name'])?> (<?=htmlspecialchars($ca['cur_sym']??'')?>)
+                </option>
+                <?php endforeach; ?>
+            </select>
+          </div>
+
+          <!-- صورة الفاتورة -->
+          <div class="col-md-6">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-image me-1 text-info"></i>صورة فاتورة المورد
+            </label>
+            <input type="file" id="cInvoiceImg" class="form-control form-control-sm"
+                   accept="image/*,application/pdf" onchange="previewImg(this)">
+            <div id="cImgPreview" style="display:none;margin-top:6px">
+                <img id="cImgThumb" style="max-height:60px;border-radius:6px;border:1px solid #e2e8f0">
+                <button type="button" class="btn btn-sm btn-light ms-1" onclick="clearImg()"
+                        style="border-radius:5px;font-size:.7rem">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+          </div>
+
+          <!-- ملاحظات -->
+          <div class="col-12">
+            <label class="form-label small fw-600 text-secondary mb-1">
+                <i class="bi bi-chat-left-text me-1"></i>ملاحظات الاستلام
+            </label>
+            <textarea id="cNotes" class="form-control form-control-sm" rows="2"
+                      placeholder="حالة البضاعة، ملاحظات خاصة..."></textarea>
+          </div>
+
+          <!-- ملخص مالي نهائي -->
+          <div class="col-12">
+            <div style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;padding:10px 14px;font-size:.82rem">
+              <div class="fw-700 mb-2" style="color:#065f46;font-size:.8rem">
+                <i class="bi bi-calculator me-1"></i>ملخص المبالغ حسب العملة
+              </div>
+              <div id="cTotSummary">
+                <!-- يتم بناؤه ديناميكياً في updateTotal() -->
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
-      <div class="modal-footer border-0 px-4 pb-4">
+      <div class="modal-footer border-0 px-4 pb-4 gap-2">
         <button class="btn btn-sm btn-light" style="border-radius:8px" data-bs-dismiss="modal">إلغاء</button>
-        <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;min-width:130px"
+        <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;min-width:140px"
                 onclick="doConfirm()" id="btnConfirm">
           <span id="confirmTxt"><i class="bi bi-check-circle me-1"></i>تأكيد الاستلام</span>
           <span id="confirmSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
@@ -440,6 +710,8 @@ table.mtbl tr:hover td{background:#f8faff}
     </div>
   </div>
 </div>
+
+
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
@@ -595,35 +867,385 @@ function viewInvoice(id){
         </div>`:''}`;
     });
 }
-let _cId=0;
+let _cId=0,_cTotal=0,_cCurSym='$',_cDiscount=0,_cTax=0,_cProducts=0,_cPurchaseData=null;
+function float(v){ return parseFloat(v)||0; }
+
 function openConfirmModal(id,no,total,sym){
-    _cId=id;
+    _cId=id;_cTotal=parseFloat(total)||0;_cCurSym=sym||'$';
+    document.getElementById('cId').value=id;
     document.getElementById('cInvNo').textContent='فاتورة: '+no;
-    document.getElementById('cTotal').value=parseFloat(total).toFixed(2)+' '+sym;
-    document.getElementById('cPaid').value='0';
+    document.getElementById('cCurSym').value=sym;
+    document.getElementById('cInvTotal').value=total;
+    document.getElementById('cReceiveDate').value='<?= date('Y-m-d') ?>';
+    document.getElementById('cShipping').value='';
+    document.getElementById('cShippingCarrier').value='';
+    document.getElementById('cShippingDesc').value='';
+    document.getElementById('cShippingPayableId').value='';
+    document.getElementById('shippingPayWrap').style.display='none';
+    document.getElementById('shipCreditNote').style.display='none';
+    document.getElementById('cShipCashAccount').value='';
+    document.getElementById('cPaidAmt').value='';
+    document.getElementById('cNotes').value='';
+    document.getElementById('cWarehouse').value='';
+    document.getElementById('cCashAccount').value='';
+    document.getElementById('cItemsBody').innerHTML='<tr><td colspan="5" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
+    clearImg();
     confirmModal.show();
+    // جلب بنود الفاتورة
+    post({_action:'get_purchase',id}).then(d=>{
+        if(!d.ok){ document.getElementById('cItemsBody').innerHTML='<tr><td colspan="5" class="text-center text-danger p-2">خطأ: '+d.msg+'</td></tr>'; return; }
+        const p=d.data;
+        _cPurchaseData=p; // حفظ للطباعة
+        _cProducts=parseFloat(p.total_amount)||0;
+        _cDiscount=parseFloat(p.discount_amount)||0;
+        _cTax=parseFloat(p.tax_amount)||0;
+        const sym=p.currency_symbol||'$';
+        const cur=p.currency||'USD';
+        const fmt=n=>new Intl.NumberFormat('en').format(parseFloat(n||0).toFixed(2));
+
+        // ── المستودع من الفاتورة ──
+        document.getElementById('cWarehouseName').textContent=p.warehouse_name||'المستودع الرئيسي';
+        document.getElementById('cWarehouse').value=p.warehouse_id||'';
+        // بنود — مجمعة حسب المنتج
+        const groups={};
+        (p.items||[]).forEach(it=>{
+            const key=it.product_name+(it.color?' - '+it.color:'');
+            if(!groups[key]) groups[key]={name:key,qty:0,unit:parseFloat(it.unit_price),total:0};
+            groups[key].qty+=parseFloat(it.quantity);
+            groups[key].total+=parseFloat(it.total_price);
+        });
+        let rows='',i=1;
+        Object.values(groups).forEach(g=>{
+            rows+=`<tr style="border-bottom:1px solid #f1f5f9">
+                <td style="padding:5px 10px;color:#94a3b8">${i++}</td>
+                <td style="padding:5px 10px;font-weight:600">${g.name}</td>
+                <td style="padding:5px 10px;text-align:center">${g.qty}</td>
+                <td style="padding:5px 10px;text-align:left;direction:ltr">${sym} ${fmt(g.unit)}</td>
+                <td style="padding:5px 10px;text-align:left;direction:ltr;font-weight:600">${sym} ${fmt(g.total)}</td>
+            </tr>`;
+        });
+        document.getElementById('cItemsBody').innerHTML=rows||'<tr><td colspan="5" class="text-center text-muted p-2">لا توجد بنود</td></tr>';
+        // ملخص المبالغ
+        document.getElementById('cSumProducts').textContent=sym+' '+fmt(p.total_amount);
+        document.getElementById('cSumDiscount').textContent=(parseFloat(p.discount_amount||0)/parseFloat(p.total_amount||1)*100).toFixed(2)+'%';
+        document.getElementById('cSumDiscountAmt').textContent='- '+sym+' '+fmt(p.discount_amount);
+        document.getElementById('cSumTax').textContent=sym+' '+fmt(p.tax_amount);
+        document.getElementById('cSumFinal').textContent=sym+' '+fmt(p.final_amount);
+        _cCurSym=sym; _cTotal=parseFloat(p.final_amount)||0;
+        updateTotal();
+    });
 }
+
+function onCarrierChange(sel){
+    const opt=sel.options[sel.selectedIndex];
+    document.getElementById('cShippingDesc').value=opt.value?opt.dataset.name:'';
+    document.getElementById('cShippingPayableId').value=opt.value?(opt.dataset.payableId||''):'';
+    // إظهار قسم طريقة الدفع فقط إذا اختار شركة + مبلغ
+    const hasShip=parseFloat(document.getElementById('cShipping').value)||0;
+    document.getElementById('shippingPayWrap').style.display=
+        (opt.value&&hasShip>0&&document.querySelector('input[name="shippingOn"]:checked')?.value==='us')?'':'none';
+}
+
+function onShipPayChange(){
+    const val=document.querySelector('input[name="shippingPay"]:checked')?.value||'cash';
+    document.getElementById('shipCashAccWrap').style.display=val==='cash'?'':'none';
+    document.getElementById('shipCreditNote').style.display=val==='credit'?'':'none';
+}
+
+function updateTotal(){
+    const shipOn=document.querySelector('input[name="shippingOn"]:checked')?.value||'us';
+    const ship   =parseFloat(document.getElementById('cShipping').value)||0;
+    const shipCur=document.getElementById('cShippingCur').value||'USD';
+    const paid   =parseFloat(document.getElementById('cPaidAmt').value)||0;
+    const paidCur=document.getElementById('cPaidCur').value||'USD';
+    const invCur =_cPurchaseData?.currency||'USD';
+    const invSym =_cPurchaseData?.currency_symbol||'$';
+    const fmt    =n=>new Intl.NumberFormat('en').format(Math.abs(parseFloat(n||0)).toFixed(2));
+
+    // تجميع المبالغ حسب العملة
+    const totals={}; // {cur: {sym,inv,ship,paid}}
+
+    // إجمالي الفاتورة
+    if(!totals[invCur]) totals[invCur]={sym:invSym,inv:0,ship:0,paid:0};
+    totals[invCur].inv=_cTotal;
+
+    // الشحن (إذا علينا)
+    if(shipOn==='us' && ship>0){
+        // جلب رمز عملة الشحن
+        const shipSymOpt=[...document.getElementById('cShippingCur').options].find(o=>o.value===shipCur);
+        const shipSym=shipCur; // نستخدم الكود كرمز مبدئياً
+        if(!totals[shipCur]) totals[shipCur]={sym:shipSym,inv:0,ship:0,paid:0};
+        totals[shipCur].ship=ship;
+    }
+
+    // المدفوع
+    if(paid>0){
+        const paidSymOpt=[...document.getElementById('cPaidCur').options].find(o=>o.value===paidCur);
+        if(!totals[paidCur]) totals[paidCur]={sym:paidCur,inv:0,ship:0,paid:0};
+        totals[paidCur].paid=paid;
+    }
+
+    // بناء HTML الملخص
+    let html='';
+    Object.entries(totals).forEach(([cur,t])=>{
+        const invTotal=t.inv+t.ship;
+        const balance=invTotal-t.paid;
+        html+=`<div style="border:1px solid #d1fae5;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fff">
+            <div style="font-size:.72rem;font-weight:700;color:#065f46;margin-bottom:4px">
+                <i class="bi bi-currency-exchange me-1"></i>عملة: ${cur}
+            </div>`;
+        if(t.inv) html+=`<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
+            <span class="text-muted">إجمالي الفاتورة</span>
+            <span class="fw-600">${t.sym} ${fmt(t.inv)}</span></div>`;
+        if(t.ship&&shipOn==='us') html+=`<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
+            <span class="text-muted">+ تكاليف الشحن</span>
+            <span class="fw-600 text-warning">${t.sym} ${fmt(t.ship)}</span></div>`;
+        if(t.paid) html+=`<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
+            <span class="text-muted">— المدفوع الآن</span>
+            <span class="fw-600 text-success">${t.sym} ${fmt(t.paid)}</span></div>`;
+        if(t.inv||t.ship) html+=`<div class="d-flex justify-content-between fw-700 border-top pt-1 mt-1" style="font-size:.82rem">
+            <span>المتبقي</span>
+            <span style="color:${balance>0?'#dc2626':'#16a34a'}">${t.sym} ${fmt(balance)}</span></div>`;
+        html+='</div>';
+    });
+    document.getElementById('cTotSummary').innerHTML=html||
+        '<div class="text-muted" style="font-size:.79rem">أدخل المبالغ لعرض الملخص</div>';
+
+    // إظهار/إخفاء حقل مبلغ الشحن
+    document.getElementById('shippingAmtWrap').style.opacity=shipOn==='us'?'1':'0.4';
+    // إظهار طريقة دفع الشحن فقط إذا كان علينا + مبلغ + شركة
+    const carrierId=document.getElementById('cShippingCarrier').value;
+    const shipPayWrap=document.getElementById('shippingPayWrap');
+    if(shipOn==='us' && ship>0 && carrierId){
+        shipPayWrap.style.display='';
+        onShipPayChange();
+    } else {
+        shipPayWrap.style.display='none';
+    }
+}
+
+function previewImg(inp){
+    if(!inp.files||!inp.files[0])return;
+    const f=inp.files[0];
+    if(f.type.startsWith('image/')){
+        const rd=new FileReader();
+        rd.onload=e=>{document.getElementById('cImgThumb').src=e.target.result;document.getElementById('cImgPreview').style.display='';};
+        rd.readAsDataURL(f);
+    }else{document.getElementById('cImgPreview').style.display='';}
+}
+function clearImg(){
+    document.getElementById('cInvoiceImg').value='';
+    document.getElementById('cImgPreview').style.display='none';
+    document.getElementById('cImgThumb').src='';
+}
+
+// ── طباعة الفاتورة ──
+const BRANCH=<?= json_encode([
+    'name'      => $branchInfo['name']       ?? $branchName,
+    'phone'     => $branchInfo['phone']      ?? '',
+    'address'   => $branchInfo['address']    ?? '',
+    'city'      => $branchInfo['city']       ?? '',
+    'email'     => $branchInfo['email']      ?? '',
+    'tax_number'=> $branchInfo['tax_number'] ?? '',
+]) ?>;
+
+function printPurchaseInvoice(){
+    const p=_cPurchaseData;
+    if(!p){ toast('يرجى فتح مودال التأكيد أولاً','danger'); return; }
+    const sym=p.currency_symbol||'$';
+    const fmt=n=>sym+' '+new Intl.NumberFormat('en').format(parseFloat(n||0).toFixed(2));
+        // تجميع البنود
+        const groups={};
+        (p.items||[]).forEach(it=>{
+            const key=it.model_number+'|'+it.product_name+'|'+it.color;
+            if(!groups[key]) groups[key]={
+                name:it.product_name,model:it.model_number||'',
+                color:it.color||'',size:it.size||'',
+                qty:0,unit:parseFloat(it.unit_price),total:0
+            };
+            groups[key].qty+=parseFloat(it.quantity);
+            groups[key].total+=parseFloat(it.total_price);
+        });
+        let rows='',i=1;
+        Object.values(groups).forEach(g=>{
+            rows+=`<tr>
+                <td>${i++}</td>
+                <td>${g.name}</td>
+                <td>${g.size}</td>
+                <td style="color:#2563eb">${g.color}</td>
+                <td>${g.model}</td>
+                <td>${g.qty}</td>
+                <td>${fmt(g.unit)}</td>
+                <td>${fmt(g.total)}</td>
+            </tr>`;
+        });
+        const LOGO_URL='/bayhas/assets/images/bayhas_logo.png';
+        const html=`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<title>فاتورة شراء ${p.purchase_number}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Arial',sans-serif;font-size:11px;color:#111;padding:20px;max-width:800px;margin:0 auto}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #1e3a8a}
+.header-logo{width:100px;height:auto;object-fit:contain}
+.header-center{text-align:center;flex:1;padding:0 16px}
+.header-title{font-size:22px;font-weight:800;color:#1e3a8a;margin-bottom:4px}
+.header-sub{font-size:10px;color:#64748b}
+.header-branch{text-align:right;font-size:10px;min-width:160px}
+.header-branch .br-name{font-size:14px;font-weight:800;color:#1e3a8a}
+.inv-meta{display:flex;gap:8px;margin-bottom:12px}
+.inv-meta-box{flex:1;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:#f8fafc}
+.inv-meta-box h4{font-size:9px;font-weight:700;color:#1e3a8a;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #e2e8f0}
+.meta-row{display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px}
+.meta-row span:first-child{color:#64748b}
+.meta-row span:last-child{font-weight:600}
+table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:10px}
+thead th{background:#1e3a8a;color:#fff;padding:6px 8px;text-align:right;font-weight:600}
+tbody td{padding:5px 8px;border-bottom:1px solid #f1f5f9}
+tbody tr:nth-child(even) td{background:#f8fafc}
+tfoot td{background:#f1f5f9;font-weight:700;padding:5px 8px}
+.totals-wrap{display:flex;justify-content:flex-end;margin-top:8px}
+.totals{width:55%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
+.tot-row{display:flex;justify-content:space-between;padding:5px 12px;font-size:10px;border-bottom:1px solid #f1f5f9}
+.tot-row.final{background:#1e3a8a;color:#fff;font-weight:700;font-size:12px;border:none}
+.footer{text-align:center;margin-top:16px;font-size:9px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:8px}
+@media print{@page{margin:10mm}button{display:none}}
+</style>
+</head>
+<body>
+
+<!-- الرأسية -->
+<div class="header">
+  <img src="${LOGO_URL}" class="header-logo" alt="Logo"
+       onerror="this.style.display='none'">
+  <div class="header-center">
+    <div class="header-title">فاتورة شراء</div>
+    <div class="header-sub">Purchase Invoice</div>
+  </div>
+  <div class="header-branch">
+    <div class="br-name">${BRANCH.name}</div>
+    ${BRANCH.city?`<div>${BRANCH.city}${BRANCH.address?' - '+BRANCH.address:''}</div>`:''}
+    ${BRANCH.phone?`<div>هاتف: ${BRANCH.phone}</div>`:''}
+    ${BRANCH.email?`<div>${BRANCH.email}</div>`:''}
+    ${BRANCH.tax_number?`<div>الرقم الضريبي: ${BRANCH.tax_number}</div>`:''}
+  </div>
+</div>
+
+<!-- معلومات الفاتورة والمورد -->
+<div class="inv-meta">
+  <!-- معلومات الفاتورة -->
+  <div class="inv-meta-box">
+    <h4>معلومات الفاتورة</h4>
+    <div class="meta-row"><span>رقم الفاتورة:</span><span>${p.purchase_number}</span></div>
+    <div class="meta-row"><span>تاريخ الفاتورة:</span><span>${p.purchase_date||'—'}</span></div>
+    <div class="meta-row"><span>تاريخ الاستحقاق:</span><span>${p.due_date||'—'}</span></div>
+    <div class="meta-row"><span>العملة:</span><span>${p.currency||'USD'}</span></div>
+    <div class="meta-row"><span>طريقة الدفع:</span><span>${p.payment_method||'—'}</span></div>
+  </div>
+  <!-- معلومات المورد -->
+  <div class="inv-meta-box">
+    <h4>معلومات المورد</h4>
+    <div class="meta-row"><span>اسم المورد:</span><span>${p.supplier_name||'—'}</span></div>
+    ${p.supplier_phone?`<div class="meta-row"><span>هاتف:</span><span dir="ltr">${p.supplier_phone}</span></div>`:''}
+    ${p.supplier_email?`<div class="meta-row"><span>بريد:</span><span dir="ltr">${p.supplier_email}</span></div>`:''}
+    ${p.supplier_address?`<div class="meta-row"><span>العنوان:</span><span>${p.supplier_address}</span></div>`:''}
+    ${p.supplier_tax?`<div class="meta-row"><span>الرقم الضريبي:</span><span>${p.supplier_tax}</span></div>`:''}
+  </div>
+</div>
+
+<!-- تفاصيل المنتجات -->
+<table>
+  <thead><tr>
+    <th>#</th><th>بيان القطعة</th><th>القياس</th>
+    <th>اللون</th><th>رقم الموديل</th>
+    <th>الكمية</th><th>سعر الوحدة</th><th>المجموع</th>
+  </tr></thead>
+  <tbody>${rows}</tbody>
+  <tfoot><tr>
+    <td colspan="5" style="text-align:center">إجمالي الكميات</td>
+    <td>${Object.values(groups).reduce((s,g)=>s+g.qty,0)}</td>
+    <td></td>
+    <td>${fmt(p.final_amount)}</td>
+  </tr></tfoot>
+</table>
+
+<!-- المبالغ -->
+<div class="totals-wrap">
+  <div class="totals">
+    <div class="tot-row"><span>المبلغ الصافي للمنتجات:</span><span>${fmt(p.total_amount)}</span></div>
+    <div class="tot-row"><span>نسبة الخصم:</span><span>${((parseFloat(p.discount_amount||0)/parseFloat(p.total_amount||1))*100).toFixed(5)}%</span></div>
+    <div class="tot-row"><span>قيمة الخصم:</span><span>- ${fmt(p.discount_amount)}</span></div>
+    <div class="tot-row"><span>الضريبة:</span><span>${fmt(p.tax_amount)}</span></div>
+    <div class="tot-row final"><span>المبلغ الإجمالي النهائي:</span><span>${fmt(p.final_amount)}</span></div>
+  </div>
+</div>
+
+${p.notes?`<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:10px"><b>ملاحظات:</b> ${p.notes}</div>`:''}
+
+<div class="footer">نظام فاتورايز المحاسبي — ${BRANCH.name}</div>
+<script>window.onload=()=>window.print()<\/script>
+</body></html>`;
+        const w=window.open('','_blank','width=900,height=700');
+        w.document.write(html);
+        w.document.close();
+}
+
 function doConfirm(){
+    const paid=parseFloat(document.getElementById('cPaidAmt').value)||0;
+    const cashAcc=document.getElementById('cCashAccount').value;
+    if(paid>0&&!cashAcc){toast('اختر حساب الدفع','danger');return;}
+    const shipOn=document.querySelector('input[name="shippingOn"]:checked')?.value||'us';
+    const ship=shipOn==='us'?(parseFloat(document.getElementById('cShipping').value)||0):0;
     document.getElementById('confirmTxt').style.opacity='0';
     document.getElementById('confirmSpin').style.display='inline-block';
-    post({_action:'confirm_purchase',id:_cId})
-    .then(d=>{
+    document.getElementById('btnConfirm').disabled=true;
+    const fd=new FormData();
+    fd.append('_action','confirm');
+    fd.append('invoice_id',_cId);
+    fd.append('receive_date',document.getElementById('cReceiveDate').value);
+    fd.append('warehouse_id',document.getElementById('cWarehouse').value);
+    fd.append('shipping_cost',ship);
+    fd.append('shipping_on',shipOn);
+    fd.append('shipping_currency',document.getElementById('cShippingCur').value);
+    fd.append('shipping_carrier_id',document.getElementById('cShippingCarrier').value);
+    fd.append('shipping_payable_id',document.getElementById('cShippingPayableId').value);
+    fd.append('shipping_pay_method',document.querySelector('input[name="shippingPay"]:checked')?.value||'cash');
+    fd.append('shipping_cash_account',document.getElementById('cShipCashAccount').value);
+    fd.append('shipping_desc',document.getElementById('cShippingDesc').value);
+    fd.append('paid_amount',paid);
+    fd.append('paid_currency',document.getElementById('cPaidCur').value);
+    fd.append('cash_account_id',cashAcc);
+    fd.append('notes',document.getElementById('cNotes').value);
+    const img=document.getElementById('cInvoiceImg');
+    if(img.files&&img.files[0])fd.append('invoice_image',img.files[0]);
+    fetch('../../api/confirm_purchase_invoice.php',{method:'POST',body:fd})
+    .then(r=>r.json()).then(d=>{
         document.getElementById('confirmTxt').style.opacity='1';
         document.getElementById('confirmSpin').style.display='none';
+        document.getElementById('btnConfirm').disabled=false;
         if(d.ok){toast('✅ '+d.msg);confirmModal.hide();setTimeout(()=>location.reload(),800);}
         else toast(d.msg,'danger');
+    }).catch(()=>{
+        document.getElementById('confirmTxt').style.opacity='1';
+        document.getElementById('confirmSpin').style.display='none';
+        document.getElementById('btnConfirm').disabled=false;
+        toast('خطأ في الاتصال','danger');
     });
 }
 
 function confirmInvoice(id,no){
-    _cId=id;
-    document.getElementById('cInvNo').textContent='فاتورة: '+no;
-    document.getElementById('cTotal').value='';
-    confirmModal.show();
+    openConfirmModal(id,no,0,'$');
 }
 function cancelInvoice(id,no){
-    if(!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المستلمة سيتم عكس مخزونها.`))return;
-    post({_action:'cancel_purchase',id}).then(d=>{
+    if(!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المستلمة سيتم عكس مخزونها وقيودها.`))return;
+    const fd=new FormData();
+    fd.append('_action','cancel');
+    fd.append('invoice_id',id);
+    fetch('../../api/confirm_purchase_invoice.php',{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{
         if(d.ok){toast(d.msg);setTimeout(()=>location.reload(),700);}
         else toast(d.msg,'danger');
     });

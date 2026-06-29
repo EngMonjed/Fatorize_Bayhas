@@ -82,17 +82,7 @@ $currentPage = $currentModule ?? '';
  */
 function injectInternalOrdersToMenu(array &$menu): void
 {
-    // الأقسام المخفية — مدمجة ضمن أقسامها الصح
-    $hiddenSections = ['crm', 'expenses'];
-
-    foreach ($menu as $key => &$section) {
-        // إخفاء crm (العملاء ضمن مبيعات، الموردون ضمن مشتريات)
-        // إخفاء expenses (المستهلكات ضمن المخزون)
-        if (in_array($section['key'], $hiddenSections)) {
-            unset($menu[$key]);
-            continue;
-        }
-
+    foreach ($menu as &$section) {
         if ($section['key'] === 'inventory') {
             $existing = array_column($section['children'], 'key');
             $toAdd = [];
@@ -102,31 +92,12 @@ function injectInternalOrdersToMenu(array &$menu): void
             if (!in_array('inventory.products', $existing)) {
                 $toAdd[] = ['key' => 'inventory.products', 'label' => 'المنتجات', 'icon' => 'bi-boxes'];
             }
-
             foreach (array_reverse($toAdd) as $item) {
                 array_unshift($section['children'], $item);
             }
-        }
-
-        if ($section['key'] === 'sales') {
-            $existing = array_column($section['children'], 'key');
-            if (!in_array('sales.customers', $existing)) {
-                array_unshift($section['children'],
-                    ['key' => 'sales.customers', 'label' => 'إدارة العملاء', 'icon' => 'bi-people']
-                );
-            }
-        }
-
-        if ($section['key'] === 'purchases') {
-            $existing = array_column($section['children'], 'key');
-            if (!in_array('purchases.suppliers', $existing)) {
-                array_unshift($section['children'],
-                    ['key' => 'purchases.suppliers', 'label' => 'إدارة الموردين', 'icon' => 'bi-truck']
-                );
-            }
+            return;
         }
     }
-    $menu = array_values($menu);
 }
 
 /** هل أي ابن في هذا القسم هو الصفحة الحالية؟ */
@@ -145,27 +116,25 @@ function moduleUrl(string $key): string
 {
     static $map = [
     // المبيعات
-    'sales.customers'    => 'sales/customers.php',
-    'sales.invoices'     => 'sales/invoices.php',
+    'sales.invoices' => 'sales/invoices.php',
     'sales.invoices.new' => 'sales/invoices.php?action=new',
-    'sales.returns'      => 'sales/returns.php',
+    'sales.returns' => 'sales/returns.php',
     // المشتريات
-    'purchases.suppliers'  => 'purchases/suppliers.php',
-    'purchases.invoices'   => 'purchases/index.php',
-    'purchases.returns'    => 'purchases/returns.php',
+    'purchases.invoices' => 'purchases/index.php',
+    'purchases.returns' => 'purchases/returns.php',
     // المخزون
-    'inventory.products'        => 'inventory/products.php',
-    'inventory.warehouse'       => 'inventory/warehouse.php',
-    'inventory.movements'       => 'inventory/movements.php',
-    'inventory.raw_materials'   => 'inventory/raw_materials.php',
-    'inventory.operations'      => 'inventory/operations.php',
+    'inventory.products' => 'inventory/products.php',
+    'inventory.warehouse' => 'inventory/warehouse.php',
+    'inventory.movements' => 'inventory/movements.php',
+    'inventory.raw_materials' => 'inventory/raw_materials.php',
+    'inventory.operations' => 'inventory/operations.php',
     'inventory.consumables' => 'inventory/consumables.php',
-    'inventory.internal_orders'  => 'inventory/internal_orders.php',
     // المالية
-    'finance.accounts' => 'accounting/accounts.php',
+    'finance.accounts'          => 'accounting/accounts.php',
+    'finance.shipping_carriers' => 'accounting/shipping_carriers.php',
     'finance.journal' => 'accounting/journal.php',
-    'finance.receipts' => 'accounting/receipts.php',
-    'finance.expenses' => 'accounting/expenses.php',
+    'finance.receipts' => 'receipts/index.php',
+    'finance.expenses' => 'expenses/index.php',
     'finance.reports' => 'reports/index.php',
     // العملاء والموردون
     'crm.customers' => 'customers/index.php',
@@ -173,11 +142,10 @@ function moduleUrl(string $key): string
     'crm.suppliers' => 'suppliers/index.php',
     'crm.suppliers.statement' => 'suppliers/statement.php',
     // الموارد البشرية
-    'hr.employees'  => 'hr/employees.php',
+    'hr.employees' => 'hr/employees.php',
     'hr.attendance' => 'hr/attendance.php',
-    'hr.payroll'    => 'hr/payroll.php',
-    'hr.reports'    => 'hr/reports.php',
-    'hr.holidays'   => 'hr/holidays.php',
+    'hr.payroll' => 'hr/payroll.php',
+    'hr.reports' => 'hr/reports.php',
     // المصاريف التشغيلية
     'expenses.consumables' => 'expenses/consumables.php',
     'expenses.utilities' => 'expenses/utilities.php',

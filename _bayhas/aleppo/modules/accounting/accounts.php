@@ -135,6 +135,7 @@ $TYPE_MAP = [
     'expense'  => ['label'=>'مصاريف',         'cls'=>'bg-warning-subtle text-warning','color'=>'#d97706'],
 ];
 $CURRENCY_MAP = ['USD'=>'$','SYP'=>'ل.س','TRY'=>'₺','EUR'=>'€'];
+$curs = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
 
 // دالة لرسم الشجرة
 function renderTree(array $nodes, array $TYPE_MAP, array $CURRENCY_MAP, int $depth=0): void {
@@ -246,6 +247,8 @@ table.mtbl td{padding:6px 12px;border-bottom:1px solid #f8fafc;vertical-align:mi
 .field-lbl{font-size:.76rem;font-weight:700;color:#475569;margin-bottom:4px;display:block}
 .req{color:#dc2626}
 .n{font-variant-numeric:tabular-nums}
+.spin{animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 /* إحصائيات */
 .acc-stat{background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:10px 14px}
 .acc-stat-val{font-size:1rem;font-weight:700;color:#1e293b}
@@ -380,14 +383,22 @@ table.mtbl td{padding:6px 12px;border-bottom:1px solid #f8fafc;vertical-align:mi
           </div>
           <div class="col-md-6">
             <label class="field-lbl">العملة</label>
-            <select id="mCurrencyId" class="form-select form-select-sm">
-                <?php
-                $curs=$pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
-                foreach($curs as $cur):
-                ?>
-                <option value="<?=$cur['id']?>"><?=htmlspecialchars($cur['code'].' — '.$cur['name'].' '.$cur['symbol'])?></option>
-                <?php endforeach; ?>
-            </select>
+            <div class="d-flex gap-1 align-items-center">
+                <select id="mCurrencyId" class="form-select form-select-sm">
+                    <?php foreach($curs as $cur): ?>
+                    <option value="<?=$cur['id']?>"><?=htmlspecialchars($cur['code'].' — '.$cur['name'].' '.$cur['symbol'])?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="button" class="btn btn-sm btn-light flex-shrink-0" style="border-radius:7px;padding:4px 7px"
+                        onclick="refreshCurrencies()" title="تحديث قائمة العملات من DB">
+                    <i class="bi bi-arrow-repeat" id="refreshCurIcon"></i>
+                </button>
+                <a href="/bayhas/aleppo/modules/accounting/currencies.php" target="_blank"
+                   class="btn btn-sm btn-light flex-shrink-0" style="border-radius:7px;padding:4px 7px"
+                   title="إدارة العملات">
+                    <i class="bi bi-box-arrow-up-right"></i>
+                </a>
+            </div>
           </div>
           <div class="col-12">
             <label class="field-lbl">وصف / ملاحظات</label>
@@ -466,7 +477,7 @@ function resetForm(){
     ['mId','mCode','mName','mDesc'].forEach(id=>document.getElementById(id).value='');
     document.getElementById('mParent').value='';
     document.getElementById('mType').value='asset';
-    document.getElementById('mCurrency').value='USD';
+    document.getElementById('mCurrencyId').value='1';
     document.getElementById('parentInfo').style.display='none';
 }
 function openAdd(){
@@ -534,6 +545,23 @@ function saveAccount(){
     });
 }
 
+// ── تحديث قائمة العملات ──
+function refreshCurrencies(){
+    const icon=document.getElementById('refreshCurIcon');
+    icon.classList.add('spin');
+    fetch('/bayhas/aleppo/api/get_currencies.php')
+    .then(r=>r.json()).then(d=>{
+        if(!d.ok){icon.classList.remove('spin');return;}
+        const sel=document.getElementById('mCurrencyId');
+        const cur=sel.value;
+        sel.innerHTML=d.currencies.map(c=>
+            `<option value="${c.id}">${c.code} — ${c.name} ${c.symbol}</option>`
+        ).join('');
+        sel.value=cur||'1';
+        icon.classList.remove('spin');
+        toast('تم تحديث قائمة العملات');
+    }).catch(()=>{icon.classList.remove('spin');});
+}
 function toggleActive(id){
     post({_action:'toggle_active',id}).then(d=>{
         if(d.ok){toast(d.active?'تم التفعيل':'تم التعطيل');setTimeout(()=>location.reload(),600);}

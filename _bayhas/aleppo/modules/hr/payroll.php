@@ -115,14 +115,31 @@ $branchRow=$branchCurrSt->fetch();
 $branchBaseCurr=$branchRow['base_curr_code']??'USD';
 $branchBaseCurrId=(int)($branchRow['base_curr_id']??1);
 
-// حسابات الصندوق والبنك — ربط بـ currency_id مباشرة
+// حسابات الصندوق والبنك — جلب كل حسابات الأصول المتداولة النقدية
+// يشمل أي حساب asset level 4 تحت حسابات النقدية والبنوك
 $cash_accounts = $pdo->query("SELECT ac.id, ac.code, ac.name,
     ac.currency_id, c.code AS currency_code, c.symbol AS currency_symbol, c.name AS currency_name
     FROM `account_charts_{$TS}` ac
     LEFT JOIN currencies c ON c.id=ac.currency_id
-    WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
-    AND (ac.code LIKE '111%' OR ac.code LIKE '112%')
+    WHERE ac.account_type='asset' AND ac.is_active=1
+    AND ac.currency_id IS NOT NULL AND ac.currency_id > 0
+    AND ac.level >= 3
+    AND ac.parent_id IN (
+        SELECT id FROM `account_charts_{$TS}`
+        WHERE code IN ('1.1.1','1.1.2','1100','1110','1120')
+        OR name LIKE '%صندوق%' OR name LIKE '%بنك%' OR name LIKE '%نقدية%'
+    )
     ORDER BY ac.code")->fetchAll();
+
+// fallback: إذا ما رجع شي نجلب كل asset level>=3
+if(empty($cash_accounts)){
+    $cash_accounts=$pdo->query("SELECT ac.id,ac.code,ac.name,ac.currency_id,
+        c.code AS currency_code,c.symbol AS currency_symbol,c.name AS currency_name
+        FROM `account_charts_{$TS}` ac
+        LEFT JOIN currencies c ON c.id=ac.currency_id
+        WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
+        ORDER BY ac.code")->fetchAll();
+}
 
 // إحصائيات
 $totals_by_cur = []; $paid_c = 0; $pending_c = 0;
@@ -499,14 +516,25 @@ $colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4'];
               <div id="mCashAccountHint" style="font-size:.72rem;color:#94a3b8;margin-top:3px"></div>
             </div>
             <div class="col-12" id="mExchangeRateWrap" style="display:none">
-              <label class="form-label small fw-600 text-secondary mb-1">
-                سعر الصرف
-                <span id="mExchangeRateLabel" style="color:#64748b;font-weight:400"></span>
+              <label class="form-label small fw-600 mb-1" style="color:#dc2626">
+                <i class="bi bi-exclamation-circle me-1"></i>
+                سعر الصرف <span class="text-danger">*</span>
+                <span id="mExchangeRateLabel" style="font-weight:400;font-size:.8rem"></span>
               </label>
-              <input type="number" id="mExchangeRate" class="form-control form-control-sm fw-600"
-                     min="0.000001" step="0.01" dir="ltr" placeholder="1.00000" value="1">
-              <div style="font-size:.73rem;color:#64748b;margin-top:3px">
-                <i class="bi bi-info-circle me-1"></i>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text" id="mRatePrefix" style="font-size:.78rem;min-width:60px"></span>
+                <input type="number" id="mExchangeRate" class="form-control fw-600"
+                       min="0.000001" step="0.001" dir="ltr" placeholder="مثال: 13000" value="">
+                <span class="input-group-text" id="mRateSuffix" style="font-size:.78rem;min-width:60px"></span>
+                <input type="hidden" id="mEmpCurCode">
+                <button type="button" class="btn btn-sm btn-outline-primary" style="border-radius:0 7px 7px 0;white-space:nowrap;font-size:.75rem"
+                        onclick="fetchExchangeRate(BRANCH_BASE_CURR, document.getElementById('mEmpCurCode').value)"
+                        title="تحديث السعر من الإنترنت">
+                    <i class="bi bi-arrow-repeat me-1" id="mRateRefreshIcon"></i>تحديث
+                </button>
+              </div>
+              <div style="font-size:.72rem;color:#64748b;margin-top:4px;background:#f8fafc;border-radius:6px;padding:4px 8px">
+                <i class="bi bi-info-circle me-1 text-primary"></i>
                 <span id="mExchangeRateHint"></span>
               </div>
             </div>
@@ -806,12 +834,20 @@ function calcSelected() {
         if(r.needs_rate_input){
             rateWrap2.style.display='';
             document.getElementById('mExchangeRateLabel').textContent=
-                ' (1 '+r.currency+' = ? '+BRANCH_BASE_CURR+')';
-            document.getElementById('mExchangeRateHint').textContent=
-                'كم '+BRANCH_BASE_CURR+' يساوي 1 '+r.currency+' — مثال SYP→USD: 1÷13000 = 0.000077';
+                ' — 1 '+BRANCH_BASE_CURR+' = كم '+r.currency+'?';
+            document.getElementById('mRatePrefix').textContent='1 '+BRANCH_BASE_CURR+' =';
+            document.getElementById('mRateSuffix').textContent=r.currency;
+            document.getElementById('mEmpCurCode').value=r.emp_cur_code||r.currency;
+            document.getElementById('mExchangeRate').value='';
+            document.getElementById('mExchangeRate').required=true;
+            document.getElementById('mExchangeRateHint').innerHTML=
+                '<span class="text-muted">جارٍ جلب السعر من الإنترنت...</span>';
+            // جلب السعر من API تلقائياً
+            fetchExchangeRate(BRANCH_BASE_CURR, r.emp_cur_code||r.currency);
         } else {
             rateWrap2.style.display='none';
             document.getElementById('mExchangeRate').value='1';
+            document.getElementById('mExchangeRate').required=false;
         }
 
         // عرض الملخص
@@ -855,9 +891,50 @@ function backToStep1() {
     document.getElementById('mStep2').style.display = 'none';
 }
 
+// جلب سعر الصرف من ExchangeRate-API
+async function fetchExchangeRate(baseCur, targetCur){
+    const icon=document.getElementById('mRateRefreshIcon');
+    if(icon) icon.classList.add('spin');
+    try {
+        const resp=await fetch('https://api.exchangerate-api.com/v4/latest/'+baseCur);
+        if(!resp.ok) throw new Error();
+        const data=await resp.json();
+        const rate=data.rates[targetCur];
+        if(rate){
+            document.getElementById('mExchangeRate').value=rate.toFixed(4);
+            if(icon) icon.classList.remove('spin');
+            document.getElementById('mExchangeRateHint').innerHTML=
+                '<i class="bi bi-check-circle-fill text-success me-1"></i>'
+                +'سعر الصرف الحالي: 1 '+baseCur+' = <strong>'+rate.toFixed(4)+'</strong> '+targetCur
+                +' <span style="color:#94a3b8;font-size:.7rem">(يمكن تعديله)</span>';
+        } else {
+            if(icon) icon.classList.remove('spin');
+            document.getElementById('mExchangeRateHint').innerHTML=
+                '<i class="bi bi-exclamation-triangle text-warning me-1"></i>'
+                +'السعر غير متوفر تلقائياً — أدخله يدوياً';
+        }
+    } catch(e){
+        if(icon) icon.classList.remove('spin');
+        document.getElementById('mExchangeRateHint').innerHTML=
+            '<i class="bi bi-wifi-off text-danger me-1"></i>'
+            +'تعذّر الاتصال بالإنترنت — أدخل السعر يدوياً';
+    }
+}
+
 function confirmPay() {
     if (!mCalcData) return;
     const {r, p, emp} = mCalcData;
+
+    // التحقق من سعر الصرف إذا مطلوب
+    if(r.needs_rate_input){
+        const rateVal=parseFloat(document.getElementById('mExchangeRate').value||0);
+        if(!rateVal||rateVal<=0){
+            toast('يجب إدخال سعر الصرف بين عملة الموظف وعملة الفرع','danger');
+            document.getElementById('mExchangeRate').focus();
+            return;
+        }
+    }
+
     document.getElementById('mPayTxt').style.opacity = '0';
     document.getElementById('mPaySpin').style.display = 'inline-block';
 
