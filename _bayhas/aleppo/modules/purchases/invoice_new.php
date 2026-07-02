@@ -211,6 +211,27 @@ $suppliers  = $pdo->query("SELECT id,name,phone,contact_person FROM `{$TSP}`
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
 $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
     ORDER BY is_base DESC, code")->fetchAll();
+
+// عملة الفرع الأساسية (من جدول branches → base_currency_id)
+$branchCurRow = $pdo->prepare("SELECT c.id, c.code, c.symbol, c.exchange_rate FROM branches b
+    JOIN currencies c ON c.id = b.base_currency_id
+    WHERE b.table_suffix = ? LIMIT 1");
+$branchCurRow->execute([$TS]);
+$branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC)
+    ?: ['id'=>1,'code'=>'USD','symbol'=>'$','exchange_rate'=>1.0];
+$branchCur = ['code'=>$branchCurRow['code'], 'symbol'=>$branchCurRow['symbol']];
+
+// سعر صرف عملة الفرع نسبة للمرجع العالمي (عادة USD is_base=1)
+$branchBaseRateVsAnchor = (float)$branchCurRow['exchange_rate'] ?: 1.0;
+
+// لكل عملة: نحسب سعر الصرف الفعلي نسبة لعملة الفرع (مو نسبة للمرجع العالمي)
+// المعادلة: 1 عملة_الفرع = (rate_العملة_الحالية / rate_عملة_الفرع) وحدة من هذه العملة
+foreach ($currencies as &$cu) {
+    $cu['rate_vs_branch'] = $branchBaseRateVsAnchor > 0
+        ? ((float)$cu['exchange_rate']) / $branchBaseRateVsAnchor
+        : 1.0;
+}
+unset($cu);
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -355,9 +376,9 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
                 <select id="iCurrency" class="form-select form-select-sm" onchange="onCurrencyChange()">
                     <?php foreach ($currencies as $cu): ?>
                     <option value="<?=$cu['code']?>"
-                        data-rate="<?=$cu['exchange_rate']?>"
+                        data-rate="<?=$cu['rate_vs_branch']?>"
                         data-sym="<?= htmlspecialchars($cu['symbol']) ?>"
-                        <?= $cu['is_base']?'selected':'' ?>>
+                        <?= $cu['code']===$branchCur['code'] ? 'selected' : '' ?>>
                         <?= htmlspecialchars($cu['code'].' — '.$cu['name']) ?>
                     </option>
                     <?php endforeach; ?>
@@ -500,12 +521,12 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
                 <span id="sumTax" class="n">+0.00</span>
             </div>
             <div class="tot-row final">
-                <span>الإجمالي</span>
+                <span>الإجمالي <small style="font-weight:400;color:#94a3b8">(عملة الفرع)</small></span>
                 <span id="sumTotal" class="n">0.00</span>
             </div>
             <div class="tot-row" style="margin-top:6px">
-                <span style="color:#16a34a;font-size:.75rem">بالدولار</span>
-                <span id="sumUsd" class="n" style="color:#16a34a;font-size:.8rem">0.00 $</span>
+                <span id="sumOrigLbl" style="color:#2563eb;font-size:.75rem">بعملة الفاتورة</span>
+                <span id="sumUsd" class="n" style="color:#2563eb;font-size:.8rem">0.00</span>
             </div>
         </div>
 
@@ -629,6 +650,8 @@ var lines        = [];
 
 // ── عملة الفاتورة ──
 let symCur='$', codeCur='USD', exRate=1;
+const BASE_CUR_CODE = '<?= htmlspecialchars($branchCur['code']) ?>';
+const BASE_CUR_SYM  = '<?= htmlspecialchars($branchCur['symbol']) ?>';
 
 function onCurrencyChange(){
     const sel=document.getElementById('iCurrency');
@@ -637,14 +660,30 @@ function onCurrencyChange(){
     symCur  = opt.dataset.sym||'$';
     codeCur = sel.value;
     document.getElementById('iExRate').value = exRate;
-    document.getElementById('exRateHint').textContent = `1 ${codeCur} = ${(1/exRate).toFixed(6)} $`;
+    document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
     document.getElementById('curLbl').textContent = `(${symCur})`;
+    // إعادة توليد سعر الوحدة بعملة الفاتورة الجديدة من السعر الثابت بعملة الفرع
+    lines.forEach(line=>{
+        if(line.cost_base!==undefined){
+            line.unit_price = exRate>0 ? line.cost_base*exRate : line.cost_base;
+        }
+        const row=document.getElementById(line.row_id);
+        if(row){ const pInput=row.querySelector('.p-input'); if(pInput) pInput.value=line.unit_price.toFixed(4); }
+    });
     refreshLineUsd();
     calcTotals();
 }
 function onExRateChange(){
     exRate = Math.max(0.0001, parseFloat(document.getElementById('iExRate').value)||1);
-    document.getElementById('exRateHint').textContent = `1 ${codeCur} = ${(1/exRate).toFixed(6)} $`;
+    document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
+    // إعادة توليد سعر الوحدة عند تعديل سعر الصرف يدوياً كذلك
+    lines.forEach(line=>{
+        if(line.cost_base!==undefined){
+            line.unit_price = exRate>0 ? line.cost_base*exRate : line.cost_base;
+        }
+        const row=document.getElementById(line.row_id);
+        if(row){ const pInput=row.querySelector('.p-input'); if(pInput) pInput.value=line.unit_price.toFixed(4); }
+    });
     refreshLineUsd();
     calcTotals();
 }
@@ -926,6 +965,8 @@ function addLine(item){
 
     // سطر جديد — نجمع كل variants هذا الكروب×لون
     const rowId = 'lgrp_'+gk.replace(/[^a-z0-9]/gi,'_');
+    // سعر القطعة الثابت بعملة الفرع (المرجع الأساسي — لا يتغير أبداً)
+    const costBase = parseFloat(item.cost_price||item.selling_price||0);
     const line = {
         grp_key:      gk,
         row_id:       rowId,
@@ -940,7 +981,8 @@ function addLine(item){
         color_hex:    item.color_hex||'',
         sizes:        [item.size||''],
         qty:          1,
-        unit_price:   parseFloat(item.cost_price||item.selling_price||0),
+        cost_base:    costBase,                          // سعر القطعة الثابت بعملة الفرع (لا يتغير)
+        unit_price:   exRate>0 ? costBase*exRate : costBase, // سعر الوحدة بعملة الفاتورة الحالية
         discount_pct: 0,
         unit_price_usd:0,
         total_orig:   0,
@@ -1059,16 +1101,27 @@ function calcTotals(){
     const taxPct    = parseFloat(document.getElementById('taxPct').value)||0;
     const discAmt   = subtotal*discPct/100;
     const taxAmt    = (subtotal-discAmt)*taxPct/100;
-    const total     = subtotal-discAmt+taxAmt;
-    const totalUsd  = exRate>0 ? total/exRate : 0;
+    const totalOrig = subtotal-discAmt+taxAmt;          // بعملة الفاتورة
+    const totalBase = exRate>0 ? totalOrig/exRate : 0;  // بعملة الفرع الأساسية
 
     document.getElementById('sumLines').textContent    = lines.length;
     document.getElementById('sumQty').textContent      = totalQty.toFixed(0);
     document.getElementById('sumSubtotal').textContent = subtotal.toFixed(2)+' '+symCur;
     document.getElementById('sumDisc').textContent     = '-'+discAmt.toFixed(2)+' '+symCur;
     document.getElementById('sumTax').textContent      = '+'+taxAmt.toFixed(2)+' '+symCur;
-    document.getElementById('sumTotal').textContent    = total.toFixed(2)+' '+symCur;
-    document.getElementById('sumUsd').textContent      = totalUsd.toFixed(2)+' $';
+
+    // الأساسي: بعملة الفرع
+    document.getElementById('sumTotal').textContent    = totalBase.toFixed(2)+' '+BASE_CUR_SYM;
+
+    // الثانوي: بعملة الفاتورة (يظهر فقط إذا تختلف عن عملة الفرع)
+    const origRow = document.getElementById('sumOrigLbl').closest('.tot-row');
+    if (codeCur === BASE_CUR_CODE) {
+        origRow.style.display = 'none';
+    } else {
+        origRow.style.display = '';
+        document.getElementById('sumOrigLbl').textContent = `بعملة الفاتورة (${codeCur})`;
+        document.getElementById('sumUsd').textContent = totalOrig.toFixed(2)+' '+symCur;
+    }
 }
 
 // ── حفظ الفاتورة ──

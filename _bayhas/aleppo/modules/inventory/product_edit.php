@@ -29,6 +29,26 @@ $TWI = "warehouse_items_{$TS}";
 $TCL = "product_colors_{$TS}";  // جدول الألوان
 $TSP = "product_suppliers_{$TS}"; // جدول الموردين
 
+// عملة الفرع الأساسية + كل العملات النشطة
+$branchCurRow = $pdo->prepare("SELECT c.id, c.code, c.symbol, c.exchange_rate FROM branches b
+    JOIN currencies c ON c.id = b.base_currency_id
+    WHERE b.table_suffix = ? LIMIT 1");
+$branchCurRow->execute([$TS]);
+$branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC)
+    ?: ['id'=>1,'code'=>'USD','symbol'=>'$','exchange_rate'=>1.0];
+$BASE_CUR_ID  = (int)$branchCurRow['id'];
+$BASE_CUR_CODE= $branchCurRow['code'];
+$BASE_CUR_SYM = $branchCurRow['symbol'];
+$branchBaseRateVsAnchor = (float)$branchCurRow['exchange_rate'] ?: 1.0;
+
+$allCurrencies = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY code")->fetchAll();
+foreach ($allCurrencies as &$cu) {
+    $cu['rate_vs_branch'] = $branchBaseRateVsAnchor > 0
+        ? ((float)$cu['exchange_rate']) / $branchBaseRateVsAnchor
+        : 1.0;
+}
+unset($cu);
+
 // ── AJAX ────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -163,13 +183,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $sellPrice = 0;
                 $costPrice = null;
                 $marginPct = null;
+                $curId     = $BASE_CUR_ID;
+                $exRate    = 1.0;
                 $packetQty = count($grp['sizes']);
                 $ageType   = $grp['type'] ?? 'سنة';
                 foreach ($pricing as $pr) {
                     if ($pr['group_key'] === $grp['key']) {
-                        $sellPrice = (float)($pr['sell_price']  ?? 0);
-                        $costPrice = $pr['cost_price'] !== '' ? (float)$pr['cost_price'] : null;
-                        $marginPct = $pr['margin']     !== '' ? (float)$pr['margin']     : null;
+                        $sellPriceRaw = (float)($pr['sell_price']  ?? 0);
+                        $costPriceRaw = $pr['cost_price'] !== '' ? (float)$pr['cost_price'] : null;
+                        $marginPct    = $pr['margin']     !== '' ? (float)$pr['margin']     : null;
+                        $curId        = (int)($pr['currency_id'] ?? $BASE_CUR_ID) ?: $BASE_CUR_ID;
+                        $exRate       = max(0.000001, (float)($pr['exchange_rate'] ?? 1));
+                        // تحويل الأسعار من العملة المختارة إلى عملة الفرع الأساسية للتخزين
+                        $sellPrice = $curId === $BASE_CUR_ID ? $sellPriceRaw : round($sellPriceRaw / $exRate, 4);
+                        $costPrice = $costPriceRaw === null ? null
+                            : ($curId === $BASE_CUR_ID ? $costPriceRaw : round($costPriceRaw / $exRate, 4));
                         break;
                     }
                 }
@@ -177,8 +205,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $szLabel = trim((string)$szVal);
                     if (!$szLabel) continue;
                     try {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,cost_price,margin_pct,packet_qty,is_active) VALUES (?,?,?,?,?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice, $marginPct, $packetQty]);
+                        $pdo->prepare("INSERT INTO `{$TSZ}`
+                            (product_id,size,age_type,sort_order,selling_price,cost_price,
+                             base_currency_id,currency_id,exchange_rate,margin_pct,packet_qty,is_active)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,1)")
+                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice,
+                                $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty]);
                     } catch (Exception $e) {
                         $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,is_active) VALUES (?,?,?,?,?,1)")
                             ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice]);
@@ -279,15 +311,25 @@ foreach ($editSizes as $s) {
     $ageType = $s['age_type'] ?? 'سنة';
     $key     = $ageType . '_' . (string)$s['selling_price'];
     if (!isset($grpMap[$key])) {
+        $curId  = (int)($s['currency_id'] ?? $BASE_CUR_ID) ?: $BASE_CUR_ID;
+        $exRate = max(0.000001, (float)($s['exchange_rate'] ?? 1));
+        // عرض السعر بعملته الأصلية وقت التسجيل (وليس المحوَّل بعملة الفرع)
+        $sellBase = (float)$s['selling_price'];
+        $costBase = $s['cost_price'] !== null ? (float)$s['cost_price'] : null;
+        $sellDisplay = $curId === $BASE_CUR_ID ? $sellBase : round($sellBase * $exRate, 4);
+        $costDisplay = $costBase === null ? ''
+            : ($curId === $BASE_CUR_ID ? $costBase : round($costBase * $exRate, 4));
         $grpMap[$key] = [
-            'key'        => 'edit_' . md5($key),
-            'type'       => $ageType,
-            'sizes'      => [],
-            'grpIdx'     => count($grpMap),
-            'sell_price' => (float)$s['selling_price'],
-            'cost_price' => $s['cost_price'] !== null ? (float)$s['cost_price'] : '',
-            'margin_pct' => $s['margin_pct'] !== null ? (float)$s['margin_pct'] : 30,
-            'packet_qty' => 0,
+            'key'          => 'edit_' . md5($key),
+            'type'         => $ageType,
+            'sizes'        => [],
+            'grpIdx'       => count($grpMap),
+            'sell_price'   => $sellDisplay,
+            'cost_price'   => $costDisplay,
+            'margin_pct'   => $s['margin_pct'] !== null ? (float)$s['margin_pct'] : 30,
+            'packet_qty'   => 0,
+            'currency_id'  => $curId,
+            'exchange_rate'=> $exRate,
         ];
     }
     $grpMap[$key]['sizes'][]    = (int)$s['size'];
@@ -298,11 +340,13 @@ $editSizeGroups = array_values($grpMap);
 $editPricing = [];
 foreach ($editSizeGroups as $grp) {
     $editPricing[] = [
-        'group_key'  => $grp['key'],
-        'packet_qty' => $grp['packet_qty'],
-        'cost_price' => $grp['cost_price'],
-        'margin'     => $grp['margin_pct'],
-        'sell_price' => $grp['sell_price'],
+        'group_key'    => $grp['key'],
+        'packet_qty'   => $grp['packet_qty'],
+        'cost_price'   => $grp['cost_price'],
+        'margin'       => $grp['margin_pct'],
+        'sell_price'   => $grp['sell_price'],
+        'currency_id'  => $grp['currency_id'],
+        'exchange_rate'=> $grp['exchange_rate'],
     ];
 }
 
@@ -944,6 +988,14 @@ const ALL_CATS = <?= json_encode($categories) ?>;
 const ALL_COLORS_INIT = <?= json_encode($colors) ?>;
 
 // حالة الصفحة
+// ── عملة الفرع والعملات المتاحة ──
+const BASE_CUR_ID   = <?= $BASE_CUR_ID ?>;
+const BASE_CUR_CODE = '<?= htmlspecialchars($BASE_CUR_CODE) ?>';
+const BASE_CUR_SYM  = '<?= htmlspecialchars($BASE_CUR_SYM) ?>';
+const CURRENCIES = <?= json_encode(array_map(function($c){
+    return ['id'=>(int)$c['id'],'code'=>$c['code'],'symbol'=>$c['symbol'],'rate'=>(float)$c['rate_vs_branch']];
+}, $allCurrencies)) ?>;
+
 let sizeGroups   = [];   // [{key, label, sizes[], grpIdx}]  max 4
 let activeGrpIdx = 0;    // الكروب النشط حالياً
 let selColors    = [];   // [{id, name, hex}]
@@ -1127,7 +1179,9 @@ function updatePricing() {
             packet_qty: grp.sizes.length,
             cost_price: prev.cost_price !== undefined ? prev.cost_price : '',
             margin:     prev.margin     !== undefined ? prev.margin     : 30,
-            sell_price: prev.sell_price !== undefined ? prev.sell_price : ''
+            sell_price: prev.sell_price !== undefined ? prev.sell_price : '',
+            currency_id:prev.currency_id!== undefined ? prev.currency_id: BASE_CUR_ID,
+            exchange_rate: prev.exchange_rate !== undefined ? prev.exchange_rate : 1
         };
     });
 
@@ -1136,9 +1190,11 @@ function updatePricing() {
         <thead><tr>
             <th>الكروب</th>
             <th>قطع الباكيت</th>
-            <th>سعر الشراء ($)</th>
+            <th>العملة</th>
+            <th>سعر الصرف</th>
+            <th>سعر الشراء</th>
             <th>نسبة المحل %</th>
-            <th>سعر البيع ($)</th>
+            <th>سعر البيع</th>
         </tr></thead>
         <tbody>
         ${sizeGroups.map((grp,i) => {
@@ -1148,6 +1204,7 @@ function updatePricing() {
             const minS = isEmpty ? '?' : Math.min(...grp.sizes);
             const maxS = isEmpty ? '?' : Math.max(...grp.sizes);
             const lbl = isEmpty ? 'يُكتب...' : (minS===maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
+            const isForeign = pr.currency_id != BASE_CUR_ID;
             return `<tr>
                 <td><span class="grp-pill ${GRP_COLORS[i]}">${lbl}</span></td>
                 <td>
@@ -1155,6 +1212,20 @@ function updatePricing() {
                         value="${grp.sizes.length||0}"
                         id="packetInp_${i}"
                         style="width:56px;background:#f8fafc;color:#1e293b;font-weight:600;text-align:center">
+                </td>
+                <td>
+                    <select style="width:82px;font-size:.75rem" onchange="onPriceCurrencyChange(${i},this.value)">
+                        ${CURRENCIES.map(c=>`<option value="${c.id}" ${c.id==pr.currency_id?'selected':''}>${c.code}</option>`).join('')}
+                    </select>
+                </td>
+                <td>
+                    <input type="number" min="0.000001" step="0.0001"
+                        value="${pr.exchange_rate}"
+                        id="rateInp_${i}"
+                        style="width:76px;${isForeign?'':'background:#f8fafc;color:#94a3b8'}"
+                        ${isForeign?'':'readonly'}
+                        oninput="updateSellPrice(${i},this.value,'rate')"
+                        title="1 ${BASE_CUR_CODE} = ? ${CURRENCIES.find(c=>c.id==pr.currency_id)?.code||''}">
                 </td>
                 <td><input type="number" min="0" step="0.01" placeholder="0.00"
                     value="${pr.cost_price}"
@@ -1169,13 +1240,26 @@ function updatePricing() {
             </tr>`;
         }).join('')}
         </tbody>
-    </table>`;
+    </table>
+    <div style="font-size:.7rem;color:#94a3b8;margin-top:6px">
+        <i class="bi bi-info-circle me-1"></i>
+        الأسعار تُحفظ بعملة الفرع الأساسية (${BASE_CUR_CODE}) — إذا اخترت عملة أخرى أدخل السعر بها وحدد سعر الصرف للتحويل التلقائي
+    </div>`;
     checkStatus();
 }
 
+function onPriceCurrencyChange(idx, curId){
+    pricing[idx].currency_id = parseInt(curId);
+    const cur = CURRENCIES.find(c=>c.id==curId);
+    pricing[idx].exchange_rate = cur ? cur.rate : 1;
+    if (parseInt(curId) === BASE_CUR_ID) pricing[idx].exchange_rate = 1;
+    updatePricing();
+}
+
 function updateSellPrice(idx, val, field) {
-    if (field === 'cost')   pricing[idx].cost_price = parseFloat(val) || 0;
-    if (field === 'margin') pricing[idx].margin      = parseFloat(val) || 0;
+    if (field === 'cost')   pricing[idx].cost_price   = parseFloat(val) || 0;
+    if (field === 'margin') pricing[idx].margin       = parseFloat(val) || 0;
+    if (field === 'rate')   pricing[idx].exchange_rate= Math.max(0.000001, parseFloat(val) || 1);
     const cost   = parseFloat(pricing[idx].cost_price) || 0;
     const margin = parseFloat(pricing[idx].margin) || 0;
     const sell   = cost > 0 ? (cost * (1 + margin/100)).toFixed(2) : '';

@@ -121,6 +121,7 @@ function moduleUrl(string $key): string
     'sales.returns' => 'sales/returns.php',
     // المشتريات
     'purchases.invoices' => 'purchases/index.php',
+    'purchases.suppliers' => 'purchases/suppliers.php',
     'purchases.returns' => 'purchases/returns.php',
     // المخزون
     'inventory.products' => 'inventory/products.php',
@@ -130,8 +131,7 @@ function moduleUrl(string $key): string
     'inventory.operations' => 'inventory/operations.php',
     'inventory.consumables' => 'inventory/consumables.php',
     // المالية
-    'finance.accounts'          => 'accounting/accounts.php',
-    'finance.shipping_carriers' => 'accounting/shipping_carriers.php',
+    'finance.accounts' => 'accounting/accounts.php',
     'finance.journal' => 'accounting/journal.php',
     'finance.receipts' => 'receipts/index.php',
     'finance.expenses' => 'expenses/index.php',
@@ -139,7 +139,7 @@ function moduleUrl(string $key): string
     // العملاء والموردون
     'crm.customers' => 'customers/index.php',
     'crm.customers.statement' => 'customers/statement.php',
-    'crm.suppliers' => 'suppliers/index.php',
+    'crm.suppliers' => 'purchases/suppliers.php',
     'crm.suppliers.statement' => 'suppliers/statement.php',
     // الموارد البشرية
     'hr.employees' => 'hr/employees.php',

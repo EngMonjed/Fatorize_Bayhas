@@ -26,6 +26,7 @@ try {
     $TJE  = "journal_entries_{$TS}";
     $TJI  = "journal_entry_items_{$TS}";
     $TIAS = "invoice_account_settings_{$TS}";
+    $TSP  = "product_suppliers_{$TS}";
 
     $act = $_POST['_action'] ?? '';
 
@@ -65,8 +66,11 @@ try {
             $shippingPayMethod = $_POST['shipping_pay_method'] ?? 'cash'; // cash | credit
             $shippingCashAccId = (int)($_POST['shipping_cash_account'] ?? 0) ?: null;
             $shippingPayableId = (int)($_POST['shipping_payable_id'] ?? 0) ?: null;
-            $paidAmt     = (float)($_POST['paid_amount'] ?? 0);
+            $paidOrigAmt = (float)($_POST['paid_amount'] ?? 0);
             $paidCur     = $_POST['paid_currency'] ?? $curCode;
+            $paidRate    = max(0.000001,(float)($_POST['paid_rate'] ?? 1));
+            // تحويل للعملة الأساسية للفاتورة
+            $paidAmt     = ($paidCur===$curCode) ? $paidOrigAmt : round($paidOrigAmt/$paidRate,4);
             $cashAccId   = (int)($_POST['cash_account_id'] ?? 0) ?: null;
             $notes       = trim($_POST['notes'] ?? '');
 
@@ -139,18 +143,32 @@ try {
                 return $st->fetch(PDO::FETCH_ASSOC)?:null;
             };
 
-            $accSupplier  = $getAcc('supplier_payable');
+            // حساب ذمة المورد: يُفضَّل الحساب الخاص بالمورد إن وُجد، وإلا الحساب العام
+            $accSupplier = null;
+            if (!empty($pur['supplier_id'])) {
+                $stSupAcc = $pdo->prepare("SELECT ac.* FROM `{$TSP}` s
+                    JOIN `{$TAC}` ac ON ac.id=s.account_id
+                    WHERE s.id=? AND s.account_id IS NOT NULL LIMIT 1");
+                $stSupAcc->execute([$pur['supplier_id']]);
+                $accSupplier = $stSupAcc->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            if (!$accSupplier) $accSupplier = $getAcc('supplier_payable');
+
             $accInventory = $getAcc('finished_inventory');
 
             if (!$accSupplier || !$accInventory)
-                throw new Exception('يرجى ضبط إعدادات الربط المحاسبي (ذمم الموردين + المخزون)');
+                throw new Exception('يرجى ضبط حساب ذمة للمورد أو إعدادات الربط المحاسبي العامة (ذمم الموردين + المخزون)');
 
             // ── قيد محاسبي: مدين المخزون / دائن ذمم الموردين ──
-            $y    = date('Y');
-            $last = $pdo->query("SELECT entry_number FROM `{$TJE}`
-                WHERE entry_number LIKE 'JE-{$y}-%' ORDER BY id DESC LIMIT 1")->fetchColumn();
-            $seq  = $last ? (int)substr($last,-4)+1 : 1;
-            $jeNo = 'JE-'.$y.'-'.str_pad($seq,4,'0',STR_PAD_LEFT);
+            $y = date('Y');
+            // دالة مساعدة: تولّد رقم القيد التالي الفعلي في كل استدعاء (تتجنب التعارض)
+            $nextJeNo = function() use ($pdo, $TJE, $y): string {
+                $last = $pdo->query("SELECT entry_number FROM `{$TJE}`
+                    WHERE entry_number LIKE 'JE-{$y}-%' ORDER BY id DESC LIMIT 1")->fetchColumn();
+                $seq = $last ? (int)substr($last, -4) + 1 : 1;
+                return 'JE-'.$y.'-'.str_pad($seq, 4, '0', STR_PAD_LEFT);
+            };
+            $jeNo = $nextJeNo();
 
             $pdo->prepare("INSERT INTO `{$TJE}`
                 (entry_number,entry_date,description,currency,exchange_rate,
@@ -181,12 +199,52 @@ try {
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                 ->execute([$finalUsd,$finalUsd,$accSupplier['id']]);
 
+            // ── خصم الدفعة المقدمة تلقائياً إن وُجد رصيد للمورد ──
+            $advanceApplied = 0;
+            if (!empty($pur['supplier_id'])) {
+                $stPrepaid = $pdo->prepare("SELECT ac.* FROM `{$TSP}` s
+                    JOIN `{$TAC}` ac ON ac.id=s.prepaid_account_id
+                    WHERE s.id=? AND s.prepaid_account_id IS NOT NULL LIMIT 1");
+                $stPrepaid->execute([$pur['supplier_id']]);
+                $accPrepaid = $stPrepaid->fetch(PDO::FETCH_ASSOC);
+
+                if ($accPrepaid && (float)$accPrepaid['base_balance'] > 0) {
+                    $advanceBalance = (float)$accPrepaid['base_balance'];
+                    $advanceApplied = min($advanceBalance, $finalUsd);
+
+                    if ($advanceApplied > 0) {
+                        $jeAdvNo = $nextJeNo();
+                        $pdo->prepare("INSERT INTO `{$TJE}`
+                            (entry_number,entry_date,description,currency,exchange_rate,
+                             total_debit,total_credit,status,reference_type,reference_id,created_by)
+                            VALUES (?,?,?,'USD',1,?,?,'posted','purchase_advance_applied',?,?)")
+                            ->execute([$jeAdvNo,date('Y-m-d'),
+                                "تطبيق دفعة مقدمة على فاتورة {$pur['purchase_number']} — {$supName}",
+                                $advanceApplied,$advanceApplied,$purId,$_SESSION['user_id']]);
+                        $jeAdvId=(int)$pdo->lastInsertId();
+
+                        // مدين: ذمم الموردين (تقليل الذمة)
+                        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                            VALUES (?,?,?,0,?,?,'تطبيق دفعة مقدمة','USD',1)")
+                            ->execute([$jeAdvId,$accSupplier['id'],$advanceApplied,$advanceApplied,$advanceApplied]);
+                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                            ->execute([$advanceApplied,$advanceApplied,$accSupplier['id']]);
+
+                        // دائن: الدفعات المقدمة (تصفير الرصيد المستخدم)
+                        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                            VALUES (?,?,0,?,?,?,'تطبيق دفعة مقدمة','USD',1)")
+                            ->execute([$jeAdvId,$accPrepaid['id'],$advanceApplied,$advanceApplied,$advanceApplied]);
+                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                            ->execute([$advanceApplied,$advanceApplied,$accPrepaid['id']]);
+                    }
+                }
+            }
+
             // ── تسجيل تكاليف الشحن (قيد منفصل) ──
             if ($shippingCost > 0) {
                 $accShipExp=$getAcc('shipping_expense')?:$getAcc('consumable_expense');
                 if ($accShipExp) {
-                    $seqS=$seq+1;
-                    $jeShip='JE-'.$y.'-'.str_pad($seqS,4,'0',STR_PAD_LEFT);
+                    $jeShip=$nextJeNo();
 
                     if ($shippingPayMethod==='cash' && $shippingCashAccId) {
                         // دفع نقدي: مدين مصاريف شحن / دائن الصندوق
@@ -260,8 +318,7 @@ try {
                 $stCash->execute([$cashAccId]);
                 $cashAcc=$stCash->fetch(PDO::FETCH_ASSOC);
                 if ($cashAcc) {
-                    $seqP=$seq+2;
-                    $jePayNo='JE-'.$y.'-'.str_pad($seqP,4,'0',STR_PAD_LEFT);
+                    $jePayNo=$nextJeNo();
                     $pdo->prepare("INSERT INTO `{$TJE}`
                         (entry_number,entry_date,description,currency,exchange_rate,
                          total_debit,total_credit,status,reference_type,reference_id,created_by)
@@ -270,21 +327,29 @@ try {
                             "دفعة فاتورة {$pur['purchase_number']}",
                             $paidAmt,$paidAmt,$purId,$_SESSION['user_id']]);
                     $jePayId=(int)$pdo->lastInsertId();
+                    // مدين: ذمم الموردين (بعملة الفاتورة)
                     $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
-                        VALUES (?,?,?,0,?,?,'دفع للمورد','USD',1)")
-                        ->execute([$jePayId,$accSupplier['id'],$paidAmt,$paidAmt,$paidAmt]);
+                        VALUES (?,?,?,0,?,?,?,?,?)")
+                        ->execute([$jePayId,$accSupplier['id'],$paidAmt,
+                            $paidOrigAmt,$paidAmt,"دفع للمورد",$paidCur,$paidRate]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                        ->execute([$paidAmt,$paidAmt,$accSupplier['id']]);
+                        ->execute([$paidAmt,$paidOrigAmt,$accSupplier['id']]);
+                    // دائن: الصندوق (بعملته الأصلية)
                     $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
-                        VALUES (?,?,0,?,?,?,'دفع للمورد','USD',1)")
-                        ->execute([$jePayId,$cashAccId,$paidAmt,$paidAmt,$paidAmt]);
+                        VALUES (?,?,0,?,?,?,?,?,?)")
+                        ->execute([$jePayId,$cashAccId,$paidAmt,
+                            $paidOrigAmt,$paidAmt,"دفع للمورد",$paidCur,$paidRate]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                        ->execute([$paidAmt,$paidAmt,$cashAccId]);
+                        ->execute([$paidAmt,$paidOrigAmt,$cashAccId]);
                     $paidStatus = $paidAmt >= $finalUsd ? 'paid' : 'partial';
                 }
             }
 
-            // ── تحديث الفاتورة ──
+            // ── تحديث الفاتورة (يشمل الدفع النقدي + الدفعة المقدمة المطبَّقة) ──
+            $totalPaidIncAdvance = $paidAmt + $advanceApplied;
+            $finalPaidStatus = $totalPaidIncAdvance >= $finalUsd ? 'paid'
+                : ($totalPaidIncAdvance > 0 ? 'partial' : 'pending');
+
             $pdo->prepare("UPDATE `{$TP}` SET
                 status='received',
                 paid_amount=?,
@@ -294,19 +359,22 @@ try {
                 notes=CONCAT(COALESCE(notes,''),?),
                 updated_by=?
                 WHERE id=?")
-                ->execute([$paidAmt,$paidAmt,$paidStatus,$jeId,
+                ->execute([$totalPaidIncAdvance,$totalPaidIncAdvance,$finalPaidStatus,$jeId,
                     $notes?' | '.$notes:'',
                     $_SESSION['user_id'],$purId]);
 
             $pdo->commit();
             ob_get_clean();
+            $msg = 'تم تأكيد الفاتورة وإضافة المخزون والقيد المحاسبي';
+            if ($advanceApplied > 0) $msg .= " — تم تطبيق دفعة مقدمة بقيمة {$advanceApplied}$";
             echo json_encode([
                 'ok'      => true,
-                'msg'     => 'تم تأكيد الفاتورة وإضافة المخزون والقيد المحاسبي',
+                'msg'     => $msg,
                 'je_no'   => $jeNo,
                 'movement'=> $movNo,
                 'status'  => 'received',
                 'paid'    => $paidAmt,
+                'advance_applied' => $advanceApplied,
                 'img'     => $imgPath,
             ]);
 

@@ -628,19 +628,46 @@ table.mtbl tr:hover td{background:#f8faff}
           </div>
 
           <!-- ── دفع جزئي ── -->
-          <div class="col-md-4">
+          <div class="col-12">
             <label class="form-label small fw-600 text-secondary mb-1">
                 <i class="bi bi-cash me-1 text-success"></i>دفع جزئي عند الاستلام
                 <span style="font-size:.68rem;color:#94a3b8">(اختياري)</span>
             </label>
-            <div class="input-group input-group-sm">
-              <input type="number" id="cPaidAmt" class="form-control fw-600" placeholder="0.00"
-                     min="0" step="0.01" oninput="updateTotal()">
-              <select id="cPaidCur" class="form-select" style="max-width:80px">
-                <?php foreach($currencies as $cur): ?>
-                <option value="<?=$cur['code']?>"><?=$cur['code']?></option>
-                <?php endforeach; ?>
-              </select>
+            <div class="row g-2">
+              <div class="col-md-5">
+                <div class="input-group input-group-sm">
+                  <input type="number" id="cPaidAmt" class="form-control fw-600" placeholder="0.00"
+                         min="0" step="0.01" oninput="onPaidChange()">
+                  <select id="cPaidCur" class="form-select" style="max-width:85px" onchange="onPaidChange()">
+                    <?php foreach($currencies as $cur): ?>
+                    <option value="<?=$cur['code']?>"><?=$cur['code']?></option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+              </div>
+              <!-- سعر الصرف — يظهر فقط عند اختلاف العملة -->
+              <div class="col-md-7" id="cPaidRateWrap" style="display:none">
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text" style="font-size:.73rem" id="cPaidRateLabel">1 ? =</span>
+                  <input type="number" id="cPaidRate" class="form-control fw-600"
+                         min="0.000001" step="0.001" dir="ltr" placeholder="سعر الصرف"
+                         oninput="updateTotal()">
+                  <span class="input-group-text" id="cPaidRateSuffix" style="font-size:.73rem"></span>
+                  <button type="button" class="btn btn-sm btn-outline-primary" style="border-radius:0 7px 7px 0"
+                          onclick="fetchPaidRate()" title="جلب السعر من الإنترنت">
+                    <i class="bi bi-arrow-repeat" id="paidRateIcon"></i>
+                  </button>
+                </div>
+                <div id="cPaidRateHint" style="font-size:.7rem;color:#64748b;margin-top:3px"></div>
+              </div>
+              <!-- المبلغ المحوَّل لعملة الفاتورة -->
+              <div class="col-12" id="cPaidConvertWrap" style="display:none">
+                <div style="background:#f0fdf4;border-radius:7px;padding:5px 10px;font-size:.78rem">
+                  <i class="bi bi-arrow-left-right me-1 text-success"></i>
+                  المبلغ بعملة الفاتورة:
+                  <strong id="cPaidConverted" style="color:#16a34a">—</strong>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -936,6 +963,49 @@ function openConfirmModal(id,no,total,sym){
     });
 }
 
+function onPaidChange(){
+    const paidCur=document.getElementById('cPaidCur').value;
+    const invCur=_cPurchaseData?.currency||'USD';
+    const rateWrap=document.getElementById('cPaidRateWrap');
+    const convertWrap=document.getElementById('cPaidConvertWrap');
+    if(paidCur && paidCur!==invCur){
+        rateWrap.style.display='';
+        document.getElementById('cPaidRateLabel').textContent='1 '+paidCur+' =';
+        document.getElementById('cPaidRateSuffix').textContent=invCur;
+        convertWrap.style.display='';
+        if(!document.getElementById('cPaidRate').value) fetchPaidRate();
+    } else {
+        rateWrap.style.display='none';
+        convertWrap.style.display='none';
+        document.getElementById('cPaidRate').value='1';
+    }
+    updateTotal();
+}
+
+async function fetchPaidRate(){
+    const paidCur=document.getElementById('cPaidCur').value;
+    const invCur=_cPurchaseData?.currency||'USD';
+    const icon=document.getElementById('paidRateIcon');
+    icon.classList.add('spin');
+    try {
+        const resp=await fetch('https://api.exchangerate-api.com/v4/latest/'+invCur);
+        const data=await resp.json();
+        const rate=data.rates[paidCur];
+        if(rate){
+            document.getElementById('cPaidRate').value=rate.toFixed(4);
+            document.getElementById('cPaidRateHint').innerHTML=
+                '<i class="bi bi-check-circle-fill text-success me-1"></i>1 '+paidCur+' = '+rate.toFixed(4)+' '+invCur;
+            updateTotal();
+        } else {
+            document.getElementById('cPaidRateHint').innerHTML=
+                '<i class="bi bi-exclamation-triangle text-warning me-1"></i>غير متوفر — أدخل يدوياً';
+        }
+    } catch(e){
+        document.getElementById('cPaidRateHint').innerHTML=
+            '<i class="bi bi-wifi-off text-danger me-1"></i>تعذّر الاتصال';
+    } finally { icon.classList.remove('spin'); }
+}
+
 function onCarrierChange(sel){
     const opt=sel.options[sel.selectedIndex];
     document.getElementById('cShippingDesc').value=opt.value?opt.dataset.name:'';
@@ -953,36 +1023,37 @@ function onShipPayChange(){
 }
 
 function updateTotal(){
-    const shipOn=document.querySelector('input[name="shippingOn"]:checked')?.value||'us';
-    const ship   =parseFloat(document.getElementById('cShipping').value)||0;
-    const shipCur=document.getElementById('cShippingCur').value||'USD';
-    const paid   =parseFloat(document.getElementById('cPaidAmt').value)||0;
-    const paidCur=document.getElementById('cPaidCur').value||'USD';
-    const invCur =_cPurchaseData?.currency||'USD';
-    const invSym =_cPurchaseData?.currency_symbol||'$';
-    const fmt    =n=>new Intl.NumberFormat('en').format(Math.abs(parseFloat(n||0)).toFixed(2));
+    const shipOn  =document.querySelector('input[name="shippingOn"]:checked')?.value||'us';
+    const ship    =parseFloat(document.getElementById('cShipping').value)||0;
+    const shipCur =document.getElementById('cShippingCur').value||'USD';
+    const invCur  =_cPurchaseData?.currency||'USD';
+    const invSym  =_cPurchaseData?.currency_symbol||'$';
+    const fmt     =n=>new Intl.NumberFormat('en').format(Math.abs(parseFloat(n||0)).toFixed(2));
+
+    // الدفع الجزئي مع التحويل
+    const paidAmt =parseFloat(document.getElementById('cPaidAmt').value)||0;
+    const paidCur =document.getElementById('cPaidCur').value||invCur;
+    const paidRate=parseFloat(document.getElementById('cPaidRate').value)||1;
+    const paidInInvCur = paidCur===invCur ? paidAmt : paidAmt/paidRate;
+
+    // عرض المبلغ المحوّل
+    if(paidAmt>0 && paidCur!==invCur){
+        document.getElementById('cPaidConverted').textContent=
+            invSym+' '+new Intl.NumberFormat('en').format(paidInInvCur.toFixed(2));
+    }
 
     // تجميع المبالغ حسب العملة
-    const totals={}; // {cur: {sym,inv,ship,paid}}
-
-    // إجمالي الفاتورة
+    const totals={};
     if(!totals[invCur]) totals[invCur]={sym:invSym,inv:0,ship:0,paid:0};
     totals[invCur].inv=_cTotal;
 
-    // الشحن (إذا علينا)
     if(shipOn==='us' && ship>0){
-        // جلب رمز عملة الشحن
-        const shipSymOpt=[...document.getElementById('cShippingCur').options].find(o=>o.value===shipCur);
-        const shipSym=shipCur; // نستخدم الكود كرمز مبدئياً
-        if(!totals[shipCur]) totals[shipCur]={sym:shipSym,inv:0,ship:0,paid:0};
+        if(!totals[shipCur]) totals[shipCur]={sym:shipCur,inv:0,ship:0,paid:0};
         totals[shipCur].ship=ship;
     }
-
-    // المدفوع
-    if(paid>0){
-        const paidSymOpt=[...document.getElementById('cPaidCur').options].find(o=>o.value===paidCur);
-        if(!totals[paidCur]) totals[paidCur]={sym:paidCur,inv:0,ship:0,paid:0};
-        totals[paidCur].paid=paid;
+    if(paidAmt>0){
+        if(!totals[invCur]) totals[invCur]={sym:invSym,inv:0,ship:0,paid:0};
+        totals[invCur].paid=paidInInvCur;
     }
 
     // بناء HTML الملخص
@@ -1214,8 +1285,9 @@ function doConfirm(){
     fd.append('shipping_pay_method',document.querySelector('input[name="shippingPay"]:checked')?.value||'cash');
     fd.append('shipping_cash_account',document.getElementById('cShipCashAccount').value);
     fd.append('shipping_desc',document.getElementById('cShippingDesc').value);
-    fd.append('paid_amount',paid);
+    fd.append('paid_amount',document.getElementById('cPaidAmt').value||'0');
     fd.append('paid_currency',document.getElementById('cPaidCur').value);
+    fd.append('paid_rate',document.getElementById('cPaidRate').value||'1');
     fd.append('cash_account_id',cashAcc);
     fd.append('notes',document.getElementById('cNotes').value);
     const img=document.getElementById('cInvoiceImg');
