@@ -80,13 +80,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $sizes = $szSt->fetchAll();
             $grpMap = [];
             foreach ($sizes as $s) {
-                $key = (string) $s['selling_price'];
+                $key = isset($s['price_group']) ? 'pg_'.$s['price_group'] : (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
                 if (!isset($grpMap[$key]))
-                    $grpMap[$key] = ['sizes' => [], 'selling_price' => $s['selling_price'], 'packet_qty' => 0];
+                    $grpMap[$key] = [
+                        'sizes'            => [],
+                        'selling_price'    => $s['selling_price'],
+                        'cost_price'       => $s['cost_price'],
+                        'packet_qty'       => 0,
+                        'base_currency_id' => $s['base_currency_id'] ?? null,
+                        'currency_id'      => $s['currency_id'] ?? null,
+                        'exchange_rate'    => $s['exchange_rate'] ?? 1,
+                    ];
                 $grpMap[$key]['sizes'][] = $s['size'];
                 $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
             }
             $prod['groups'] = array_values($grpMap);
+            // عملة الفرع الحالية + خريطة العملات لحساب القيمة الحية بالواجهة
+            $prod['current_base_currency_id'] = (int)$branchCurRow['id'];
+            $prod['current_base_symbol']      = $branchCurRow['symbol'];
+            $prod['currencies_map'] = array_map(function($c){
+                return ['code'=>$c['code'],'symbol'=>$c['symbol'],'exchange_rate'=>(float)$c['exchange_rate']];
+            }, $currenciesMap);
 
             // الألوان عبر color_id من جدول الألوان
             $clSt = $pdo->prepare("SELECT DISTINCT pc.id, pc.name, pc.hex_code
@@ -812,10 +826,7 @@ $catColors = [
                                 <th>الألوان</th>
                                 <th>نوع القماش</th>
                                 <th>المخزون</th>
-                                <th>سعر البيع</th>
-                                <th>عملة النظام</th>
-                                <th>العملة المختارة</th>
-                                <th>سعر الصرف</th>
+                                <th>الأسعار</th>
                                 <th>الحالة</th>
                                 <th style="text-align:center">إجراءات</th>
                             </tr>
@@ -823,7 +834,7 @@ $catColors = [
                         <tbody>
                             <?php if (empty($products)): ?>
                                 <tr>
-                                    <td colspan="14" class="text-center text-muted py-4">
+                                    <td colspan="10" class="text-center text-muted py-4">
                                         <i class="bi bi-boxes d-block mb-2 fs-2" style="opacity:.2"></i>
                                         لا توجد منتجات<?= $search ? " تطابق \"{$search}\"" : '' ?>
                                     </td>
@@ -839,11 +850,11 @@ $catColors = [
                                 $minSell = null;
                                 $priceCurInfo = null; // بيانات العملة المرتبطة بأقل سعر
                                 try {
-                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate, price_group FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
                                     $szSt->execute([$prod['id']]);
                                     $pSizes = $szSt->fetchAll();
                                     foreach ($pSizes as $s) {
-                                        $k = (string) $s['selling_price'];
+                                        $k = isset($s['price_group']) ? 'pg_'.$s['price_group'] : (string) $s['selling_price'];
                                         $grps[$k][] = $s['size'];
                                         if ($minSell === null || (float) $s['selling_price'] < $minSell) {
                                             $minSell = (float) $s['selling_price'];
@@ -942,57 +953,20 @@ $catColors = [
                                         <span class="<?= $sCls ?> fw-600"><?= $sLbl ?></span>
                                     </td>
 
-                                    <!-- سعر البيع (أدنى سعر) — مسجَّل ثابت + قيمة حالية تقريبية -->
-                                    <td class="n" style="font-size:.82rem;font-weight:600;color:#1e293b">
-                                        <?php
-                                        if ($minSell && $priceCurInfo && $priceCurInfo['base_currency_id']):
-                                            $recordedCurId = (int)$priceCurInfo['base_currency_id'];
-                                            $currentBaseId = (int)$branchCurRow['id'];
-                                            $recordedCur   = $currenciesMap[$recordedCurId] ?? null;
-                                        ?>
-                                            <div><?= number_format($minSell, 2) . ' ' . htmlspecialchars($recordedCur['symbol'] ?? $branchCurRow['symbol']) ?>
-                                                <span class="text-muted" style="font-size:.65rem;font-weight:400">(<?= htmlspecialchars($recordedCur['code'] ?? '') ?> — كما سُجّل)</span>
-                                            </div>
-                                            <?php if ($recordedCurId !== $currentBaseId):
-                                                $liveVal = liveConvert($minSell, $recordedCurId, $currentBaseId, $currenciesMap);
-                                            ?>
-                                            <div style="font-size:.7rem;color:#2563eb;font-weight:400;margin-top:2px">
-                                                <i class="bi bi-arrow-repeat me-1"></i>
-                                                <?= $liveVal !== null ? '≈ ' . number_format($liveVal, 2) . ' ' . htmlspecialchars($branchCurRow['symbol']) . ' (اليوم)' : '—' ?>
-                                            </div>
-                                            <?php endif; ?>
-                                        <?php else: ?>
-                                            <?= $minSell ? number_format($minSell, 2) . ' ' . htmlspecialchars($branchCurRow['symbol']) : '—' ?>
-                                        <?php endif; ?>
-                                    </td>
-
-                                    <!-- عملة النظام (عملة الفرع الأساسية) -->
-                                    <td style="font-size:.75rem">
-                                        <?php if ($priceCurInfo && $priceCurInfo['base_currency_id']):
-                                            $bc = $currenciesMap[(int)$priceCurInfo['base_currency_id']] ?? null;
-                                        ?>
-                                            <span class="acc-badge"><?= $bc ? htmlspecialchars($bc['code']) : '#' . $priceCurInfo['base_currency_id'] ?></span>
-                                            <span class="text-muted" style="font-size:.68rem">(<?= (int)$priceCurInfo['base_currency_id'] ?>)</span>
+                                    <!-- الأسعار: متعددة حسب الكروب — التفاصيل بمودال العرض -->
+                                    <td style="font-size:.78rem">
+                                        <?php $grpCount = count($grps); ?>
+                                        <?php if ($grpCount > 0): ?>
+                                            <span class="text-muted">
+                                                <i class="bi bi-tags me-1"></i><?= $grpCount ?> <?= $grpCount===1?'سعر':'أسعار' ?>
+                                            </span>
+                                            <button class="btn btn-sm p-0 border-0" style="font-size:.7rem;color:#2563eb"
+                                                    onclick="viewDetail(<?= $prod['id'] ?>)">
+                                                عرض التفاصيل
+                                            </button>
                                         <?php else: ?>
                                             <span class="text-muted">—</span>
                                         <?php endif; ?>
-                                    </td>
-
-                                    <!-- العملة المختارة عند التسجيل -->
-                                    <td style="font-size:.75rem">
-                                        <?php if ($priceCurInfo && $priceCurInfo['currency_id']):
-                                            $cc = $currenciesMap[(int)$priceCurInfo['currency_id']] ?? null;
-                                        ?>
-                                            <span class="acc-badge"><?= $cc ? htmlspecialchars($cc['code']) : '#' . $priceCurInfo['currency_id'] ?></span>
-                                            <span class="text-muted" style="font-size:.68rem">(<?= (int)$priceCurInfo['currency_id'] ?>)</span>
-                                        <?php else: ?>
-                                            <span class="text-muted">—</span>
-                                        <?php endif; ?>
-                                    </td>
-
-                                    <!-- سعر الصرف وقت التسجيل -->
-                                    <td class="n" style="font-size:.78rem">
-                                        <?= $priceCurInfo ? number_format((float)$priceCurInfo['exchange_rate'], 4) : '—' ?>
                                     </td>
 
                                     <!-- الحالة -->
@@ -1517,19 +1491,47 @@ $catColors = [
                         ['#f5f3ff', '#4c1d95', '#ddd6fe']
                     ];
 
-                    // الكروبات
+                    // ── جلب بيانات العملات (تُرسل من الـ backend) ──
+                    const currentBaseId  = p.current_base_currency_id;
+                    const currentBaseSym = p.current_base_symbol || '$';
+                    const currenciesMap  = p.currencies_map || {}; // {id: {code,symbol,exchange_rate}}
+
+                    function liveConvertJS(amount, fromId, toId) {
+                        if (fromId === toId) return amount;
+                        const from = currenciesMap[fromId], to = currenciesMap[toId];
+                        if (!from || !to || !from.exchange_rate) return null;
+                        return amount * (to.exchange_rate / from.exchange_rate);
+                    }
+
+                    // الكروبات — كل كروب بسعره وعملته الخاصة
                     const grpsHtml = (p.groups || []).map((g, i) => {
                         const [bg, clr, br] = GRP_COLORS[i % 4];
                         const szTags = g.sizes.map(s => `<span class="sz-mini">${s}</span>`).join('');
+                        const recId  = g.base_currency_id ? parseInt(g.base_currency_id) : currentBaseId;
+                        const recCur = currenciesMap[recId] || { code: '', symbol: currentBaseSym };
+                        const sellVal = parseFloat(g.selling_price || 0);
+                        const costVal = g.cost_price !== null ? parseFloat(g.cost_price) : null;
+                        let liveHtml = '';
+                        if (recId !== currentBaseId) {
+                            const liveSell = liveConvertJS(sellVal, recId, currentBaseId);
+                            liveHtml = `<div style="font-size:.68rem;color:#2563eb;font-weight:400;margin-top:1px">
+                                <i class="bi bi-arrow-repeat me-1"></i>${liveSell!==null ? '≈ '+liveSell.toFixed(2)+' '+currentBaseSym+' (اليوم)' : '—'}
+                            </div>`;
+                        }
                         return `<div class="grp-block">
                     <div class="d-flex align-items-center gap-2 mb-2">
                         <span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.7rem;padding:1px 8px;font-weight:700">
                             الكروب ${i + 1}
                         </span>
                         <span style="font-size:.74rem;color:#64748b">${g.sizes.length} قطعة بالباكيت</span>
-                        <span style="margin-right:auto;font-size:.8rem;font-weight:700;color:#1e293b">
-                            ${parseFloat(g.selling_price || 0).toFixed(2)} $
-                        </span>
+                        <div style="margin-right:auto;text-align:left">
+                            <div style="font-size:.8rem;font-weight:700;color:#1e293b">
+                                ${sellVal.toFixed(2)} ${recCur.symbol}
+                                <span class="text-muted" style="font-size:.62rem;font-weight:400">(${recCur.code||'—'} — كما سُجّل)</span>
+                            </div>
+                            ${liveHtml}
+                            ${costVal!==null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px">تكلفة: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
+                        </div>
                     </div>
                     <div class="d-flex flex-wrap gap-1">${szTags}</div>
                 </div>`;

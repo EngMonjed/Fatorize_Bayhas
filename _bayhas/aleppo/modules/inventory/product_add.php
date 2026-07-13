@@ -172,7 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // حذف المقاسات القديمة وإعادة الإدخال
             $pdo->prepare("DELETE FROM `{$TSZ}` WHERE product_id=?")->execute([$id]);
             $sortOrder = 0;
-            foreach ($groups as $grp) {
+            foreach ($groups as $grpNo => $grp) {
                 $sellPrice  = 0;
                 $packetQty  = count($grp['sizes']);  // عدد القطع = عدد الأرقام المختارة
                 $costPrice  = null;
@@ -197,17 +197,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 foreach ($grp['sizes'] as $szVal) {
                     $szLabel = trim((string)$szVal);
                     if (!$szLabel) continue;
-                    try {
-                        $pdo->prepare("INSERT INTO `{$TSZ}`
+                    $pdo->prepare("INSERT INTO `{$TSZ}`
                             (product_id,size,age_type,sort_order,selling_price,cost_price,
                              base_currency_id,currency_id,exchange_rate,margin_pct,packet_qty,is_active)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice,
-                                $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty]);
-                    } catch (Exception $e) {
-                        $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,is_active) VALUES (?,?,?,?,?,1)")
-                            ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice]);
-                    }
+                        ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice,
+                            $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty]);
                 }
             }
 
@@ -309,7 +304,7 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
 $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}` WHERE status='active' ORDER BY name")->fetchAll();
 ?>
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="ltr">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -384,6 +379,8 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
 .mini-modal-box{background:#fff;border-radius:14px;width:380px;max-width:95vw;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.15)}
 .mini-modal-hdr{background:#1e3a8a;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
 .mini-modal-hdr h6{color:#fff;font-size:.85rem;font-weight:700;margin:0}
+.spin{animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -905,6 +902,7 @@ const CURRENCIES = <?= json_encode(array_map(function($c){
 }, $allCurrencies)) ?>;
 
 let sizeGroups   = [];   // [{key, label, sizes[], grpIdx}]  max 4
+let _grpKeySeq = 0; // عداد فريد لتوليد key بدون تصادم
 let activeGrpIdx = 0;    // الكروب النشط حالياً
 let selColors    = [];   // [{id, name, hex}]
 let allColors    = ALL_COLORS_INIT.map(c => ({id:c.id, name:c.name, hex:c.hex_code}));
@@ -1012,7 +1010,7 @@ function toggleSize(num, type) {
 
     // أضف للكروب النشط — إذا لا يوجد كروب نشط أنشئ واحداً
     if (sizeGroups.length === 0) {
-        sizeGroups.push({key: Date.now()+'', type, sizes:[], grpIdx: 0});
+        sizeGroups.push({key: 'g'+(_grpKeySeq++)+'_'+Date.now(), type, sizes:[], grpIdx: 0});
         activeGrpIdx = 0;
     }
     // تأكد أن الكروب النشط موجود
@@ -1037,7 +1035,7 @@ function startNewGroup() {
     // الكروب الجديد يبدأ بنوع العمر الافتراضي (سنة) — يمكن تغييره من الـ select
     const type = 'سنة';
     document.getElementById('pAgeType').value = type;
-    sizeGroups.push({key: Date.now()+'', type, sizes:[], grpIdx: sizeGroups.length});
+    sizeGroups.push({key: 'g'+(_grpKeySeq++)+'_'+Date.now(), type, sizes:[], grpIdx: sizeGroups.length});
     activeGrpIdx = sizeGroups.length - 1;
     renderSizeGrid();
     updatePricing();
@@ -1124,7 +1122,8 @@ function updatePricing() {
             margin:     prev.margin     !== undefined ? prev.margin     : 30,
             sell_price: prev.sell_price !== undefined ? prev.sell_price : '',
             currency_id:prev.currency_id!== undefined ? prev.currency_id: BASE_CUR_ID,
-            exchange_rate: prev.exchange_rate !== undefined ? prev.exchange_rate : 1
+            exchange_rate: prev.exchange_rate !== undefined ? prev.exchange_rate : 1,
+            rate_dir: prev.rate_dir || 'fwd' // fwd: 1 base=X chosen | inv: 1 chosen=X base
         };
     });
 
@@ -1161,14 +1160,27 @@ function updatePricing() {
                         ${CURRENCIES.map(c=>`<option value="${c.id}" ${c.id==pr.currency_id?'selected':''}>${c.code}</option>`).join('')}
                     </select>
                 </td>
-                <td>
-                    <input type="number" min="0.000001" step="0.0001"
-                        value="${pr.exchange_rate}"
-                        id="rateInp_${i}"
-                        style="width:76px;${isForeign?'':'background:#f8fafc;color:#94a3b8'}"
-                        ${isForeign?'':'readonly'}
-                        oninput="updateSellPrice(${i},this.value,'rate')"
-                        title="1 ${BASE_CUR_CODE} = ? ${CURRENCIES.find(c=>c.id==pr.currency_id)?.code||''}">
+                <td style="min-width:150px">
+                    <div class="d-flex gap-1 align-items-center">
+                        <button type="button" onclick="toggleRateDir(${i})" title="عكس الاتجاه"
+                            style="border:1px solid #e2e8f0;border-radius:6px;background:#fff;width:24px;height:24px;font-size:.7rem;flex-shrink:0">
+                            <i class="bi bi-arrow-left-right"></i>
+                        </button>
+                        <input type="number" min="0.0000000001" step="any"
+                            value="${pr.rate_dir==='inv' ? (1/pr.exchange_rate).toFixed(10) : pr.exchange_rate}"
+                            id="rateInp_${i}"
+                            style="width:82px;${isForeign?'':'background:#f8fafc;color:#94a3b8'}"
+                            ${isForeign?'':'readonly'}
+                            oninput="updateSellPrice(${i},this.value,'rate')">
+                        <button type="button" onclick="fetchRate(${i})" title="جلب من الإنترنت"
+                            style="border:1px solid #e2e8f0;border-radius:6px;background:#fff;width:24px;height:24px;font-size:.7rem;flex-shrink:0" ${isForeign?'':'disabled'}>
+                            <i class="bi bi-arrow-repeat" id="rateIcon_${i}"></i>
+                        </button>
+                    </div>
+                    <div style="font-size:.63rem;color:#94a3b8;margin-top:2px" id="rateHint_${i}">
+                        1 ${pr.rate_dir==='inv' ? (CURRENCIES.find(c=>c.id==pr.currency_id)?.code||'') : BASE_CUR_CODE}
+                        = ${pr.rate_dir==='inv' ? BASE_CUR_CODE : (CURRENCIES.find(c=>c.id==pr.currency_id)?.code||'')}
+                    </div>
                 </td>
                 <td><input type="number" min="0" step="0.01" placeholder="0.00"
                     value="${pr.cost_price}"
@@ -1195,14 +1207,44 @@ function onPriceCurrencyChange(idx, curId){
     pricing[idx].currency_id = parseInt(curId);
     const cur = CURRENCIES.find(c=>c.id==curId);
     pricing[idx].exchange_rate = cur ? cur.rate : 1;
+    pricing[idx].rate_dir = 'fwd';
     if (parseInt(curId) === BASE_CUR_ID) pricing[idx].exchange_rate = 1;
-    updatePricing(); // إعادة رسم الجدول لتفعيل/تعطيل حقل سعر الصرف
+    updatePricing();
+}
+
+// عكس اتجاه عرض سعر الصرف (لا يغيّر القيمة الفعلية المخزّنة، فقط طريقة الإدخال/العرض)
+function toggleRateDir(idx){
+    pricing[idx].rate_dir = pricing[idx].rate_dir === 'fwd' ? 'inv' : 'fwd';
+    updatePricing();
+}
+// جلب سعر الصرف تلقائياً بالاتجاه المعروض حالياً
+async function fetchRate(idx){
+    const icon = document.getElementById(`rateIcon_${idx}`);
+    if (icon) icon.classList.add('spin');
+    try {
+        const curId = pricing[idx].currency_id;
+        const cur = CURRENCIES.find(c=>c.id==curId);
+        if (!cur) return;
+        const resp = await fetch(`https://api.exchangerate-api.com/v4/latest/${BASE_CUR_CODE}`);
+        const data = await resp.json();
+        const rate = data.rates[cur.code]; // 1 BASE = rate CHOSEN
+        if (rate) {
+            pricing[idx].exchange_rate = rate; // دايماً نخزّن canonical: 1 base = X chosen
+            updatePricing();
+        }
+    } catch(e){} finally { if (icon) icon.classList.remove('spin'); }
 }
 
 function updateSellPrice(idx, val, field) {
     if (field === 'cost')   pricing[idx].cost_price   = parseFloat(val) || 0;
     if (field === 'margin') pricing[idx].margin       = parseFloat(val) || 0;
-    if (field === 'rate')   pricing[idx].exchange_rate= Math.max(0.000001, parseFloat(val) || 1);
+    if (field === 'rate') {
+        const v = Math.max(0.0000000001, parseFloat(val) || 1);
+        // لو الاتجاه المعروض معكوس (1 مختارة = X أساسية) نحوّله لصيغة canonical (1 أساسية = X مختارة) بدقة 10 أرقام
+        pricing[idx].exchange_rate = pricing[idx].rate_dir === 'inv'
+            ? parseFloat((1 / v).toFixed(10))
+            : v;
+    }
     const cost   = parseFloat(pricing[idx].cost_price) || 0;
     const margin = parseFloat(pricing[idx].margin) || 0;
     const sell   = cost > 0 ? (cost * (1 + margin/100)).toFixed(2) : '';

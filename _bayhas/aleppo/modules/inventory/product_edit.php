@@ -179,7 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // حذف المقاسات القديمة وإعادة الإدخال
             $pdo->prepare("DELETE FROM `{$TSZ}` WHERE product_id=?")->execute([$id]);
             $sortOrder = 0;
-            foreach ($groups as $grp) {
+            foreach ($groups as $grpNo => $grp) {
                 $sellPrice = 0;
                 $costPrice = null;
                 $marginPct = null;
@@ -207,10 +207,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     try {
                         $pdo->prepare("INSERT INTO `{$TSZ}`
                             (product_id,size,age_type,sort_order,selling_price,cost_price,
-                             base_currency_id,currency_id,exchange_rate,margin_pct,packet_qty,is_active)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,1)")
+                             base_currency_id,currency_id,exchange_rate,margin_pct,packet_qty,price_group,is_active)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)")
                             ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice,
-                                $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty]);
+                                $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty, $grpNo]);
                     } catch (Exception $e) {
                         $pdo->prepare("INSERT INTO `{$TSZ}` (product_id,size,age_type,sort_order,selling_price,is_active) VALUES (?,?,?,?,?,1)")
                             ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice]);
@@ -309,7 +309,7 @@ $editSizes = $szSt->fetchAll(PDO::FETCH_ASSOC);
 $grpMap = [];
 foreach ($editSizes as $s) {
     $ageType = $s['age_type'] ?? 'سنة';
-    $key     = $ageType . '_' . (string)$s['selling_price'];
+    $key     = isset($s['price_group']) ? 'pg_'.$s['price_group'] : $ageType . '_' . (string)$s['selling_price'];
     if (!isset($grpMap[$key])) {
         $curId  = (int)($s['currency_id'] ?? $BASE_CUR_ID) ?: $BASE_CUR_ID;
         $exRate = max(0.000001, (float)($s['exchange_rate'] ?? 1));
