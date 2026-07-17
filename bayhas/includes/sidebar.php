@@ -7,15 +7,25 @@
 
 $menu = buildSidebarMenu($pdo);
 injectInternalOrdersToMenu($menu);
+$menu = reorderAndFilterSidebarMenu($menu, $_SESSION['table_suffix'] ?? '');
 $user = getCurrentUser();
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $currentPage = $currentModule ?? '';
 ?>
+<style>
+/* تجميع بصري لأقسام القائمة حسب تكرار الاستخدام — مضاف محلياً هون
+   لتفادي التعديل على layout.css المشترك بين كل الصفحات. */
+.sb-group-label{
+    padding:14px 16px 4px; font-size:11px; color:rgba(255,255,255,.45);
+    text-transform:none; letter-spacing:.02em;
+}
+.sb-nav > .sb-group-label:first-child{ padding-top:4px; }
+</style>
 <aside class="sidebar" id="sidebar">
 
     <!-- Brand -->
     <div class="sb-brand">
-        <img src="/bayhas/assets/images/fatorize.png" alt="" onerror="this.style.display='none'">
+        <img src="<?= BASE_PATH ?>/assets/images/fatorize.png" alt="" onerror="this.style.display='none'">
         <div class="sb-brand-text">
             <div class="sb-name">FATORIZE</div>
             <div class="sb-branch"><?= htmlspecialchars($branchName) ?></div>
@@ -24,7 +34,16 @@ $currentPage = $currentModule ?? '';
 
     <!-- Nav -->
     <nav class="sb-nav">
-        <?php foreach ($menu as $section): ?>
+        <?php
+        // عتبات التجميع البصري — مطابقة لترتيب $priority بدالة
+        // reorderAndFilterSidebarMenu(): أول 4 = الأكثر استخداماً،
+        // التالية 3 = دوري، الباقي = إداري.
+        $groupLabels = [0 => 'الأكثر استخداماً', 4 => 'دوري', 7 => 'إداري'];
+        foreach ($menu as $i => $section):
+            if (isset($groupLabels[$i])):
+        ?>
+            <div class="sb-group-label"><?= htmlspecialchars($groupLabels[$i]) ?></div>
+        <?php endif; ?>
 
             <div class="sb-group <?= isGroupActive($currentPage, $section) ? 'open' : '' ?>"
                 data-key="<?= $section['key'] ?>">
@@ -66,10 +85,10 @@ $currentPage = $currentModule ?? '';
             </div>
         </div>
         <div class="sb-footer-links">
-            <a href="/bayhas/select_account.php">
+            <a href="<?= BASE_PATH ?>/select_account.php">
                 <i class="bi bi-arrow-repeat"></i> تغيير الفرع
             </a>
-            <a href="/bayhas/logout.php" class="logout">
+            <a href="<?= BASE_PATH ?>/logout.php" class="logout">
                 <i class="bi bi-box-arrow-right"></i> خروج
             </a>
         </div>
@@ -77,6 +96,59 @@ $currentPage = $currentModule ?? '';
 </aside>
 
 <?php
+/**
+ * يرتب أقسام القائمة الجانبية حسب تكرار الاستخدام الفعلي بدل الترتيب
+ * الخام من جدول modules (sort_order)، ويخفي قسم "الإنتاج" لفرع بيع.
+ *
+ * ⚠ مؤقت/يدوي: الترتيب والإخفاء هون معتمدين على مفاتيح الأقسام (section
+ * key) اللي افترضناها بناءً على بادئات moduleUrl() الموجودة فعلياً
+ * (sales./purchases./inventory./finance./crm./hr./expenses./admin.).
+ * "الإنتاج" بالتحديد اسم مفتاحه غير مؤكد (production أو manufacturing)
+ * — بيتفلتر هون بمطابقة مزدوجة (مفتاح أو نص التسمية) لحد ما يتأكد
+ * الاسم الفعلي من جدول modules مباشرة. لو المطابقة ما نجحت، القسم
+ * بيضل ظاهر بس بآخر القائمة (فشل آمن، مو إخفاء أعمى).
+ *
+ * كمان: الإخفاء مربوط حرفياً بـ table_suffix === 'ret' حالياً (نفس
+ * نمط الضعف الموثّق بـ dashboard.php) — لازم يتحول لاحقاً للتحقق من
+ * branch_type === 'retail' ديناميكياً بدل قيمة ثابتة.
+ */
+function reorderAndFilterSidebarMenu(array $menu, string $tableSuffix): array
+{
+    // الأكثر استخداماً أولاً، فالدوري، فالإداري. أي قسم غير مذكور هون
+    // (غير معروف/جديد) بينضاف تلقائياً بالآخر، مش بيختفي.
+    $priority = ['sales', 'inventory', 'purchases', 'crm', 'finance', 'expenses', 'hr', 'admin'];
+
+    $isRetailBranch = ($tableSuffix === 'ret');
+    $hiddenKeys     = ['production', 'manufacturing'];
+    $hiddenLabelHints = ['إنتاج', 'تصنيع'];
+
+    $visible = [];
+    foreach ($menu as $section) {
+        $key   = $section['key'] ?? '';
+        $label = $section['label'] ?? '';
+
+        $looksLikeProduction = in_array($key, $hiddenKeys, true);
+        foreach ($hiddenLabelHints as $hint) {
+            if (mb_strpos($label, $hint) !== false) { $looksLikeProduction = true; break; }
+        }
+
+        if ($isRetailBranch && $looksLikeProduction) {
+            continue; // مخفي لفرع بيع — راجع التعليق أعلاه لو انضاف فرع تصنيع لاحقاً
+        }
+        $visible[] = $section;
+    }
+
+    usort($visible, function ($a, $b) use ($priority) {
+        $posA = array_search($a['key'] ?? '', $priority, true);
+        $posB = array_search($b['key'] ?? '', $priority, true);
+        $posA = ($posA === false) ? count($priority) : $posA;
+        $posB = ($posB === false) ? count($priority) : $posB;
+        return $posA <=> $posB;
+    });
+
+    return $visible;
+}
+
 /**
  * إضافة الطلبات الداخلية والمنتجات لقسم المخزون
  */
@@ -115,46 +187,63 @@ function isGroupActive(string $current, array $section): bool
 function moduleUrl(string $key): string
 {
     static $map = [
+    // ⚠ خريطة مُعاد بناؤها بالكامل (يوليو ٢٠٢٦) بمطابقة مباشرة لتشجير
+    // modules/ الحقيقي المؤكد من المستخدم. أي مفتاح كان يشاور على ملف
+    // غير موجود انحذف أو انصلح مساره. راجع Migration Log بـ
+    // README-claude.md للتفاصيل الكاملة.
+
     // المبيعات
-    'sales.invoices' => 'sales/invoices.php',
-    'sales.invoices.new' => 'sales/invoices.php?action=new',
-    'sales.returns' => 'sales/returns.php',
+    'sales.invoices'     => 'sales/sales_index.php',        // ✅ مسار مُصلح (كان sales/invoices.php)
+    'sales.invoices.new' => 'sales/sales_invoice_new.php',  // ✅ مسار مُصلح (كان sales/invoices.php?action=new)
+    // sales.returns أُزيل — sales_returns_ret schema-only، لا صفحة فعلية
+
     // المشتريات
-    'purchases.invoices' => 'purchases/index.php',
+    'purchases.invoices'  => 'purchases/index.php',
     'purchases.suppliers' => 'purchases/suppliers.php',
-    'purchases.returns' => 'purchases/returns.php',
+    // purchases.returns أُزيل — purchase_returns_ret schema-only، لا صفحة فعلية
+
     // المخزون
-    'inventory.products' => 'inventory/products.php',
-    'inventory.warehouse' => 'inventory/warehouse.php',
-    'inventory.movements' => 'inventory/movements.php',
-    'inventory.raw_materials' => 'inventory/raw_materials.php',
-    'inventory.operations' => 'inventory/operations.php',
-    'inventory.consumables' => 'inventory/consumables.php',
-    // المالية
-    'finance.accounts' => 'accounting/accounts.php',
-    'finance.journal' => 'accounting/journal.php',
-    'finance.receipts' => 'receipts/index.php',
-    'finance.expenses' => 'expenses/index.php',
-    'finance.reports' => 'reports/index.php',
+    'inventory.products'         => 'inventory/products.php',
+    'inventory.warehouse'        => 'inventory/warehouse.php',
+    'inventory.movements'        => 'inventory/movements.php',
+    'inventory.internal_orders'  => 'inventory/internal_orders.php', // ✅ كانت ناقصة تماماً — كان يرجع '#' دايماً
+    'inventory.consumables'          => 'inventory/consumables.php',            // بدون تغيير — كانت صحيحة أصلاً
+    'inventory.consumable_purchases' => 'inventory/consumable_purchases.php',   // ✅ كانت ناقصة تماماً من الخريطة
+    'inventory.consumable_issues'    => 'inventory/consumable_issues.php',      // ✅ كانت ناقصة تماماً من الخريطة
+    // inventory.raw_materials / inventory.operations أُزيلا — لا ملفات فعلية بعد (مواد أولية/تصنيع)
+
+    // المحاسبة/المالية
+    'finance.accounts'          => 'accounting/accounts.php',
+    'finance.account_settings'  => 'accounting/account_settings.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    'finance.journal'            => 'accounting/journal.php',
+    'finance.receipts'           => 'accounting/receipts.php',        // ✅ مسار مُصلح (كان receipts/index.php)
+    'finance.expenses'           => 'accounting/expenses.php',        // ✅ مسار مُصلح (كان expenses/index.php)
+    'finance.currencies'         => 'accounting/currencies.php',      // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    'finance.shipping_carriers'  => 'accounting/shipping_carriers.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    // finance.reports أُزيل — لا صفحة تقارير فعلية بعد
+
     // العملاء والموردون
-    'crm.customers' => 'customers/index.php',
-    'crm.customers.statement' => 'customers/statement.php',
-    'crm.suppliers' => 'purchases/suppliers.php',
-    'crm.suppliers.statement' => 'suppliers/statement.php',
+    'crm.customers' => 'sales/customers.php',      // ✅ مسار مُصلح (كان customers/index.php — الملف فعلياً جوا sales/)
+    'crm.suppliers' => 'purchases/suppliers.php',  // نفس ملف purchases.suppliers (صفحة موردين واحدة، مرتبطة من قسمين)
+    // crm.customers.statement / crm.suppliers.statement أُزيلا — لا صفحات كشف حساب فعلية بعد
+
     // الموارد البشرية
-    'hr.employees' => 'hr/employees.php',
+    'hr.employees'  => 'hr/employees.php',
     'hr.attendance' => 'hr/attendance.php',
-    'hr.payroll' => 'hr/payroll.php',
-    'hr.reports' => 'hr/reports.php',
-    // المصاريف التشغيلية
-    'expenses.consumables' => 'expenses/consumables.php',
-    'expenses.utilities' => 'expenses/utilities.php',
-    'expenses.reports' => 'expenses/reports.php',
+    'hr.payroll'    => 'hr/payroll.php',
+    // hr.reports أُزيل — لا صفحة تقارير فعلية بعد
+
+    // ⚫ قسم "expenses.*" (المصاريف والمستهلكات القديم) أُزيل بالكامل —
+    // مجلد expenses/ ما إله وجود إطلاقاً بالمشروع. كان قسم كامل بالشريط
+    // الجانبي بروابط ميتة (٤٠٤/#). لازم أيضاً يُحذف صف "المصاريف
+    // والمستهلكات" القديم (بمفاتيحه الثلاثة) من جدول modules نفسه —
+    // تصليح الخريطة هون لا يخفي القسم من الشريط الجانبي وحده.
+
     // الإدارة
-    'admin.users' => 'admin/users.php',
+    'admin.users'       => 'admin/users.php',
     'admin.permissions' => 'admin/permissions.php',
-    'admin.settings' => 'settings/index.php',
-    'admin.branches' => 'admin/branches.php',
+    'admin.branches'    => 'admin/branches.php',
+    // admin.settings أُزيل — لا صفحة settings/index.php فعلية بعد
     ];
     // قراءة base_path من session حسب الفرع
     // ⚠ 'ret' = فرع البيع 1 (كان aleppo/alp سابقاً، انترينيم لـ retail1/ret).
@@ -163,7 +252,7 @@ function moduleUrl(string $key): string
     $suffix = $_SESSION['table_suffix'] ?? 'ret';
     $branchFolderMap = ['ret' => 'retail1', 'ist' => 'istanbul', 'gaz' => 'gaziantep', 'lab' => 'lab', 'alp_lab' => 'alep_lab'];
     $branchFolder = isset($branchFolderMap[$suffix]) ? $branchFolderMap[$suffix] : 'retail1';
-    $base = '/bayhas/' . $branchFolder . '/modules/';
+    $base = BASE_PATH . '/' . $branchFolder . '/modules/';
     return $base . ($map[$key] ?? '#');
 }
 ?>

@@ -1,9 +1,10 @@
 <?php
-ini_set('display_errors', 1);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
 error_reporting(E_ALL);
 /**
  * products.php — إدارة المنتجات (فرع البيع)
- * المسار: /bayhas/aleppo/modules/inventory/products.php
+ *retail1/modules/inventory/products.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -28,29 +29,35 @@ $branchCurRow = $pdo->prepare("SELECT c.id, c.code, c.symbol FROM branches b
     JOIN currencies c ON c.id = b.base_currency_id
     WHERE b.table_suffix = ? LIMIT 1");
 $branchCurRow->execute([$TS]);
-$branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC) ?: ['id'=>1,'code'=>'USD','symbol'=>'$'];
+$branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC) ?: ['id' => 1, 'code' => 'USD', 'symbol' => '$'];
 
 // خريطة العملات (id => code/symbol/exchange_rate) لعرضها بجدول المنتجات
 $currenciesMap = [];
 try {
     foreach ($pdo->query("SELECT id, code, symbol, exchange_rate FROM currencies") as $c) {
-        $currenciesMap[(int)$c['id']] = $c;
+        $currenciesMap[(int) $c['id']] = $c;
     }
-} catch (Exception $e) { $currenciesMap = []; }
+} catch (Exception $e) {
+    $currenciesMap = [];
+}
 
 /**
  * حساب القيمة الحالية التقريبية لسعر مسجَّل بعملة قديمة → عملة الفرع الحالية
  * باستخدام أسعار الصرف الحية (وليست المجمّدة وقت التسجيل)
  */
-function liveConvert(float $amount, int $fromCurId, int $toCurId, array $currenciesMap): ?float {
-    if ($fromCurId === $toCurId) return $amount;
+function liveConvert(float $amount, int $fromCurId, int $toCurId, array $currenciesMap): ?float
+{
+    if ($fromCurId === $toCurId)
+        return $amount;
     $from = $currenciesMap[$fromCurId] ?? null;
-    $to   = $currenciesMap[$toCurId]   ?? null;
-    if (!$from || !$to) return null;
+    $to = $currenciesMap[$toCurId] ?? null;
+    if (!$from || !$to)
+        return null;
     // exchange_rate كل عملة = عدد وحداتها مقابل 1 من عملة المرجع العالمي
-    $fromRate = (float)$from['exchange_rate'] ?: 1.0;
-    $toRate   = (float)$to['exchange_rate']   ?: 1.0;
-    if ($fromRate <= 0) return null;
+    $fromRate = (float) $from['exchange_rate'] ?: 1.0;
+    $toRate = (float) $to['exchange_rate'] ?: 1.0;
+    if ($fromRate <= 0)
+        return null;
     // 1 وحدة fromCur = (toRate/fromRate) وحدة toCur
     return $amount * ($toRate / $fromRate);
 }
@@ -80,26 +87,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $sizes = $szSt->fetchAll();
             $grpMap = [];
             foreach ($sizes as $s) {
-                $key = isset($s['price_group']) ? 'pg_'.$s['price_group'] : (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
+                $key = isset($s['price_group']) ? 'pg_' . $s['price_group'] : (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
                 if (!isset($grpMap[$key]))
                     $grpMap[$key] = [
-                        'sizes'            => [],
-                        'selling_price'    => $s['selling_price'],
-                        'cost_price'       => $s['cost_price'],
-                        'packet_qty'       => 0,
+                        'sizes' => [],
+                        'selling_price' => $s['selling_price'],
+                        'cost_price' => $s['cost_price'],
+                        'packet_qty' => 0,
                         'base_currency_id' => $s['base_currency_id'] ?? null,
-                        'currency_id'      => $s['currency_id'] ?? null,
-                        'exchange_rate'    => $s['exchange_rate'] ?? 1,
+                        'currency_id' => $s['currency_id'] ?? null,
+                        'exchange_rate' => $s['exchange_rate'] ?? 1,
                     ];
                 $grpMap[$key]['sizes'][] = $s['size'];
                 $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
             }
             $prod['groups'] = array_values($grpMap);
             // عملة الفرع الحالية + خريطة العملات لحساب القيمة الحية بالواجهة
-            $prod['current_base_currency_id'] = (int)$branchCurRow['id'];
-            $prod['current_base_symbol']      = $branchCurRow['symbol'];
-            $prod['currencies_map'] = array_map(function($c){
-                return ['code'=>$c['code'],'symbol'=>$c['symbol'],'exchange_rate'=>(float)$c['exchange_rate']];
+            $prod['current_base_currency_id'] = (int) $branchCurRow['id'];
+            $prod['current_base_symbol'] = $branchCurRow['symbol'];
+            $prod['currencies_map'] = array_map(function ($c) {
+                return ['code' => $c['code'], 'symbol' => $c['symbol'], 'exchange_rate' => (float) $c['exchange_rate']];
             }, $currenciesMap);
 
             // الألوان عبر color_id من جدول الألوان
@@ -344,11 +351,11 @@ $catColors = [
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>المنتجات — <?= htmlspecialchars($branchName) ?></title>
-    <link rel="icon" href="/bayhas/assets/images/logo.png">
+    <link rel="icon" href="<?= BASE_PATH ?>/assets/images/logo.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="/bayhas/assets/css/layout.css" rel="stylesheet">
+    <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
     <style>
         .stat-card {
             background: #fff;
@@ -715,7 +722,15 @@ $catColors = [
             font-weight: 600;
             color: #334155
         }
-.acc-badge{font-size:.68rem;padding:2px 7px;border-radius:5px;background:#f1f5f9;color:#475569;font-family:monospace}
+
+        .acc-badge {
+            font-size: .68rem;
+            padding: 2px 7px;
+            border-radius: 5px;
+            background: #f1f5f9;
+            color: #475569;
+            font-family: monospace
+        }
     </style>
 </head>
 
@@ -854,14 +869,14 @@ $catColors = [
                                     $szSt->execute([$prod['id']]);
                                     $pSizes = $szSt->fetchAll();
                                     foreach ($pSizes as $s) {
-                                        $k = isset($s['price_group']) ? 'pg_'.$s['price_group'] : (string) $s['selling_price'];
+                                        $k = isset($s['price_group']) ? 'pg_' . $s['price_group'] : (string) $s['selling_price'];
                                         $grps[$k][] = $s['size'];
                                         if ($minSell === null || (float) $s['selling_price'] < $minSell) {
                                             $minSell = (float) $s['selling_price'];
                                             $priceCurInfo = [
                                                 'base_currency_id' => $s['base_currency_id'] ?? null,
-                                                'currency_id'      => $s['currency_id'] ?? null,
-                                                'exchange_rate'    => $s['exchange_rate'] ?? 1,
+                                                'currency_id' => $s['currency_id'] ?? null,
+                                                'exchange_rate' => $s['exchange_rate'] ?? 1,
                                             ];
                                         }
                                     }
@@ -958,10 +973,11 @@ $catColors = [
                                         <?php $grpCount = count($grps); ?>
                                         <?php if ($grpCount > 0): ?>
                                             <span class="text-muted">
-                                                <i class="bi bi-tags me-1"></i><?= $grpCount ?> <?= $grpCount===1?'سعر':'أسعار' ?>
+                                                <i class="bi bi-tags me-1"></i><?= $grpCount ?>
+                                                <?= $grpCount === 1 ? 'سعر' : 'أسعار' ?>
                                             </span>
                                             <button class="btn btn-sm p-0 border-0" style="font-size:.7rem;color:#2563eb"
-                                                    onclick="viewDetail(<?= $prod['id'] ?>)">
+                                                onclick="viewDetail(<?= $prod['id'] ?>)">
                                                 عرض التفاصيل
                                             </button>
                                         <?php else: ?>
@@ -1492,9 +1508,9 @@ $catColors = [
                     ];
 
                     // ── جلب بيانات العملات (تُرسل من الـ backend) ──
-                    const currentBaseId  = p.current_base_currency_id;
+                    const currentBaseId = p.current_base_currency_id;
                     const currentBaseSym = p.current_base_symbol || '$';
-                    const currenciesMap  = p.currencies_map || {}; // {id: {code,symbol,exchange_rate}}
+                    const currenciesMap = p.currencies_map || {}; // {id: {code,symbol,exchange_rate}}
 
                     function liveConvertJS(amount, fromId, toId) {
                         if (fromId === toId) return amount;
@@ -1507,7 +1523,7 @@ $catColors = [
                     const grpsHtml = (p.groups || []).map((g, i) => {
                         const [bg, clr, br] = GRP_COLORS[i % 4];
                         const szTags = g.sizes.map(s => `<span class="sz-mini">${s}</span>`).join('');
-                        const recId  = g.base_currency_id ? parseInt(g.base_currency_id) : currentBaseId;
+                        const recId = g.base_currency_id ? parseInt(g.base_currency_id) : currentBaseId;
                         const recCur = currenciesMap[recId] || { code: '', symbol: currentBaseSym };
                         const sellVal = parseFloat(g.selling_price || 0);
                         const costVal = g.cost_price !== null ? parseFloat(g.cost_price) : null;
@@ -1515,7 +1531,7 @@ $catColors = [
                         if (recId !== currentBaseId) {
                             const liveSell = liveConvertJS(sellVal, recId, currentBaseId);
                             liveHtml = `<div style="font-size:.68rem;color:#2563eb;font-weight:400;margin-top:1px">
-                                <i class="bi bi-arrow-repeat me-1"></i>${liveSell!==null ? '≈ '+liveSell.toFixed(2)+' '+currentBaseSym+' (اليوم)' : '—'}
+                                <i class="bi bi-arrow-repeat me-1"></i>${liveSell !== null ? '≈ ' + liveSell.toFixed(2) + ' ' + currentBaseSym + ' (اليوم)' : '—'}
                             </div>`;
                         }
                         return `<div class="grp-block">
@@ -1527,10 +1543,10 @@ $catColors = [
                         <div style="margin-right:auto;text-align:left">
                             <div style="font-size:.8rem;font-weight:700;color:#1e293b">
                                 ${sellVal.toFixed(2)} ${recCur.symbol}
-                                <span class="text-muted" style="font-size:.62rem;font-weight:400">(${recCur.code||'—'} — كما سُجّل)</span>
+                                <span class="text-muted" style="font-size:.62rem;font-weight:400">(${recCur.code || '—'} — كما سُجّل)</span>
                             </div>
                             ${liveHtml}
-                            ${costVal!==null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px">تكلفة: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
+                            ${costVal !== null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px">تكلفة: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-1">${szTags}</div>
