@@ -21,6 +21,9 @@ $TSP   = "product_suppliers_{$TS}";
 $TW    = "warehouses_{$TS}";
 $TWI   = "warehouse_items_{$TS}";
 $TV    = "product_variants_{$TS}";
+$TPR   = "products_{$TS}";
+$TPSZ  = "product_sizes_{$TS}";
+$TPCL  = "product_colors_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
 // بيانات الفرع للطباعة
@@ -63,96 +66,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 s.email AS supplier_email,
                 s.address AS supplier_address,
                 s.tax_number AS supplier_tax,
+                c.code AS currency,
                 c.symbol AS currency_symbol,
-                w.name AS warehouse_name,
-                pi_w.warehouse_id AS warehouse_id
+                w.name AS warehouse_name
                 FROM `{$TP}` p
                 LEFT JOIN `{$TSP}` s ON s.id=p.supplier_id
-                LEFT JOIN currencies c ON c.code=p.currency
-                LEFT JOIN (SELECT purchase_id, warehouse_id FROM `{$TPI}` GROUP BY purchase_id) pi_w ON pi_w.purchase_id=p.id
-                LEFT JOIN `{$TW}` w ON w.id=pi_w.warehouse_id
+                LEFT JOIN currencies c ON c.id=p.invoice_currency_id
+                LEFT JOIN `{$TW}` w ON w.id=p.warehouse_id
                 WHERE p.id=?");
             $st->execute([$id]);
             $pur = $st->fetch();
             if (!$pur) throw new Exception('الفاتورة غير موجودة');
+            // warehouse_name/warehouse_id now come from purchases_{TS}.warehouse_id
+            // (one warehouse per whole invoice) instead of purchase_items_{TS} —
+            // resolved per the schema-change design decision.
 
-            $it = $pdo->prepare("SELECT pi.*, w.name AS wh_name
+            // Confirmed against the real product_sizes_alp/product_colors_alp DDL:
+            // sizes use a `size` column (not `name`); colors use `name` — different
+            // conventions between the two tables.
+            $it = $pdo->prepare("SELECT pi.*,
+                pr.name AS product_name,
+                pr.model_number AS model_number,
+                psz.size AS size,
+                pcl.name AS color,
+                pv.barcode AS barcode
                 FROM `{$TPI}` pi
-                LEFT JOIN `{$TW}` w ON w.id=pi.warehouse_id
+                LEFT JOIN `{$TPR}` pr ON pr.id=pi.product_id
+                LEFT JOIN `{$TV}` pv ON pv.id=pi.variant_id
+                LEFT JOIN `{$TPSZ}` psz ON psz.id=pv.size_id
+                LEFT JOIN `{$TPCL}` pcl ON pcl.id=pv.color_id
                 WHERE pi.purchase_id=? ORDER BY pi.id");
             $it->execute([$id]);
             $pur['items'] = $it->fetchAll();
             echo json_encode(['ok'=>true,'data'=>$pur]);
         }
 
-        elseif ($act === 'confirm_purchase') {
-            requirePermission('purchases.invoices','edit');
-            $id  = (int)$_POST['id'];
-            $pSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
-            $pSt->execute([$id]);
-            $pur = $pSt->fetch();
-            if (!$pur) throw new Exception('الفاتورة غير موجودة');
-            if ($pur['status'] !== 'draft')
-                throw new Exception('يمكن تأكيد المسودات فقط');
-
-            $pdo->beginTransaction();
-            try {
-                // 1. تحديث المخزون (warehouse_items)
-                $items = $pdo->prepare("SELECT * FROM `{$TPI}` WHERE purchase_id=?");
-                $items->execute([$id]);
-                foreach ($items->fetchAll() as $row) {
-                    if (!$row['variant_id'] || !$row['warehouse_id']) continue;
-                    $vr = $pdo->prepare("SELECT product_id FROM `{$TV}` WHERE id=?");
-                    $vr->execute([$row['variant_id']]);
-                    $prodId = (int)$vr->fetchColumn();
-                    $pdo->prepare("INSERT INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,min_quantity)
-                        VALUES (?,?,?,?,0)
-                        ON DUPLICATE KEY UPDATE quantity=quantity+?")
-                        ->execute([$row['warehouse_id'],$row['variant_id'],$prodId,
-                            $row['quantity'],$row['quantity']]);
-                }
-
-                // 2. تحديث حالة الفاتورة + المبالغ
-                // paid_amount=0, balance_amount=final_amount (المستحق للمورد)
-                $pdo->prepare("UPDATE `{$TP}` SET
-                    status='received',
-                    payment_status='pending',
-                    paid_amount=0,
-                    balance_amount=final_amount,
-                    updated_by=?, updated_at=NOW()
-                    WHERE id=?")
-                    ->execute([$_SESSION['user_id'],$id]);
-
-                $pdo->commit();
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-            echo json_encode(['ok'=>true,'msg'=>'تم تأكيد الفاتورة وتحديث المخزون — المبلغ المستحق: '.number_format($pur['final_amount'],2).' '.$pur['currency']]);
-        }
-
-        elseif ($act === 'cancel_purchase') {
-            requirePermission('purchases.invoices','edit');
-            $id  = (int)$_POST['id'];
-            $pSt = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
-            $pSt->execute([$id]);
-            $pur = $pSt->fetch();
-            if (!$pur) throw new Exception('الفاتورة غير موجودة');
-            if ($pur['status']==='cancelled') throw new Exception('الفاتورة ملغاة مسبقاً');
-            if ($pur['status']==='received') {
-                $items = $pdo->prepare("SELECT * FROM `{$TPI}` WHERE purchase_id=?");
-                $items->execute([$id]);
-                foreach ($items->fetchAll() as $row) {
-                    if (!$row['variant_id']||!$row['warehouse_id']) continue;
-                    $pdo->prepare("UPDATE `{$TWI}` SET quantity=GREATEST(0,quantity-?)
-                        WHERE variant_id=? AND warehouse_id=?")
-                        ->execute([$row['quantity'],$row['variant_id'],$row['warehouse_id']]);
-                }
-            }
-            $pdo->prepare("UPDATE `{$TP}` SET status='cancelled',updated_by=?,updated_at=NOW() WHERE id=?")
-                ->execute([$_SESSION['user_id'],$id]);
-            echo json_encode(['ok'=>true,'msg'=>'تم إلغاء الفاتورة']);
-        }
+        // ملاحظة: أُزيل من هنا إجراءان محليان ميتان (dead code) لم يكونا
+        // يُستدعَيان من أي زر بالواجهة إطلاقاً — confirm_purchase و
+        // cancel_purchase. تحقّقتُ عبر البحث بكل استدعاءات الجافاسكربت
+        // بهذا الملف: زر "تأكيد الاستلام" وزر "إلغاء" ينادوا فعلياً
+        // api/confirm_purchase_invoice.php حصراً (كلاهما يُرحّلان القيود
+        // المحاسبية بشكل صحيح). الإجراءان المحذوفان كانا يحدّثان المخزون
+        // فقط بدون أي قيد محاسبي — لو بقيا موجودين، أي تعديل مستقبلي
+        // بسيط بالواجهة كان ممكن (بالغلط) يستدعيهما بدل المسار الصحيح،
+        // ليعيد بصمت نفس مشكلة "تأكيد بدون قيود" التي أُصلحت سابقاً
+        // بملف المبيعات (sales_index.php).
 
         else throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
@@ -175,11 +133,12 @@ if ($dateFrom) { $where .= ' AND p.purchase_date>=?'; $params[]=$dateFrom; }
 if ($dateTo)   { $where .= ' AND p.purchase_date<=?'; $params[]=$dateTo; }
 
 $stmt = $pdo->prepare("SELECT p.*, s.name AS supplier_name,
+    c.code AS currency,
     c.symbol AS currency_symbol,
     COUNT(pi.id) AS items_count
     FROM `{$TP}` p
     LEFT JOIN `{$TSP}` s ON s.id=p.supplier_id
-    LEFT JOIN currencies c ON c.code=p.currency
+    LEFT JOIN currencies c ON c.id=p.invoice_currency_id
     LEFT JOIN `{$TPI}` pi ON pi.purchase_id=p.id
     {$where}
     GROUP BY p.id ORDER BY p.created_at DESC LIMIT 200");
@@ -195,11 +154,11 @@ try {
         COUNT(*) AS total,
         SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) AS drafts,
         SUM(CASE WHEN status='received' THEN 1 ELSE 0 END) AS received,
-        COALESCE(SUM(CASE WHEN status!='cancelled' THEN final_amount_usd END),0) AS total_usd,
-        COALESCE(SUM(CASE WHEN payment_status='pending' AND status='received' THEN final_amount_usd END),0) AS balance_usd
+        COALESCE(SUM(CASE WHEN status!='cancelled' THEN final_amount_base_currency END),0) AS total_base,
+        COALESCE(SUM(CASE WHEN payment_status='pending' AND status='received' THEN final_amount_base_currency END),0) AS balance_base
         FROM `{$TP}`")->fetch();
 } catch (Exception $e) {
-    $stats=['total'=>0,'drafts'=>0,'received'=>0,'total_usd'=>0,'balance_usd'=>0];
+    $stats=['total'=>0,'drafts'=>0,'received'=>0,'total_base'=>0,'balance_base'=>0];
 }
 
 $STATUS_MAP=[
@@ -299,13 +258,13 @@ table.mtbl tr:hover td{background:#f8faff}
     <div class="col-6 col-md-3">
         <div class="stat-card">
             <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-currency-dollar text-success"></i></div>
-            <div><div class="stat-val n"><?= number_format($stats['total_usd'],2) ?> $</div><div class="stat-lbl">إجمالي المشتريات</div></div>
+            <div><div class="stat-val n"><?= number_format($stats['total_base'],2) ?> $</div><div class="stat-lbl">إجمالي المشتريات</div></div>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="stat-card">
             <div class="stat-icon" style="background:#fee2e2"><i class="bi bi-exclamation-circle text-danger"></i></div>
-            <div><div class="stat-val n"><?= number_format($stats['balance_usd'],2) ?> $</div><div class="stat-lbl">المستحق للموردين</div></div>
+            <div><div class="stat-val n"><?= number_format($stats['balance_base'],2) ?> $</div><div class="stat-lbl">المستحق للموردين</div></div>
         </div>
     </div>
 </div>
@@ -382,7 +341,7 @@ table.mtbl tr:hover td{background:#f8faff}
             <td><span class="badge bg-secondary-subtle text-secondary" style="font-size:.68rem"><?= $pur['currency'] ?></span></td>
             <td class="n fw-600"><?= number_format($pur['final_amount'],2) ?> <?=$sym?></td>
             <td class="n text-muted" style="font-size:.78rem">
-                <?= $pur['final_amount_usd'] ? number_format($pur['final_amount_usd'],2).' $' : '—' ?>
+                <?= $pur['final_amount_base_currency'] ? number_format($pur['final_amount_base_currency'],2).' $' : '—' ?>
             </td>
             <td><span class="<?= $pay['cls'] ?>" style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
             <td><span class="badge <?=$st['cls']?>" style="font-size:.68rem"><?=$st['label']?></span></td>
@@ -798,12 +757,12 @@ function viewInvoice(id){
             ['#fff7ed','#7c2d12','#fed7aa'],['#f5f3ff','#4c1d95','#ddd6fe']];
         const grpMap={};
         (p.items||[]).forEach(it=>{
-            const k=`${it.product_id||it.product_name}_${it.unit_price}_${it.color||''}`;
+            const k=`${it.product_id||it.product_name||it.id}_${it.unit_price}_${it.color||''}`;
             if(!grpMap[k]){
                 grpMap[k]={
-                    product_name:it.product_name, model_number:it.model_number||'',
+                    product_name:it.product_name||'—', model_number:it.model_number||'',
                     unit_price:parseFloat(it.unit_price),
-                    unit_price_usd:parseFloat(it.unit_price_usd||(parseFloat(it.unit_price)/rate)),
+                    unit_price_base:parseFloat(it.unit_price_base_currency||(parseFloat(it.unit_price)/rate)),
                     color:it.color||'—', wh_name:it.wh_name||'—',
                     qty:parseFloat(it.quantity), // كمية أول سطر = كمية اللون
                     total:0, sizes:[], sizeCount:0
@@ -834,7 +793,7 @@ function viewInvoice(id){
                 <td class="text-center" style="font-size:.78rem">${g.color}</td>
                 <td class="n text-center fw-600">${g.qty.toFixed(0)}</td>
                 <td class="n text-center">${g.unit_price.toFixed(4)} ${sym}</td>
-                <td class="n text-center" style="color:#16a34a;font-size:.72rem">${g.unit_price_usd.toFixed(4)} $</td>
+                <td class="n text-center" style="color:#16a34a;font-size:.72rem">${g.unit_price_base.toFixed(4)} $</td>
                 <td class="n text-end fw-600">${g.total.toFixed(2)} ${sym}</td>
                 <td style="font-size:.75rem;color:#64748b">${g.wh_name}</td>
             </tr>`;
@@ -876,7 +835,7 @@ function viewInvoice(id){
                 <div class="det-row" style="font-weight:700;font-size:.9rem;border-top:1px solid #e2e8f0;padding-top:6px">
                     <span>الصافي</span>
                     <span class="n">${grpRows.reduce((s,g)=>s+g.total,0).toFixed(2)} ${sym}
-                    ${!isUSD&&p.final_amount_usd?`<small style="color:#94a3b8;font-weight:400"> (${parseFloat(p.final_amount_usd).toFixed(2)} $)</small>`:''}</span>
+                    ${!isUSD&&p.final_amount_base_currency?`<small style="color:#94a3b8;font-weight:400"> (${parseFloat(p.final_amount_base_currency).toFixed(2)} $)</small>`:''}</span>
                 </div>
             </div>
           </div>
@@ -931,12 +890,14 @@ function openConfirmModal(id,no,total,sym){
         const fmt=n=>new Intl.NumberFormat('en').format(parseFloat(n||0).toFixed(2));
 
         // ── المستودع من الفاتورة ──
+        // now sourced from purchases_{TS}.warehouse_id (one warehouse per
+        // whole invoice) instead of purchase_items_{TS} — see get_purchase.
         document.getElementById('cWarehouseName').textContent=p.warehouse_name||'المستودع الرئيسي';
         document.getElementById('cWarehouse').value=p.warehouse_id||'';
         // بنود — مجمعة حسب المنتج
         const groups={};
         (p.items||[]).forEach(it=>{
-            const key=it.product_name+(it.color?' - '+it.color:'');
+            const key=(it.product_name||('بند #'+it.id))+(it.color?' - '+it.color:'');
             if(!groups[key]) groups[key]={name:key,qty:0,unit:parseFloat(it.unit_price),total:0};
             groups[key].qty+=parseFloat(it.quantity);
             groups[key].total+=parseFloat(it.total_price);
@@ -1128,9 +1089,9 @@ function printPurchaseInvoice(){
         // تجميع البنود
         const groups={};
         (p.items||[]).forEach(it=>{
-            const key=it.model_number+'|'+it.product_name+'|'+it.color;
+            const key=(it.model_number||'')+'|'+(it.product_name||('بند #'+it.id))+'|'+(it.color||'');
             if(!groups[key]) groups[key]={
-                name:it.product_name,model:it.model_number||'',
+                name:it.product_name||'—',model:it.model_number||'',
                 color:it.color||'',size:it.size||'',
                 qty:0,unit:parseFloat(it.unit_price),total:0
             };

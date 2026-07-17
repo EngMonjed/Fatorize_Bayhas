@@ -157,9 +157,12 @@ function moduleUrl(string $key): string
     'admin.branches' => 'admin/branches.php',
     ];
     // قراءة base_path من session حسب الفرع
-    $suffix = $_SESSION['table_suffix'] ?? 'alp';
-    $branchFolderMap = ['alp' => 'aleppo', 'ist' => 'istanbul', 'gaz' => 'gaziantep', 'lab' => 'lab', 'alp_lab' => 'alep_lab'];
-    $branchFolder = isset($branchFolderMap[$suffix]) ? $branchFolderMap[$suffix] : 'aleppo';
+    // ⚠ 'ret' = فرع البيع 1 (كان aleppo/alp سابقاً، انترينيم لـ retail1/ret).
+    // باقي الفروع (ist/gaz/lab/alp_lab) لسا schema-only بدون كود حقيقي —
+    // خليناها كمرجع مستقبلي لحد ما يتبنى الهيكل العام لفرع تصنيع/بيع إضافي.
+    $suffix = $_SESSION['table_suffix'] ?? 'ret';
+    $branchFolderMap = ['ret' => 'retail1', 'ist' => 'istanbul', 'gaz' => 'gaziantep', 'lab' => 'lab', 'alp_lab' => 'alep_lab'];
+    $branchFolder = isset($branchFolderMap[$suffix]) ? $branchFolderMap[$suffix] : 'retail1';
     $base = '/bayhas/' . $branchFolder . '/modules/';
     return $base . ($map[$key] ?? '#');
 }

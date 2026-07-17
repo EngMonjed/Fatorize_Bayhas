@@ -38,14 +38,20 @@ if ($editPur['status'] !== 'draft') {
 }
 
 // جلب بنود الفاتورة
+// ⚠ product_name/model_number/size/barcode لم تعد مخزّنة مباشرة على
+// purchase_items (أُزيلت بالمايغريشن) — صارت تُجلب دائماً عبر join حي
+// من products/product_variants/product_sizes، تماماً متل ما صار بصفحة
+// القائمة (index.php) وملف الإنشاء (invoice_new.php).
 $editItems = $pdo->prepare("SELECT pi.*,
-    v.color_id,
-    s.age_type,
+    v.color_id, v.barcode,
+    p.name AS product_name, p.model_number,
+    s.size, s.age_type,
     pc.name AS color_name, pc.hex_code AS color_hex
     FROM `{$TPI}` pi
-    JOIN `{$TV}` v  ON v.id = pi.variant_id
-    JOIN `{$TSZ}` s ON s.id = v.size_id
-    LEFT JOIN product_colors_{$TS} pc ON pc.id = v.color_id
+    JOIN `{$TV}` v     ON v.id = pi.variant_id
+    JOIN `{$TPROD}` p  ON p.id = pi.product_id
+    JOIN `{$TSZ}` s    ON s.id = v.size_id
+    LEFT JOIN `{$TCL}` pc ON pc.id = v.color_id
     WHERE pi.purchase_id=? ORDER BY pi.id");
 $editItems->execute([$editId]);
 $editRows = $editItems->fetchAll();
@@ -59,6 +65,45 @@ function genPurchaseNo(PDO $pdo, string $table): string {
     $seq  = $last ? (int)substr($last, -5) + 1 : 1;
     return "PUR-{$y}-" . str_pad($seq, 5, '0', STR_PAD_LEFT);
 }
+
+// ── أسعار الصرف: خريطة معرّف العملة → سعر صرفها الخام ───────────────
+// محسوبة هنا (قبل معالج AJAX) لأن search_product تحتاجها لتحويل سعر كل
+// منتج من عملته الخاصة لعملة الفاتورة الحالية.
+//
+// ⚠ ملاحظة مهمة: هذا الملف يستخدم exchange_rate الخام (نسبة للمرجع
+// العالمي/anchor) لمتغيّر exRate بالجافاسكربت — راجع data-rate على
+// حقل اختيار العملة أدناه. هذا **يختلف عن** invoice_new.php الذي
+// يستخدم rate_vs_branch (نسبة لعملة الفرع). لم أوحّد الملفّين هنا
+// لتفادي توسيع نطاق هذا الإصلاح لمشكلة تصميم منفصلة أكبر (تناقض
+// المرجعية بين صفحتي الإنشاء والتعديل) — تستحق مراجعة خاصة بها لاحقاً.
+// الإصلاح هنا يطابق فقط القاعدة المستخدمة أصلاً بهذا الملف تحديداً.
+$currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
+    ORDER BY is_base DESC, code")->fetchAll();
+
+// ⚠ عملة "المرجع العالمي" (is_base=1) — هذا الملف يحسب exRate نسبةً
+// إليها (مو نسبةً لعملة الفرع، خلافاً لـinvoice_new.php — راجع الملاحظة
+// أعلاه). نستخدمها هون فقط لعرض رمزها الصحيح بجانب حقل سعر الصرف، بدل
+// عرض رمز عملة الفرع الذي قد يكون غير صحيح لهذا الحقل تحديداً.
+$anchorCur = $currencies[0] ?? ['code'=>'USD','symbol'=>'$'];
+
+$currencyRateById = [];
+$currencyIdByCode = []; // ⚠ جديد — لتحويل رمز العملة القادم من الواجهة إلى invoice_currency_id
+$currencyCodeById = []; // ⚠ جديد — للاتجاه المعاكس عند تعبئة نموذج التعديل مسبقاً
+foreach ($currencies as $cu) {
+    $currencyRateById[(int)$cu['id']] = (float)$cu['exchange_rate'] ?: 1.0;
+    $currencyIdByCode[$cu['code']]    = (int)$cu['id'];
+    $currencyCodeById[(int)$cu['id']] = $cu['code'];
+}
+
+// ⚠ جديد — عملة الفرع الأساسية (لعمود base_currency_id الجديد على
+// purchases). هذا الملف لم يكن يجلب هذا سابقاً إطلاقاً.
+$branchCurRow = $pdo->prepare("SELECT c.id, c.code, c.symbol, c.exchange_rate FROM branches b
+    JOIN currencies c ON c.id = b.base_currency_id
+    WHERE b.table_suffix = ? LIMIT 1");
+$branchCurRow->execute([$TS]);
+$branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC)
+    ?: ['id'=>1,'code'=>'USD','symbol'=>'$','exchange_rate'=>1.0];
+
 
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
@@ -76,6 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
                     s.size, s.selling_price, s.cost_price, s.age_type,
+                    s.currency_id AS price_currency_id,
                     c.name AS color_name, c.hex_code AS color_hex
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id = v.product_id
@@ -86,7 +132,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st->execute([$q]);
             $found = $st->fetch();
 
+            // ⚠ سعر المنتج قد يكون بعملة مختلفة عن عملة الفاتورة الحالية —
+            // نُرفق سعر الصرف الخام لعملة هذا السعر تحديداً ليحوّله
+            // الجافاسكربت بشكل صحيح بدل استخدامه كما هو (كان هذا يسبب خلط
+            // عملة المنتج بعملة الفاتورة).
             if ($found) {
+                $found['price_exchange_rate'] = $currencyRateById[(int)($found['price_currency_id'] ?? 0)] ?? 1.0;
                 echo json_encode(['ok'=>true,'type'=>'barcode','data'=>$found]);
             } else {
                 // بحث بالاسم أو الموديل
@@ -94,6 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
                         s.size, s.selling_price, s.cost_price, s.age_type,
+                        s.currency_id AS price_currency_id,
                         c.name AS color_name, c.hex_code AS color_hex
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id = v.product_id
@@ -105,6 +157,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     LIMIT 200");
                 $st2->execute(["%{$q}%", "%{$q}%"]);
                 $results = $st2->fetchAll();
+                foreach ($results as &$r) {
+                    $r['price_exchange_rate'] = $currencyRateById[(int)($r['price_currency_id'] ?? 0)] ?? 1.0;
+                }
+                unset($r);
                 echo json_encode(['ok'=>true,'type'=>'search','data'=>$results]);
             }
         }
@@ -139,21 +195,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $discAmt  = $totalAmt * $discPct / 100;
             $taxAmt   = ($totalAmt - $discAmt) * $taxPct / 100;
             $finalAmt = $totalAmt - $discAmt + $taxAmt;
-            $finalUsd = $finalAmt / $exRate;
+            // ⚠ كما هو موثّق أعلاه: exRate هون نسبة للمرجع العالمي (anchor)
+            // وليس لعملة الفرع. القسمة التالية عملياً بتعطي القيمة بعملة
+            // الـanchor العالمي، مو بالضرورة بعملة الفرع الأساسية —
+            // بتتطابق فقط إذا كانت عملة الفرع نفسها هي الـanchor. هذا
+            // التناقض موجود ومو مصلَّح هون عمداً (نفس القرار الموثّق
+            // بالملاحظة أعلاه)، فقط بتخزين النتيجة بعمود final_amount_base_currency
+            // الجديد بنفس الصيغة القديمة تماماً — لم يتغيّر أي حساب.
+            $finalBase = $finalAmt / $exRate;
+
+            $invoiceCurrencyId = $currencyIdByCode[$currency] ?? (int)$branchCurRow['id'];
+            $baseCurrencyId    = (int)$branchCurRow['id'];
 
             // تحديث رأس الفاتورة
             $pdo->prepare("UPDATE `{$TP}` SET
                 supplier_id=?, purchase_date=?, due_date=?,
                 total_amount=?, tax_amount=?, discount_amount=?,
-                final_amount=?, final_amount_usd=?, balance_amount=?,
-                currency=?, exchange_rate=?,
+                final_amount=?, final_amount_base_currency=?, balance_amount=?,
+                invoice_currency_id=?, base_currency_id=?, warehouse_id=?, exchange_rate=?,
                 notes=?, updated_by=?, updated_at=NOW()
                 WHERE id=?")
                 ->execute([
                     $supplierId, $invDate, $dueDate,
                     $totalAmt, $taxAmt, $discAmt,
-                    $finalAmt, $finalUsd, $finalAmt,
-                    $currency, $exRate,
+                    $finalAmt, $finalBase, $finalAmt,
+                    $invoiceCurrencyId, $baseCurrencyId, $whId, $exRate,
                     $notes, $_SESSION['user_id'], $purId
                 ]);
 
@@ -164,37 +230,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $qty        = (float)$r['qty'];
                 $unitPr     = (float)$r['unit_price'];
                 $disc       = (float)($r['discount_pct'] ?? 0);
-                $unitPrUsd  = $unitPr / $exRate;
-                $lineTot    = $qty * $unitPr * (1 - $disc/100);
+                $unitPrBase = $unitPr / $exRate;
                 $variantIds = $r['variant_ids'] ?? [$r['variant_id'] ?? 0];
 
                 // كمية كل variant = qty (المستخدم أدخل كمية لكل كروب×لون)
-                    $variantCount = count($variantIds);
-                    foreach ($variantIds as $variantId) {
+                foreach ($variantIds as $variantId) {
                     $variantId = (int)$variantId;
                     if (!$variantId) continue;
-                    $vSt = $pdo->prepare("SELECT v.*, s.size, s.age_type, c.name AS color_name
-                        FROM `{$TV}` v
-                        JOIN `{$TSZ}` s ON s.id=v.size_id
-                        LEFT JOIN product_colors_{$TS} c ON c.id=v.color_id
-                        WHERE v.id=?");
-                    $vSt->execute([$variantId]);
-                    $vRow = $vSt->fetch();
-                    if (!$vRow) continue;
+
+                    // التحقق من وجود الـ variant فقط — بيانات العرض
+                    // (الاسم/المقاس/اللون/الباركود) صارت تُجلب دائماً عبر
+                    // join حي عند القراءة، مو مخزّنة هون.
+                    $vChk = $pdo->prepare("SELECT id FROM `{$TV}` WHERE id=?");
+                    $vChk->execute([$variantId]);
+                    if (!$vChk->fetchColumn()) continue;
+
                     // الكمية لكل variant = qty مباشرة (لأن qty = كمية هذا اللون كاملاً)
                     $varQty     = $qty;
                     $varLineTot = $varQty * $unitPr * (1 - $disc/100);
+                    $varLineDiscAmt = $varQty * $unitPr * $disc / 100; // ⚠ لم يكن يُخزَّن سابقاً رغم وجود العمود
                     $pdo->prepare("INSERT INTO `{$TPI}`
-                        (purchase_id,product_id,variant_id,product_name,model_number,
-                         size,color,barcode,quantity,unit_price,unit_price_usd,
-                         total_price,tax_percentage,tax_amount,discount_amount,warehouse_id)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,?)")
+                        (purchase_id, product_id, variant_id, quantity, unit_price, unit_price_base_currency,
+                         total_price, discount_amount, discount_percentage, created_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)")
                         ->execute([
-                            $purId,(int)$r['product_id'],$variantId,
-                            $r['product_name'],$r['model_number']??'',
-                            $vRow['size']??'',$vRow['color_name']??'',
-                            $vRow['barcode']??'',$varQty,$unitPr,$unitPrUsd,
-                            $varLineTot,$whId
+                            $purId, (int)$r['product_id'], $variantId,
+                            $varQty, $unitPr, $unitPrBase,
+                            $varLineTot, $varLineDiscAmt, $disc, $_SESSION['user_id']
                         ]);
                 }
             }
@@ -226,8 +288,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 $suppliers  = $pdo->query("SELECT id,name,phone,contact_person FROM `{$TSP}`
     WHERE status='active' AND supplier_type IN ('product','both') ORDER BY name")->fetchAll();
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
-$currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
-    ORDER BY is_base DESC, code")->fetchAll();
+// ملاحظة: $currencies محسوبة مسبقاً بأعلى الملف (قبل معالج AJAX)، وتحتوي
+// على rate_vs_branch جاهزة لكل عملة — راجع التعليق هناك.
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -370,22 +432,29 @@ $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active'
             </div>
             <div class="col-md-3">
                 <label class="field-lbl">العملة <span class="req">*</span></label>
+                <?php
+                // ⚠ يقرأ الآن من invoice_currency_id (العمود الجديد) بدل عمود
+                // currency النصي القديم — الأخير لم يعد يُكتَب من هذا الملف
+                // بعد اليوم، فسيكون NULL على أي فاتورة تُنشأ من الآن فصاعداً.
+                $editCurCode = $currencyCodeById[(int)($editPur['invoice_currency_id'] ?? 0)]
+                    ?? ($editPur['currency'] ?? $branchCurRow['code']);
+                ?>
                 <select id="iCurrency" class="form-select form-select-sm" onchange="onCurrencyChange()">
                     <?php foreach ($currencies as $cu): ?>
                     <option value="<?=$cu['code']?>"
                         data-rate="<?=$cu['exchange_rate']?>"
                         data-sym="<?= htmlspecialchars($cu['symbol']) ?>"
-                        <?= $cu['code']==$editPur['currency']?'selected':'' ?>>
+                        <?= $cu['code']==$editCurCode?'selected':'' ?>>
                         <?= htmlspecialchars($cu['code'].' — '.$cu['name']) ?>
                     </option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="field-lbl">سعر الصرف (مقابل $)</label>
+                <label class="field-lbl">سعر الصرف (مقابل <?= htmlspecialchars($anchorCur['symbol']) ?>)</label>
                 <input type="number" id="iExRate" class="form-control form-control-sm"
                        value="1" min="0.0001" step="0.0001" dir="ltr" onchange="onExRateChange()">
-                <div id="exRateHint" class="field-hint">1 USD = 1 $</div>
+                <div id="exRateHint" class="field-hint">1 <?= htmlspecialchars($anchorCur['code']) ?> = 1 <?= htmlspecialchars($anchorCur['symbol']) ?></div>
             </div>
             <div class="col-12">
                 <label class="field-lbl">ملاحظات</label>
@@ -789,7 +858,12 @@ function doSearch(){
     post({_action:'search_product',q}).then(d=>{
         if(!d.ok){toast(d.msg,'danger');return;}
         if(d.type==='barcode'){
-            // وجد مباشرة بالباركود
+            // وجد مباشرة بالباركود — لا مراجعة من المستخدم هنا، فلازم
+            // نحوّل السعر من عملة المنتج الخاصة لعملة الفاتورة الحالية
+            // قبل تمريره لـ addLine() (التي لا تجري أي تحويل بنفسها).
+            const pRate = parseFloat(d.data.price_exchange_rate) || 1;
+            const rawCost = parseFloat(d.data.cost_price || d.data.selling_price || 0);
+            d.data.cost_price = rawCost > 0 ? rawCost * (exRate / pRate) : rawCost;
             addLine(d.data);
             document.getElementById('scanInput').value='';
             document.getElementById('searchResults').style.display='none';
@@ -856,6 +930,7 @@ function openSelectModal(items){
                 variants:     [],
                 sizes:        [],
                 cost_price:   it.cost_price,
+                price_exchange_rate: it.price_exchange_rate,
             };
         }
         rows[key].variants.push(it);
@@ -901,8 +976,13 @@ function openSelectModal(items){
         const colorDot = r.color_hex
             ? `<span class="clr-dot" style="background:${r.color_hex};margin-left:4px"></span>`:'';
         const sizesStr = r.sizes.join(' · ');
-        const suggestedPrice = parseFloat(r.cost_price||0)>0
-            ? parseFloat(r.cost_price).toFixed(4) : '';
+        // تحويل سعر المنتج المرجعي (بعملته الخاصة) لعملة الفاتورة الحالية.
+        // كلا السعرين (سعر صرف المنتج وسعر صرف الفاتورة) بنفس القاعدة هنا:
+        // نسبة لعملة مرجعية عالمية واحدة، فالتحويل نسبة مباشرة بينهما.
+        const rProductRate = parseFloat(r.price_exchange_rate) || 1;
+        const rRawCost = parseFloat(r.cost_price || 0);
+        const suggestedPrice = rRawCost > 0
+            ? (rRawCost * (exRate / rProductRate)).toFixed(4) : '';
         // فاصل بين المنتجات
         if (lastProd !== r.product_id) {
             if (lastProd !== null) {

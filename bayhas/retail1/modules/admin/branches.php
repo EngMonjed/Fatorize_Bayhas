@@ -96,12 +96,14 @@ $branches = $pdo->query("SELECT * FROM branches ORDER BY sort_order, name")->fet
 // جميع الفروع لاختيار فرع المعمل
 $allBranchesMap = [];
 foreach ($branches as $b) $allBranchesMap[$b['id']] = $b;
+// ⚠ مقصود: النظام حالياً بيدعم نوعين فقط للفرع — بيع (retail) أو تصنيع
+// (factory). أي نوع تاني (مستودع/مختبر/مكتب) أُزيل مؤقتاً لحين بناء
+// الهيكل العام لفرع التصنيع/فرع البيع بشكل كامل. عمود branches.branch_type
+// بقاعدة البيانات مقيّد الآن بنفس القيمتين (ENUM('retail','factory')) —
+// راجع 01_migrate_alp_to_ret.sql.
 $branchTypes = [
-    'retail'    => ['محل بيع',   'bi-shop',        '#3b82f6', '#eff6ff'],
-    'factory'   => ['معمل/مصنع', 'bi-gear-fill',   '#10b981', '#f0fdf4'],
-    'warehouse' => ['مستودع',    'bi-building',     '#f59e0b', '#fffbeb'],
-    'lab'       => ['مختبر',     'bi-flask',        '#8b5cf6', '#fdf4ff'],
-    'office'    => ['مكتب',      'bi-briefcase',    '#64748b', '#f8fafc'],
+    'retail'  => ['فرع بيع',   'bi-shop',      '#3b82f6', '#eff6ff'],
+    'factory' => ['فرع تصنيع', 'bi-gear-fill', '#10b981', '#f0fdf4'],
 ];
 // جلب العملات من DB بالـ id
 $currencies_db = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();

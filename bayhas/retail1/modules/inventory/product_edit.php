@@ -1,15 +1,23 @@
 <?php
 /**
- * product_add.php — إضافة / تعديل منتج
- * المسار: /bayhas/aleppo/modules/inventory/product_add.php
+ * product_edit.php — تعديل منتج
+ * المسار: /bayhas/aleppo/modules/inventory/product_edit.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
 require_once __DIR__ . '/../../../config/auth.php';
+require_once __DIR__ . '/../../../includes/product_save_helper.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('inventory.products', 'view');
+requirePermission('inventory.products', 'edit');
+
+// يجب أن يكون هناك id
+$editId = (int)($_GET['id'] ?? 0);
+if (!$editId) {
+    header('Location: products.php');
+    exit;
+}
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $TS  = $_SESSION['table_suffix'];
@@ -32,15 +40,6 @@ $branchCurRow = $branchCurRow->fetch(PDO::FETCH_ASSOC)
 $BASE_CUR_ID  = (int)$branchCurRow['id'];
 $BASE_CUR_CODE= $branchCurRow['code'];
 $BASE_CUR_SYM = $branchCurRow['symbol'];
-$branchBaseRateVsAnchor = (float)$branchCurRow['exchange_rate'] ?: 1.0;
-
-$allCurrencies = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY code")->fetchAll();
-foreach ($allCurrencies as &$cu) {
-    $cu['rate_vs_branch'] = $branchBaseRateVsAnchor > 0
-        ? ((float)$cu['exchange_rate']) / $branchBaseRateVsAnchor
-        : 1.0;
-}
-unset($cu);
 
 // ── AJAX ────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
@@ -169,80 +168,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $id = (int)$pdo->lastInsertId();
             }
 
-            // حذف المقاسات القديمة وإعادة الإدخال
-            $pdo->prepare("DELETE FROM `{$TSZ}` WHERE product_id=?")->execute([$id]);
-            $sortOrder = 0;
-            foreach ($groups as $grpNo => $grp) {
-                $sellPrice  = 0;
-                $packetQty  = count($grp['sizes']);  // عدد القطع = عدد الأرقام المختارة
-                $costPrice  = null;
-                $marginPct  = null;
-                $curId      = $BASE_CUR_ID;
-                $exRate     = 1.0;
-                foreach ($pricing as $pr) {
-                    if ($pr['group_key'] === $grp['key']) {
-                        $sellPriceRaw = (float)($pr['sell_price'] ?? 0);
-                        $costPriceRaw = $pr['cost_price'] !== '' ? (float)$pr['cost_price'] : null;
-                        $marginPct    = $pr['margin']     !== '' ? (float)$pr['margin']     : null;
-                        $curId        = (int)($pr['currency_id'] ?? $BASE_CUR_ID) ?: $BASE_CUR_ID;
-                        $exRate       = max(0.000001, (float)($pr['exchange_rate'] ?? 1));
-                        // تحويل الأسعار من العملة المختارة إلى عملة الفرع الأساسية للتخزين
-                        $sellPrice = $curId === $BASE_CUR_ID ? $sellPriceRaw : round($sellPriceRaw / $exRate, 4);
-                        $costPrice = $costPriceRaw === null ? null
-                            : ($curId === $BASE_CUR_ID ? $costPriceRaw : round($costPriceRaw / $exRate, 4));
-                        break;
-                    }
-                }
-                $ageType   = $grp['type'] ?? 'سنة';
-                foreach ($grp['sizes'] as $szVal) {
-                    $szLabel = trim((string)$szVal);
-                    if (!$szLabel) continue;
-                    $pdo->prepare("INSERT INTO `{$TSZ}`
-                            (product_id,size,age_type,sort_order,selling_price,cost_price,
-                             base_currency_id,currency_id,exchange_rate,margin_pct,packet_qty,is_active)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,1)")
-                        ->execute([$id, $szLabel, $ageType, $sortOrder++, $sellPrice, $costPrice,
-                            $BASE_CUR_ID, $curId, $exRate, $marginPct, $packetQty]);
-                }
-            }
-
-            // حذف المتغيرات القديمة نهائياً وإعادة البناء من صفر
-            $pdo->prepare("DELETE FROM `{$TV}` WHERE product_id=?")->execute([$id]);
-
-            // جلب المقاسات المُدخلة للتو
-            $szRows = $pdo->prepare("SELECT id,size FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
-            $szRows->execute([$id]);
-            $allSizes = $szRows->fetchAll();
-
-            // خريطة: قيمة المقاس => رقم الكروب
-            $sizeGrpMap = [];
-            foreach ($groups as $gi => $grp) {
-                foreach ($grp['sizes'] as $szVal) {
-                    $sizeGrpMap[(string)$szVal] = $gi;
-                }
-            }
-            // خريطة: size_id => رقم الكروب
-            $sizeIdGrpMap = [];
-            foreach ($allSizes as $sz) {
-                $sizeIdGrpMap[$sz['id']] = $sizeGrpMap[(string)$sz['size']] ?? 0;
-            }
-
-            // إدراج: كل لون × كل مقاس = سطر مستقل
-            $insertVariant = $pdo->prepare("INSERT INTO `{$TV}`
-                (product_id, size_id, color_id, barcode, is_active, created_by)
-                VALUES (?, ?, ?, ?, 1, ?)");
-
-            foreach ($colors as $ci => $clr) {
-                $colorId = (int)($clr['id'] ?? 0);
-                if (!$colorId) continue;
-                foreach ($allSizes as $sz) {
-                    $grpIdx     = $sizeIdGrpMap[$sz['id']] ?? 0;
-                    $grpNum     = str_pad($grpIdx + 1, 2, '0', STR_PAD_LEFT);
-                    $colorNum   = str_pad($ci + 1, 2, '0', STR_PAD_LEFT);
-                    $grpBarcode = strtoupper($model) . '-G' . $grpNum . '-C' . $colorNum . '-S' . $sz['id'];
-                    $insertVariant->execute([$id, $sz['id'], $colorId, $grpBarcode, $_SESSION['user_id']]);
-                }
-            }
+            $userId = (int)$_SESSION['user_id'];
+            $allSizes = saveProductSizes($pdo, $TSZ, $id, $groups, $pricing, $BASE_CUR_ID, $userId);
+            syncProductVariants($pdo, $TV, $id, $model, $groups, $colors, $allSizes, $userId);
 
             // ربط بالمستودع مع حد التنبيه
             $minQty = (int)($_POST['min_quantity'] ?? 0);
@@ -269,8 +197,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── جلب بيانات الصفحة ───────────────────────────────────────────────
-// صفحة الإضافة فقط — التعديل في product_edit.php
-$editProd = null;
+// جلب بيانات المنتج
+$st = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id=?");
+$st->execute([$editId]);
+$editProd = $st->fetch();
+if (!$editProd) { header('Location: products.php'); exit; }
+
+// جلب المقاسات وبناء الكروبات
+$szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+$szSt->execute([$editId]);
+$editSizes = $szSt->fetchAll(PDO::FETCH_ASSOC);
+
+// تجميع المقاسات بـ (selling_price + age_type) معاً للحفاظ على الكروبات
+$grpMap = [];
+foreach ($editSizes as $s) {
+    $ageType = $s['age_type'] ?? 'سنة';
+    $key     = $ageType . '_' . (string)$s['selling_price'];
+    if (!isset($grpMap[$key])) {
+        // الأسعار مخزّنة أصلاً بعملة الفرع الأساسية — تُعرض كما هي
+        // بدون أي تحويل. (لم نعد نستخدم currency_id/exchange_rate
+        // لعرض السعر؛ الحقول لا تزال موجودة بالجدول لاستخدام مستقبلي
+        // محتمل، لكن واجهة المنتج لم تعد تعتمد عليها.)
+        $grpMap[$key] = [
+            'key'          => 'edit_' . md5($key),
+            'type'         => $ageType,
+            'sizes'        => [],
+            'grpIdx'       => count($grpMap),
+            'sell_price'   => (float)$s['selling_price'],
+            'cost_price'   => $s['cost_price'] !== null ? (float)$s['cost_price'] : '',
+            'margin_pct'   => $s['margin_pct'] !== null ? (float)$s['margin_pct'] : 30,
+            'packet_qty'   => 0,
+        ];
+    }
+    $grpMap[$key]['sizes'][]    = (int)$s['size'];
+    $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
+}
+$editSizeGroups = array_values($grpMap);
+
+$editPricing = [];
+foreach ($editSizeGroups as $grp) {
+    $editPricing[] = [
+        'group_key'    => $grp['key'],
+        'packet_qty'   => $grp['packet_qty'],
+        'cost_price'   => $grp['cost_price'],
+        'margin'       => $grp['margin_pct'],
+        'sell_price'   => $grp['sell_price'],
+    ];
+}
+
+// جلب الألوان عبر color_id
+$clSt = $pdo->prepare("
+    SELECT DISTINCT pc.id, pc.name, pc.hex_code AS hex
+    FROM `{$TV}` v
+    JOIN `{$TCL}` pc ON pc.id = v.color_id
+    WHERE v.product_id=? AND v.is_active=1
+    ORDER BY pc.name
+");
+$clSt->execute([$editId]);
+$editColors = $clSt->fetchAll(PDO::FETCH_ASSOC);
 
 $categories = $pdo->query("SELECT * FROM `{$TC}` WHERE is_active=1 ORDER BY parent_id, name")->fetchAll();
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
@@ -304,11 +288,11 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
 $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}` WHERE status='active' ORDER BY name")->fetchAll();
 ?>
 <!DOCTYPE html>
-<html lang="ar" dir="ltr">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>إضافة منتج جديد — <?= htmlspecialchars($branchName) ?></title>
+<title>تعديل منتج — <?= htmlspecialchars($branchName) ?></title>
 <link rel="icon" href="/bayhas/assets/images/logo.png">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -379,8 +363,6 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
 .mini-modal-box{background:#fff;border-radius:14px;width:380px;max-width:95vw;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.15)}
 .mini-modal-hdr{background:#1e3a8a;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
 .mini-modal-hdr h6{color:#fff;font-size:.85rem;font-weight:700;margin:0}
-.spin{animation:spin .6s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -394,7 +376,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
     <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
         <a href="products.php" style="color:#64748b;text-decoration:none">المنتجات</a>
         <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
-        <span class="text-primary">إضافة منتج</span>
+        <span class="text-primary">تعديل منتج</span>
     </nav>
 </header>
 
@@ -404,8 +386,8 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
     <!-- عنوان الصفحة -->
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
         <div style="font-size:.95rem;font-weight:700;color:#1e293b">
-            <i class="bi bi-plus-circle me-2 text-primary"></i>
-            إضافة منتج جديد
+            <i class="bi bi-pencil-square me-2 text-primary"></i>
+            تعديل منتج: <?= htmlspecialchars($editProd['name']) ?>
         </div>
         <div class="d-flex gap-2">
             <button class="btn btn-sm" style="border-radius:8px;border:1px solid #1e3a8a;color:#1e3a8a;font-size:.78rem"
@@ -423,7 +405,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
         </div>
     </div>
 
-    <input type="hidden" id="pId" value="">
+    <input type="hidden" id="pId" value="<?= $editProd['id'] ?>">
 
     <div class="row g-3">
     <!-- ══ العمود الرئيسي ══ -->
@@ -441,13 +423,13 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                         <label class="field-lbl">اسم المنتج <span class="req">*</span></label>
                         <input type="text" id="pName" class="form-control form-control-sm"
                                placeholder="مثال: بنطلون جينز أطفال"
-                               value="">
+                               value="<?= htmlspecialchars($editProd['name'] ?? '') ?>">
                     </div>
                     <div class="col-md-6">
                         <label class="field-lbl">رقم الموديل <span class="req">*</span></label>
                         <input type="text" id="pModel" class="form-control form-control-sm"
                                placeholder="مثال: MDL-2024-001" dir="ltr"
-                               value=""
+                               value="<?= htmlspecialchars($editProd['model_number'] ?? '') ?>"
                                oninput="updateBarcodes()">
                     </div>
                 </div>
@@ -470,7 +452,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                                 <?php foreach ($categories as $cat): ?>
                                 <option value="<?= $cat['id'] ?>"
                                     data-parent="<?= $cat['parent_id'] ?>"
-                                    >
+                                    <?= ($editProd['category_id'] == $cat['id']) ? 'selected' : '' ?>>
                                     <?= $cat['parent_id'] ? '↳ ' : '' ?><?= htmlspecialchars($cat['name']) ?>
                                 </option>
                                 <?php endforeach; ?>
@@ -484,7 +466,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                         <label class="field-lbl">صنف المنتج (الخامة)</label>
                         <input type="text" id="pFabric" class="form-control form-control-sm"
                                placeholder="مثال: RAPID، كوتون، جينز"
-                               value="">
+                               value="<?= htmlspecialchars($editProd['fabric_type'] ?? '') ?>">
                     </div>
                 </div>
                 <div class="row g-3 mt-0">
@@ -496,7 +478,8 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                                 <?php foreach ($suppliers as $sp): ?>
                                 <option value="<?= $sp['id'] ?>"
                                     data-phone="<?= htmlspecialchars($sp['phone']??'') ?>"
-                                    data-type="<?= htmlspecialchars($sp['type']??'') ?>">
+                                    data-type="<?= htmlspecialchars($sp['type']??'') ?>"
+                                    <?= ($editProd['supplier_id'] == $sp['id']) ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($sp['name']) ?>
                                     <?= $sp['contact_person'] ? '— '.htmlspecialchars($sp['contact_person']) : '' ?>
                                 </option>
@@ -527,12 +510,11 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
             <div class="sec-body">
                 <div class="row g-3 mb-3">
                     <div class="col-md-4">
-                        <label class="field-lbl">نوع عمر الكروب النشط</label>
-                        <select id="pAgeType" class="form-select form-select-sm" onchange="onAgeTypeChange()">
+                        <label class="field-lbl">نوع العمر</label>
+                        <select id="pAgeType" class="form-select form-select-sm" onchange="renderSizeGrid()">
                             <option value="سنة" selected>سنة</option>
                             <option value="شهر">شهر</option>
                         </select>
-                        <div class="field-hint" id="ageTypeHint">يُطبّق على الكروب النشط</div>
                     </div>
                     <div class="col-md-4">
                         <label class="field-lbl">&nbsp;</label>
@@ -614,12 +596,20 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                     <div class="col-md-5">
                         <label class="field-lbl">وصف المنتج</label>
                         <textarea id="pNotes" class="form-control form-control-sm" rows="3"
-                                  placeholder="وصف اختياري..."></textarea>
+                                  placeholder="وصف اختياري..."><?= htmlspecialchars($editProd['notes'] ?? '') ?></textarea>
                     </div>
                     <div class="col-md-3">
                         <label class="field-lbl">حد التنبيه للمخزون</label>
+                        <?php
+                        $curMinQty = 0;
+                        try {
+                            $mq = $pdo->prepare("SELECT MAX(min_quantity) FROM `{$TWI}` WHERE product_id=?");
+                            $mq->execute([$editId]);
+                            $curMinQty = (int)$mq->fetchColumn();
+                        } catch(Exception $e){}
+                        ?>
                         <input type="number" id="pMinQty" class="form-control form-control-sm"
-                               min="0" value="0" placeholder="0">
+                               min="0" value="<?= $curMinQty ?>" placeholder="0">
                         <div class="field-hint">تنبيه عند انخفاض المخزون لهذا الحد</div>
                     </div>
                     <div class="col-md-4">
@@ -897,12 +887,8 @@ const ALL_COLORS_INIT = <?= json_encode($colors) ?>;
 const BASE_CUR_ID   = <?= $BASE_CUR_ID ?>;
 const BASE_CUR_CODE = '<?= htmlspecialchars($BASE_CUR_CODE) ?>';
 const BASE_CUR_SYM  = '<?= htmlspecialchars($BASE_CUR_SYM) ?>';
-const CURRENCIES = <?= json_encode(array_map(function($c){
-    return ['id'=>(int)$c['id'],'code'=>$c['code'],'symbol'=>$c['symbol'],'rate'=>(float)$c['rate_vs_branch']];
-}, $allCurrencies)) ?>;
 
 let sizeGroups   = [];   // [{key, label, sizes[], grpIdx}]  max 4
-let _grpKeySeq = 0; // عداد فريد لتوليد key بدون تصادم
 let activeGrpIdx = 0;    // الكروب النشط حالياً
 let selColors    = [];   // [{id, name, hex}]
 let allColors    = ALL_COLORS_INIT.map(c => ({id:c.id, name:c.name, hex:c.hex_code}));
@@ -927,38 +913,10 @@ function toast(msg, type='success') {
 }
 
 // ── شبكة القياسات ──
-function getActiveType() {
-    // نوع الكروب النشط — أو قيمة الـ select إذا الكروب جديد
-    if (sizeGroups[activeGrpIdx]) return sizeGroups[activeGrpIdx].type;
-    return document.getElementById('pAgeType').value;
-}
-
-function onAgeTypeChange() {
-    // تغيير نوع الكروب النشط
-    const newType = document.getElementById('pAgeType').value;
-    if (sizeGroups[activeGrpIdx]) {
-        if (sizeGroups[activeGrpIdx].sizes.length > 0) {
-            if (!confirm('تغيير نوع العمر سيحذف أرقام الكروب النشط. متابعة؟')) {
-                document.getElementById('pAgeType').value = sizeGroups[activeGrpIdx].type;
-                return;
-            }
-            sizeGroups[activeGrpIdx].sizes = [];
-        }
-        sizeGroups[activeGrpIdx].type = newType;
-    }
-    renderSizeGrid();
-    updatePacket();
-    updatePricing();
-    updateSummary();
-}
-
 function renderSizeGrid() {
-    const ageType = getActiveType();
-    // sync select مع الكروب النشط
-    document.getElementById('pAgeType').value = ageType;
-
-    const lbl  = document.getElementById('sizeGridLabel');
-    const grid = document.getElementById('sizeGrid');
+    const ageType = document.getElementById('pAgeType').value;
+    const lbl     = document.getElementById('sizeGridLabel');
+    const grid    = document.getElementById('sizeGrid');
 
     if (ageType === 'سنة') {
         lbl.textContent = 'سنوات (1–30) — انقر لتحديد:';
@@ -989,8 +947,6 @@ function getNumGrpIdx(num, type) {
 }
 
 function toggleSize(num, type) {
-    // نوع العمر الفعلي = من الكروب النشط
-    if (sizeGroups[activeGrpIdx]) type = sizeGroups[activeGrpIdx].type;
     // هل هو مختار في أي كروب؟
     const existGrpIdx = getNumGrpIdx(num, type);
     if (existGrpIdx >= 0) {
@@ -1010,7 +966,7 @@ function toggleSize(num, type) {
 
     // أضف للكروب النشط — إذا لا يوجد كروب نشط أنشئ واحداً
     if (sizeGroups.length === 0) {
-        sizeGroups.push({key: 'g'+(_grpKeySeq++)+'_'+Date.now(), type, sizes:[], grpIdx: 0});
+        sizeGroups.push({key: Date.now()+'', type, sizes:[], grpIdx: 0});
         activeGrpIdx = 0;
     }
     // تأكد أن الكروب النشط موجود
@@ -1029,18 +985,17 @@ function startNewGroup() {
     if (sizeGroups.length >= 4) {
         toast('الحد الأقصى 4 كروبات','danger'); return;
     }
+    // الكروب النشط يجب أن يكون فيه أرقام
     if (sizeGroups[activeGrpIdx] && sizeGroups[activeGrpIdx].sizes.length === 0) {
         toast('أضف أرقاماً للكروب الحالي أولاً','danger'); return;
     }
-    // الكروب الجديد يبدأ بنوع العمر الافتراضي (سنة) — يمكن تغييره من الـ select
-    const type = 'سنة';
-    document.getElementById('pAgeType').value = type;
-    sizeGroups.push({key: 'g'+(_grpKeySeq++)+'_'+Date.now(), type, sizes:[], grpIdx: sizeGroups.length});
+    const type = document.getElementById('pAgeType').value;
+    sizeGroups.push({key: Date.now()+'', type, sizes:[], grpIdx: sizeGroups.length});
     activeGrpIdx = sizeGroups.length - 1;
     renderSizeGrid();
     updatePricing();
     updateBtnNewGrp();
-    toast('كروب جديد — اختر نوع العمر من القائمة ثم حدد الأرقام');
+    toast('تم فتح كروب جديد — اختر أرقامه من الشبكة');
 }
 
 function updateBtnNewGrp() {
@@ -1060,16 +1015,16 @@ function renderGrpPills() {
         return;
     }
     container.innerHTML = sizeGroups.map((grp,i) => {
+        const isActive = i === activeGrpIdx && grp.sizes.length === 0;
         const isEmpty  = grp.sizes.length === 0;
         const minS = isEmpty ? '?' : Math.min(...grp.sizes);
         const maxS = isEmpty ? '?' : Math.max(...grp.sizes);
         const unit = grp.type === 'شهر' ? 'م' : ' سنة';
-        const typeBadge = `<span style="font-size:.6rem;opacity:.75;margin-right:2px">(${grp.type})</span>`;
-        const lbl  = isEmpty ? 'يُكتب...' : (minS === maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
+        const lbl  = isEmpty ? 'يُكتب الآن...' : (minS === maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
         const activeStyle = i === activeGrpIdx ? 'outline:2px solid #1e3a8a;outline-offset:1px;' : '';
-        return `<span class="grp-pill ${GRP_COLORS[i]}" style="${activeStyle}" onclick="setActiveGrp(${i})" title="${i===activeGrpIdx?'الكروب النشط':'انقر للتبديل'}">
+        return `<span class="grp-pill ${GRP_COLORS[i]}" style="${activeStyle}" onclick="setActiveGrp(${i})" title="${i===activeGrpIdx?'الكروب النشط — انقر مرتين لإزالته':'انقر للتبديل إليه'}">
             ${i===activeGrpIdx ? '<i class="bi bi-pencil-fill" style="font-size:.6rem"></i>' : ''}
-            ${GRP_NAMES[i]}: ${lbl} ${typeBadge}
+            ${GRP_NAMES[i]}: ${lbl}
             <i class="bi bi-x" style="font-size:.65rem;margin-right:2px" onclick="event.stopPropagation();removeGrp(${i})"></i>
         </span>`;
     }).join('');
@@ -1089,10 +1044,6 @@ function removeGrp(idx) {
 
 function setActiveGrp(idx) {
     activeGrpIdx = idx;
-    // sync الـ select مع نوع الكروب المختار
-    if (sizeGroups[idx]) {
-        document.getElementById('pAgeType').value = sizeGroups[idx].type;
-    }
     renderGrpPills();
     renderSizeGrid();
 }
@@ -1121,9 +1072,6 @@ function updatePricing() {
             cost_price: prev.cost_price !== undefined ? prev.cost_price : '',
             margin:     prev.margin     !== undefined ? prev.margin     : 30,
             sell_price: prev.sell_price !== undefined ? prev.sell_price : '',
-            currency_id:prev.currency_id!== undefined ? prev.currency_id: BASE_CUR_ID,
-            exchange_rate: prev.exchange_rate !== undefined ? prev.exchange_rate : 1,
-            rate_dir: prev.rate_dir || 'fwd' // fwd: 1 base=X chosen | inv: 1 chosen=X base
         };
     });
 
@@ -1132,8 +1080,6 @@ function updatePricing() {
         <thead><tr>
             <th>الكروب</th>
             <th>قطع الباكيت</th>
-            <th>العملة</th>
-            <th>سعر الصرف</th>
             <th>سعر الشراء</th>
             <th>نسبة المحل %</th>
             <th>سعر البيع</th>
@@ -1146,7 +1092,6 @@ function updatePricing() {
             const minS = isEmpty ? '?' : Math.min(...grp.sizes);
             const maxS = isEmpty ? '?' : Math.max(...grp.sizes);
             const lbl = isEmpty ? 'يُكتب...' : (minS===maxS ? `${minS}${unit}` : `${minS}–${maxS}${unit}`);
-            const isForeign = pr.currency_id != BASE_CUR_ID;
             return `<tr>
                 <td><span class="grp-pill ${GRP_COLORS[i]}">${lbl}</span></td>
                 <td>
@@ -1154,33 +1099,6 @@ function updatePricing() {
                         value="${grp.sizes.length||0}"
                         id="packetInp_${i}"
                         style="width:56px;background:#f8fafc;color:#1e293b;font-weight:600;text-align:center">
-                </td>
-                <td>
-                    <select style="width:82px;font-size:.75rem" onchange="onPriceCurrencyChange(${i},this.value)">
-                        ${CURRENCIES.map(c=>`<option value="${c.id}" ${c.id==pr.currency_id?'selected':''}>${c.code}</option>`).join('')}
-                    </select>
-                </td>
-                <td style="min-width:150px">
-                    <div class="d-flex gap-1 align-items-center">
-                        <button type="button" onclick="toggleRateDir(${i})" title="عكس الاتجاه"
-                            style="border:1px solid #e2e8f0;border-radius:6px;background:#fff;width:24px;height:24px;font-size:.7rem;flex-shrink:0">
-                            <i class="bi bi-arrow-left-right"></i>
-                        </button>
-                        <input type="number" min="0.0000000001" step="any"
-                            value="${pr.rate_dir==='inv' ? (1/pr.exchange_rate).toFixed(10) : pr.exchange_rate}"
-                            id="rateInp_${i}"
-                            style="width:82px;${isForeign?'':'background:#f8fafc;color:#94a3b8'}"
-                            ${isForeign?'':'readonly'}
-                            oninput="updateSellPrice(${i},this.value,'rate')">
-                        <button type="button" onclick="fetchRate(${i})" title="جلب من الإنترنت"
-                            style="border:1px solid #e2e8f0;border-radius:6px;background:#fff;width:24px;height:24px;font-size:.7rem;flex-shrink:0" ${isForeign?'':'disabled'}>
-                            <i class="bi bi-arrow-repeat" id="rateIcon_${i}"></i>
-                        </button>
-                    </div>
-                    <div style="font-size:.63rem;color:#94a3b8;margin-top:2px" id="rateHint_${i}">
-                        1 ${pr.rate_dir==='inv' ? (CURRENCIES.find(c=>c.id==pr.currency_id)?.code||'') : BASE_CUR_CODE}
-                        = ${pr.rate_dir==='inv' ? BASE_CUR_CODE : (CURRENCIES.find(c=>c.id==pr.currency_id)?.code||'')}
-                    </div>
                 </td>
                 <td><input type="number" min="0" step="0.01" placeholder="0.00"
                     value="${pr.cost_price}"
@@ -1198,53 +1116,14 @@ function updatePricing() {
     </table>
     <div style="font-size:.7rem;color:#94a3b8;margin-top:6px">
         <i class="bi bi-info-circle me-1"></i>
-        الأسعار تُحفظ بعملة الفرع الأساسية (${BASE_CUR_CODE}) — إذا اخترت عملة أخرى أدخل السعر بها وحدد سعر الصرف للتحويل التلقائي
+        كل الأسعار تُدخل وتُحفظ مباشرة بعملة الفرع الأساسية (${BASE_CUR_CODE})
     </div>`;
     checkStatus();
-}
-
-function onPriceCurrencyChange(idx, curId){
-    pricing[idx].currency_id = parseInt(curId);
-    const cur = CURRENCIES.find(c=>c.id==curId);
-    pricing[idx].exchange_rate = cur ? cur.rate : 1;
-    pricing[idx].rate_dir = 'fwd';
-    if (parseInt(curId) === BASE_CUR_ID) pricing[idx].exchange_rate = 1;
-    updatePricing();
-}
-
-// عكس اتجاه عرض سعر الصرف (لا يغيّر القيمة الفعلية المخزّنة، فقط طريقة الإدخال/العرض)
-function toggleRateDir(idx){
-    pricing[idx].rate_dir = pricing[idx].rate_dir === 'fwd' ? 'inv' : 'fwd';
-    updatePricing();
-}
-// جلب سعر الصرف تلقائياً بالاتجاه المعروض حالياً
-async function fetchRate(idx){
-    const icon = document.getElementById(`rateIcon_${idx}`);
-    if (icon) icon.classList.add('spin');
-    try {
-        const curId = pricing[idx].currency_id;
-        const cur = CURRENCIES.find(c=>c.id==curId);
-        if (!cur) return;
-        const resp = await fetch(`https://api.exchangerate-api.com/v4/latest/${BASE_CUR_CODE}`);
-        const data = await resp.json();
-        const rate = data.rates[cur.code]; // 1 BASE = rate CHOSEN
-        if (rate) {
-            pricing[idx].exchange_rate = rate; // دايماً نخزّن canonical: 1 base = X chosen
-            updatePricing();
-        }
-    } catch(e){} finally { if (icon) icon.classList.remove('spin'); }
 }
 
 function updateSellPrice(idx, val, field) {
     if (field === 'cost')   pricing[idx].cost_price   = parseFloat(val) || 0;
     if (field === 'margin') pricing[idx].margin       = parseFloat(val) || 0;
-    if (field === 'rate') {
-        const v = Math.max(0.0000000001, parseFloat(val) || 1);
-        // لو الاتجاه المعروض معكوس (1 مختارة = X أساسية) نحوّله لصيغة canonical (1 أساسية = X مختارة) بدقة 10 أرقام
-        pricing[idx].exchange_rate = pricing[idx].rate_dir === 'inv'
-            ? parseFloat((1 / v).toFixed(10))
-            : v;
-    }
     const cost   = parseFloat(pricing[idx].cost_price) || 0;
     const margin = parseFloat(pricing[idx].margin) || 0;
     const sell   = cost > 0 ? (cost * (1 + margin/100)).toFixed(2) : '';
@@ -1452,6 +1331,9 @@ function saveProduct() {
     if (!sizeGroups.length) { toast('يرجى اختيار القياسات','danger'); return; }
     if (!selColors.length)  { toast('يرجى اختيار لون واحد على الأقل','danger'); return; }
 
+    // مزامنة مفاتيح التسعير مع الكروبات قبل الإرسال
+    pricing.forEach((p, i) => { if (sizeGroups[i]) p.group_key = sizeGroups[i].key; });
+
     document.getElementById('saveTxt').style.opacity = '0';
     document.getElementById('saveSpin').style.display = 'inline-block';
     if (document.getElementById('saveTxt2')) document.getElementById('saveTxt2').style.opacity = '0';
@@ -1538,7 +1420,7 @@ function onSupplierChange() {
 function onImgSelect(input) {
     if (!input.files || !input.files[0]) return;
     const file = input.files[0];
-    const maxMB = 50;
+    const maxMB = 5;
     if (file.size > maxMB * 1024 * 1024) {
         toast('حجم الصورة يتجاوز ' + maxMB + 'MB','danger'); return;
     }
@@ -1583,6 +1465,44 @@ function removeImg() {
     preview.src = '';
     toast.classList.remove('show');
 }
+
+// ── تهيئة بيانات التعديل ──
+sizeGroups   = <?= json_encode($editSizeGroups) ?>;
+activeGrpIdx = 0; // ابدأ بالكروب الأول
+pricing      = <?= json_encode($editPricing) ?>;
+pricing.forEach((p,i) => { if (sizeGroups[i]) p.group_key = sizeGroups[i].key; });
+// sync الـ select مع نوع الكروب الأول
+if (sizeGroups[0]) document.getElementById('pAgeType').value = sizeGroups[0].type;
+
+// تحميل الألوان
+(function(){
+    const editClrs = <?= json_encode(array_map(fn($c) => [
+        'id'  => (int)($c['id']??0),
+        'name'=> $c['name'],
+        'hex' => $c['hex'] ?? '#ccc'
+    ], $editColors)) ?>;
+    selColorIdxs = [];
+    editClrs.forEach(ec => {
+        const idx = allColors.findIndex(ac => ac.id === ec.id && ec.id > 0);
+        if (idx >= 0) {
+            selColorIdxs.push(idx);
+            selColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+        } else {
+            allColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+            selColorIdxs.push(allColors.length - 1);
+            selColors.push({id: ec.id, name: ec.name, hex: ec.hex});
+        }
+    });
+})();
+
+// ضبط المورد
+(function(){
+    const spSel = document.getElementById('pSupplier');
+    if (spSel && '<?= (int)($editProd['supplier_id'] ?? 0) ?>') {
+        spSel.value = '<?= (int)($editProd['supplier_id'] ?? 0) ?>';
+        onSupplierChange();
+    }
+})();
 
 // ── تهيئة ──
 renderSizeGrid();

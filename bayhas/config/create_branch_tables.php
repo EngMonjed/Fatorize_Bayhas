@@ -73,14 +73,21 @@ function getSharedTablesSql(string $s): array {
             `id`                INT(11)       NOT NULL AUTO_INCREMENT,
             `product_id`        INT(11)       NOT NULL,
             `size`              VARCHAR(20)   NOT NULL,
+            `age_type`          VARCHAR(10)   NOT NULL DEFAULT 'سنة',
             `sort_order`        INT(11)       NOT NULL DEFAULT 0,
-            `selling_price`     DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
-            `full_packet_price` DECIMAL(10,4) DEFAULT NULL,
+            `selling_price`     DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
+            `cost_price`        DECIMAL(14,4) DEFAULT NULL,
+            `base_currency_id`  INT(11)       DEFAULT NULL,
+            `currency_id`       INT(11)       DEFAULT NULL,
+            `exchange_rate`     DECIMAL(15,6) NOT NULL DEFAULT 1.000000,
+            `margin_pct`        DECIMAL(5,2)  DEFAULT NULL,
+            `packet_qty`        INT(11)       DEFAULT NULL,
             `is_active`         TINYINT(1)    NOT NULL DEFAULT 1,
+            `updated_by`        INT(11)       DEFAULT NULL,
             `created_at`        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at`        DATETIME      DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            UNIQUE KEY `idx_product_size` (`product_id`,`size`),
+            KEY `idx_product_id` (`product_id`),
             CONSTRAINT `fk_size_product_{$s}` FOREIGN KEY (`product_id`)
                 REFERENCES `products_{$s}` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
@@ -95,6 +102,7 @@ function getSharedTablesSql(string $s): array {
             `last_purchase_at` DATETIME      DEFAULT NULL,
             `is_active`        TINYINT(1)    NOT NULL DEFAULT 1,
             `created_by`       INT(11)       DEFAULT NULL,
+            `updated_by`       INT(11)       DEFAULT NULL,
             `created_at`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at`       DATETIME      DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
@@ -275,18 +283,23 @@ function getSharedTablesSql(string $s): array {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // الفواتير
-        "CREATE TABLE IF NOT EXISTS `sales_invoices_{$s}` SELECT * FROM `sales_invoices_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `sales_invoice_items_{$s}` SELECT * FROM `sales_invoice_items_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `purchases_{$s}` SELECT * FROM `purchases_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `purchase_items_{$s}` SELECT * FROM `purchase_items_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `receipts_{$s}` SELECT * FROM `receipts_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `journal_entries_{$s}` SELECT * FROM `journal_entries_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `journal_entry_items_{$s}` SELECT * FROM `journal_entry_items_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `account_charts_{$s}` SELECT * FROM `account_charts_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `exchange_rates_{$s}` SELECT * FROM `exchange_rates_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `notifications_{$s}` SELECT * FROM `notifications_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `inventory_movements_{$s}` SELECT * FROM `inventory_movements_alp` WHERE 0",
-        "CREATE TABLE IF NOT EXISTS `inventory_movement_details_{$s}` SELECT * FROM `inventory_movement_details_alp` WHERE 0",
+        // ⚠ هاي الجداول بتُستنسخ بنيتها (schema-only, WHERE 0) من فرع البيع
+        // الأول كـ"قالب مرجعي" لأي فرع جديد. كانت تشير لـ sales_invoices_alp
+        // إلخ — بعد ترحيل الفرع الأول من alp لـ ret، لازم تصير كل مراجع
+        // القالب هون _ret، وإلا رح يفشل إنشاء أي فرع جديد فوراً (الجدول
+        // المصدر ما رح يكون موجود أصلاً).
+        "CREATE TABLE IF NOT EXISTS `sales_invoices_{$s}` SELECT * FROM `sales_invoices_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `sales_invoice_items_{$s}` SELECT * FROM `sales_invoice_items_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `purchases_{$s}` SELECT * FROM `purchases_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `purchase_items_{$s}` SELECT * FROM `purchase_items_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `receipts_{$s}` SELECT * FROM `receipts_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `journal_entries_{$s}` SELECT * FROM `journal_entries_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `journal_entry_items_{$s}` SELECT * FROM `journal_entry_items_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `account_charts_{$s}` SELECT * FROM `account_charts_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `exchange_rates_{$s}` SELECT * FROM `exchange_rates_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `notifications_{$s}` SELECT * FROM `notifications_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `inventory_movements_{$s}` SELECT * FROM `inventory_movements_ret` WHERE 0",
+        "CREATE TABLE IF NOT EXISTS `inventory_movement_details_{$s}` SELECT * FROM `inventory_movement_details_ret` WHERE 0",
 
         // مستودع افتراضي
         "INSERT IGNORE INTO `warehouses_{$s}` (code, name) VALUES
