@@ -1327,6 +1327,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
         const BASE_CUR_SYM = '<?= htmlspecialchars($BASE_CUR_SYM) ?>';
 
         let sizeGroups = [];   // [{key, label, sizes[], grpIdx}]  max 4
+        let _grpKeySeq = 0; // عداد فريد لتوليد key بدون تصادم (كان ناقصاً هون، موجود بـproduct_add.php)
         let activeGrpIdx = 0;    // الكروب النشط حالياً
         let selColors = [];   // [{id, name, hex}]
         let allColors = ALL_COLORS_INIT.map(c => ({ id: c.id, name: c.name, hex: c.hex_code }));
@@ -1404,7 +1405,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
 
             // أضف للكروب النشط — إذا لا يوجد كروب نشط أنشئ واحداً
             if (sizeGroups.length === 0) {
-                sizeGroups.push({ key: Date.now() + '', type, sizes: [], grpIdx: 0 });
+                sizeGroups.push({ key: 'g' + (_grpKeySeq++) + '_' + Date.now(), type, sizes: [], grpIdx: 0 });
                 activeGrpIdx = 0;
             }
             // تأكد أن الكروب النشط موجود
@@ -1428,7 +1429,7 @@ $suppliers = $pdo->query("SELECT id,name,contact_person,phone,type FROM `{$TSP}`
                 toast('أضف أرقاماً للكروب الحالي أولاً', 'danger'); return;
             }
             const type = document.getElementById('pAgeType').value;
-            sizeGroups.push({ key: Date.now() + '', type, sizes: [], grpIdx: sizeGroups.length });
+            sizeGroups.push({ key: 'g' + (_grpKeySeq++) + '_' + Date.now(), type, sizes: [], grpIdx: sizeGroups.length });
             activeGrpIdx = sizeGroups.length - 1;
             renderSizeGrid();
             updatePricing();

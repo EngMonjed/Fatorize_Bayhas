@@ -3,46 +3,56 @@
  * config/auth.php — المصادقة + الصلاحيات
  */
 
-if (session_status() === PHP_SESSION_NONE) session_start();
+if (session_status() === PHP_SESSION_NONE)
+    session_start();
 
 // ── الدوال الأساسية ──────────────────────────────────────────────
 
-function isLoggedIn(): bool {
+function isLoggedIn(): bool
+{
     return !empty($_SESSION['user_id']);
 }
 
-function hasBranch(): bool {
+function hasBranch(): bool
+{
     return !empty($_SESSION['branch_id']);
 }
 
-function getCurrentUser(): ?array {
-    if (!isLoggedIn()) return null;
+function getCurrentUser(): ?array
+{
+    if (!isLoggedIn())
+        return null;
     return [
-        'id'          => $_SESSION['user_id'],
-        'username'    => $_SESSION['username']    ?? '',
-        'full_name'   => $_SESSION['full_name']   ?? '',
-        'role'        => $_SESSION['role']         ?? 'user',
-        'branch_id'   => $_SESSION['branch_id']   ?? null,
+        'id' => $_SESSION['user_id'],
+        'username' => $_SESSION['username'] ?? '',
+        'full_name' => $_SESSION['full_name'] ?? '',
+        'role' => $_SESSION['role'] ?? 'user',
+        'branch_id' => $_SESSION['branch_id'] ?? null,
         'branch_name' => $_SESSION['branch_name'] ?? '',
     ];
 }
 
-function isAdmin(): bool {
+function isAdmin(): bool
+{
     return ($_SESSION['role'] ?? '') === 'admin';
 }
 
-function hasRole(string ...$roles): bool {
+function hasRole(string ...$roles): bool
+{
     return in_array($_SESSION['role'] ?? 'user', $roles, true);
 }
 
 // ── حماية الصفحة ────────────────────────────────────────────────
 
-function checkLogin(?PDO $pdo = null): void {
+function checkLogin(?PDO $pdo = null): void
+{
     if (!isLoggedIn()) {
-        header('Location: /bayhas/login.php'); exit;
+        header('Location: ' . BASE_PATH . '/login.php');
+        exit;
     }
     if (!hasBranch()) {
-        header('Location: /bayhas/select_account.php'); exit;
+        header('Location: ' . BASE_PATH . '/select_account.php');
+        exit;
     }
     // تحميل الصلاحيات تلقائياً إذا أُعطي اتصال
     if ($pdo instanceof PDO) {
@@ -55,10 +65,12 @@ function checkLogin(?PDO $pdo = null): void {
 /**
  * جلب صلاحيات المستخدم الحالي (مُخزَّنة في Session للسرعة)
  */
-function loadUserPermissions(PDO $pdo): void {
-    if (isset($_SESSION['permissions'])) return; // محمّلة مسبقاً
+function loadUserPermissions(PDO $pdo): void
+{
+    if (isset($_SESSION['permissions']))
+        return; // محمّلة مسبقاً
 
-    $userId   = $_SESSION['user_id']   ?? 0;
+    $userId = $_SESSION['user_id'] ?? 0;
     $branchId = $_SESSION['branch_id'] ?? 0;
 
     if (isAdmin()) {
@@ -86,24 +98,29 @@ function loadUserPermissions(PDO $pdo): void {
  * هل للمستخدم إجراء معين على قسم معين؟
  * can('sales.invoices', 'view')
  */
-function can(string $moduleKey, string $action = 'view'): bool {
-    if (isAdmin()) return true;
+function can(string $moduleKey, string $action = 'view'): bool
+{
+    if (isAdmin())
+        return true;
 
     $perms = $_SESSION['permissions'] ?? [];
 
     // wildcard للـ admin
-    if ($perms === ['*']) return true;
+    if ($perms === ['*'])
+        return true;
 
     $row = $perms[$moduleKey] ?? null;
-    if (!$row) return false;
+    if (!$row)
+        return false;
 
-    return (bool)($row['can_' . $action] ?? false);
+    return (bool) ($row['can_' . $action] ?? false);
 }
 
 /**
  * حماية مع إيقاف التنفيذ إذا ما عنده صلاحية
  */
-function requirePermission(string $moduleKey, string $action = 'view'): void {
+function requirePermission(string $moduleKey, string $action = 'view'): void
+{
     checkLogin();
     if (!can($moduleKey, $action)) {
         http_response_code(403);
@@ -129,12 +146,14 @@ function requirePermission(string $moduleKey, string $action = 'view'): void {
 /**
  * هل للمستخدم أي صلاحية على قسم معين؟ (view OR create OR ...)
  */
-function hasAnyPermission(string $moduleKey): bool {
+function hasAnyPermission(string $moduleKey): bool
+{
     return can($moduleKey, 'view')
         || can($moduleKey, 'create')
         || can($moduleKey, 'edit');
 }
-function buildSidebarMenu(PDO $pdo): array {
+function buildSidebarMenu(PDO $pdo): array
+{
     loadUserPermissions($pdo);
 
     $allModules = $pdo->query("
@@ -142,7 +161,7 @@ function buildSidebarMenu(PDO $pdo): array {
     ")->fetchAll();
 
     // فصل الأقسام الأب عن الأبناء
-    $parents  = [];
+    $parents = [];
     $children = [];
     foreach ($allModules as $m) {
         if ($m['parent_key'] === null) {
@@ -155,7 +174,8 @@ function buildSidebarMenu(PDO $pdo): array {
     // تصفية حسب الصلاحيات
     foreach ($children as $child) {
         // نُظهر الابن فقط إذا كان للمستخدم view على هذا القسم
-        if (!can($child['key'], 'view')) continue;
+        if (!can($child['key'], 'view'))
+            continue;
         $pk = $child['parent_key'];
         if (isset($parents[$pk])) {
             $parents[$pk]['children'][] = $child;

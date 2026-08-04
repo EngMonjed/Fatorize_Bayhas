@@ -54,15 +54,26 @@ try {
 $TIAS = "invoice_account_settings_{$TS}";
 $TAC = "account_charts_{$TS}";
 try {
-    $cashAccounts = $pdo->query("SELECT ac.id,ac.code,ac.name,c.code AS cur_code,c.symbol AS cur_sym
+    $cashAccounts = $pdo->query("SELECT ac.id,ac.code,ac.name,ac.balance,ac.base_balance,
+        c.code AS cur_code,c.symbol AS cur_sym
         FROM `{$TAC}` ac
         LEFT JOIN currencies c ON c.id=ac.currency_id
         WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
+          AND ac.id NOT IN (SELECT prepaid_account_id FROM `{$TSP}` WHERE prepaid_account_id IS NOT NULL)
         ORDER BY ac.code")->fetchAll();
 } catch (Exception $e) {
     $cashAccounts = [];
 }
-
+// رمز عملة الفرع الأساسية — لعرض المبالغ المحوَّلة بالجدول والإحصائيات
+// بدل $ الثابتة (الفواتير هلق ممكن تكون بأي عملة، مو بس عملة الفرع).
+$baseCurrencySymbol = '$';
+if (!empty($_SESSION['branch_id'])) {
+    $bcStmt = $pdo->prepare("SELECT c.symbol FROM branches b
+        LEFT JOIN currencies c ON c.id = b.base_currency_id
+        WHERE b.id = ?");
+    $bcStmt->execute([$_SESSION['branch_id']]);
+    $baseCurrencySymbol = $bcStmt->fetchColumn() ?: '$';
+}
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -76,12 +87,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 s.email AS supplier_email,
                 s.address AS supplier_address,
                 s.tax_number AS supplier_tax,
-                c.code AS currency,
+                c.code AS currency_code,
                 c.symbol AS currency_symbol,
+                bc.code AS base_currency_code,
                 w.name AS warehouse_name
                 FROM `{$TP}` p
                 LEFT JOIN `{$TSP}` s ON s.id=p.supplier_id
                 LEFT JOIN currencies c ON c.id=p.invoice_currency_id
+                LEFT JOIN currencies bc ON bc.id=p.base_currency_id
                 LEFT JOIN `{$TW}` w ON w.id=p.warehouse_id
                 WHERE p.id=?");
             $st->execute([$id]);
@@ -91,14 +104,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // warehouse_name/warehouse_id now come from purchases_{TS}.warehouse_id
             // (one warehouse per whole invoice) instead of purchase_items_{TS} —
             // resolved per the schema-change design decision.
-
-            // Confirmed against the real product_sizes_alp/product_colors_alp DDL:
             // sizes use a `size` column (not `name`); colors use `name` — different
             // conventions between the two tables.
             $it = $pdo->prepare("SELECT pi.*,
                 pr.name AS product_name,
                 pr.model_number AS model_number,
                 psz.size AS size,
+                psz.age_type AS age_type,
                 pcl.name AS color,
                 pv.barcode AS barcode
                 FROM `{$TPI}` pi
@@ -109,7 +121,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 WHERE pi.purchase_id=? ORDER BY pi.id");
             $it->execute([$id]);
             $pur['items'] = $it->fetchAll();
+
+            // حساب الدفعة المقدمة — لمورد هالفاتورة بالتحديد فقط (مو كل
+            // الموردين)، مع رصيده الحالي، حتى تُعرض كخيار إضافي بقائمة
+            // حساب الدفع بمودال التأكيد (تحكّم يدوي كامل — لا تطبيق تلقائي).
+            $adv = $pdo->prepare("SELECT ac.id, ac.code, ac.name, ac.balance, ac.base_balance,
+                    c.code AS cur_code, c.symbol AS cur_sym
+                FROM `{$TSP}` s
+                JOIN `{$TAC}` ac ON ac.id = s.prepaid_account_id
+                LEFT JOIN currencies c ON c.id = ac.currency_id
+                WHERE s.id = ?");
+            $adv->execute([$pur['supplier_id']]);
+            $pur['advance_account'] = $adv->fetch() ?: null;
+
+            // ⚠ القيود المرتبطة فعلياً (لو الفاتورة مؤكدة) — نجيبها من
+            // journal_entries_{TS} مباشرة (مصدر الحقيقة الفعلي)، مو من
+            // أعمدة الفاتورة لوحدها، لأنه تفاصيل الشحن/الدفع الجزئي/
+            // خصم التعجيل كل وحدة منها قيد مستقل بذاته (راجع
+            // confirm_purchase_invoice.php)، ما بتنخزن كأعمدة على
+            // purchases_{TS} نفسها.
+            $TJE2 = "journal_entries_{$TS}";
+            $jes = $pdo->prepare("SELECT je.*, c.code AS je_currency
+                FROM `{$TJE2}` je
+                LEFT JOIN currencies c ON c.id = je.currency_id
+                WHERE je.reference_type IN ('purchase','purchase_shipping','purchase_payment','purchase_settlement_discount')
+                  AND je.reference_id = ?
+                ORDER BY je.id");
+            $jes->execute([$id]);
+            $pur['journal_entries'] = $jes->fetchAll();
+
             echo json_encode(['ok' => true, 'data' => $pur]);
+        }
+
+        // سعر الصرف بين عملتين — من جدول currencies المحلي حصراً (بدون
+        // أي اتصال إنترنت خارجي)، بنفس اتفاقية exchange_rate الموثّقة
+        // أصلاً بـ invoice_new.php (كل عملة عندها exchange_rate نسبة
+        // لمرجع عالمي واحد؛ السعر بين عملتين = نسبة الاثنتين لبعض):
+        // 1 وحدة من from = (exchange_rate[to] / exchange_rate[from]) من to
+        elseif ($act === 'get_currency_rate') {
+            $from = trim($_POST['from'] ?? '');
+            $to = trim($_POST['to'] ?? '');
+            if (!$from || !$to)
+                throw new Exception('عملتان مطلوبتان');
+            // ⚠ تحسين: لو الطرف "from" هو عملة فاتورة قائمة فعلاً، سعرها
+            // مقفول تاريخياً على الفاتورة نفسها (IAS 21) — ما لازم نعيد
+            // جلبه من جدول currencies العام (ممكن يكون تحدّث لاحقاً لقيمة
+            // مختلفة شوي، فيصير الاقتراح غير متّسق مع الفاتورة من الأساس).
+            // $_POST['from_rate_override'] بيمرَّر من الواجهة = exchange_rate
+            // الفاتورة نفسها لما ينطبق.
+            $fromRateOverride = ($_POST['from_rate_override'] ?? '') !== ''
+                ? (float) $_POST['from_rate_override'] : null;
+
+            $rt = $pdo->prepare("SELECT code, exchange_rate FROM currencies WHERE code IN (?,?)");
+            $rt->execute([$from, $to]);
+            $rates = [];
+            foreach ($rt->fetchAll() as $row)
+                $rates[$row['code']] = (float) $row['exchange_rate'];
+            if ($fromRateOverride !== null && $fromRateOverride > 0)
+                $rates[$from] = $fromRateOverride;
+            if (!isset($rates[$from]) || !isset($rates[$to]) || $rates[$from] <= 0)
+                throw new Exception('عملة غير معروفة بجدول العملات');
+            $rate = $rates[$to] / $rates[$from];
+            echo json_encode(['ok' => true, 'rate' => round($rate, 6)]);
         }
 
         // ملاحظة: أُزيل من هنا إجراءان محليان ميتان (dead code) لم يكونا
@@ -161,7 +234,7 @@ if ($dateTo) {
 }
 
 $stmt = $pdo->prepare("SELECT p.*, s.name AS supplier_name,
-    c.code AS currency,
+    c.code AS currency_code,
     c.symbol AS currency_symbol,
     COUNT(pi.id) AS items_count
     FROM `{$TP}` p
@@ -181,20 +254,32 @@ try {
     $stats = $pdo->query("SELECT
         COUNT(*) AS total,
         SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) AS drafts,
-        SUM(CASE WHEN status='received' THEN 1 ELSE 0 END) AS received,
+        SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
         COALESCE(SUM(CASE WHEN status!='cancelled' THEN final_amount_base_currency END),0) AS total_base,
-        COALESCE(SUM(CASE WHEN payment_status='pending' AND status='received' THEN final_amount_base_currency END),0) AS balance_base
+        COALESCE(SUM(CASE WHEN payment_status='pending' AND status='confirmed' THEN final_amount_base_currency END),0) AS balance_base
         FROM `{$TP}`")->fetch();
 } catch (Exception $e) {
-    $stats = ['total' => 0, 'drafts' => 0, 'received' => 0, 'total_base' => 0, 'balance_base' => 0];
+    $stats = ['total' => 0, 'drafts' => 0, 'confirmed' => 0, 'total_base' => 0, 'balance_base' => 0];
 }
 
 $STATUS_MAP = [
     'draft' => ['label' => 'مسودة', 'cls' => 'bg-secondary-subtle text-secondary'],
-    'confirmed' => ['label' => 'مؤكدة', 'cls' => 'bg-info-subtle text-info'],
-    'received' => ['label' => 'مستلمة', 'cls' => 'bg-success-subtle text-success'],
+    'confirmed' => ['label' => 'مؤكدة', 'cls' => 'bg-info-subtle text-success'],
     'cancelled' => ['label' => 'ملغاة', 'cls' => 'bg-danger-subtle text-danger'],
 ];
+// ⚠ تلوين السطر كامل (خلفية + لون خط) حسب حالة الفاتورة — طلب صريح
+// لتمييز بصري سريع بلا حاجة قراءة عمود الحالة لحاله. نفس لوحة الألوان
+// المستخدمة بدالة invoiceRowStyle() بملف sales_index.php بالضبط — ٣
+// حالات فقط بالمشتريات (مسودة/مؤكدة/ملغاة، بعد حذف "مستلمة" نهائياً).
+function purchaseRowStyle(string $status): string
+{
+    if ($status === 'draft')
+        return 'background:#f8fafc;color:#64748b'; // مسودة — فضي
+    if ($status === 'cancelled')
+        return 'background:#fef2f2;color:#dc2626'; // ملغاة — أحمر
+    return 'background:#f0fdf4;color:#065f46'; // confirmed (مؤكدة) — أخضر
+}
+
 $PAY_MAP = [
     'pending' => ['label' => 'غير مدفوعة', 'cls' => 'text-danger'],
     'partial' => ['label' => 'جزئي', 'cls' => 'text-warning'],
@@ -360,14 +445,15 @@ $PAY_MAP = [
 
 <body>
     <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
-    <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+    <?php
+    require_once __DIR__ . '/../../../includes/sidebar.php';
+    require_once __DIR__ . '/../../../includes/breadcrumb.php';
+    ?>
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
         <span class="tb-title"><i class="bi bi-cart-plus me-1 text-primary"></i>فواتير الشراء</span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
-        <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
-            <span class="text-primary">فواتير الشراء</span>
-        </nav>
+        <?= renderBreadcrumb() ?>
     </header>
     <main class="main-content">
         <div class="content-body">
@@ -376,19 +462,28 @@ $PAY_MAP = [
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                 <li class="nav-item">
                     <a class="nav-link fw-600 active" href="index.php"
-                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-receipt me-1"></i>الفواتير
+                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
+                        <i class="bi bi-receipt me-1"></i>فواتير المشتريات
                     </a>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="suppliers.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-people me-1"></i>إدارة الموردين
+                    </a>
+                </li>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link fw-600" href="returns.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-arrow-return-right me-1"></i>المرتجعات
+                        <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المشتريات
                     </a>
                 </li>
-                <li class="nav-item ms-auto d-flex align-items-center">
-                    <a href="invoice_new.php" class="btn btn-sm fw-600"
-                        style="border-radius:9px;background:#1e3a8a;color:#fff;font-size:.82rem;text-decoration:none">
-                        <i class="bi bi-plus-lg me-1"></i>فاتورة جديدة
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="orders.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-file-earmark-text me-1"></i>أوامر الشراء / طلبات عروض الأسعار
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-bar-chart me-1"></i>التقارير
                     </a>
                 </li>
             </ul>
@@ -420,7 +515,9 @@ $PAY_MAP = [
                         <div class="stat-icon" style="background:#f0fdf4"><i
                                 class="bi bi-currency-dollar text-success"></i></div>
                         <div>
-                            <div class="stat-val n"><?= number_format($stats['total_base'], 2) ?> $</div>
+                            <div class="stat-val n"><?= htmlspecialchars($baseCurrencySymbol) ?>
+                                <?= number_format($stats['total_base'], 2) ?>
+                            </div>
                             <div class="stat-lbl">إجمالي المشتريات</div>
                         </div>
                     </div>
@@ -430,32 +527,39 @@ $PAY_MAP = [
                         <div class="stat-icon" style="background:#fee2e2"><i
                                 class="bi bi-exclamation-circle text-danger"></i></div>
                         <div>
-                            <div class="stat-val n"><?= number_format($stats['balance_base'], 2) ?> $</div>
-                            <div class="stat-lbl">المستحق للموردين</div>
+                            <div class="stat-val n"><?= htmlspecialchars($baseCurrencySymbol) ?>
+                                <?= number_format($stats['balance_base'], 2) ?>
+                            </div>
+                            <div class="stat-lbl">التزامات الموردين</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- فلاتر -->
-            <div class="tbl-wrap mb-3">
+            <!-- الجدول -->
+            <div class="tbl-wrap">
                 <div class="tbl-hdr">
-                    <form method="get" class="d-flex gap-2 flex-wrap align-items-center w-100">
+                    <span style="font-size:.88rem;font-weight:700;color:#1e293b;white-space:nowrap">
+                        <i class="bi bi-receipt me-1"></i>سجل فواتير المشتريات
+                    </span>
+                    <form method="get" class="d-flex gap-2 flex-wrap align-items-center ms-auto">
                         <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
                             placeholder="رقم الفاتورة أو المورد..." class="form-control form-control-sm"
                             style="width:180px;border-radius:8px">
-                        <select name="status" class="form-select form-select-sm" style="width:120px;border-radius:8px">
+                        <select name="status" class="form-select form-select-sm" style="width:120px;border-radius:8px"
+                            onchange="this.form.submit()">
                             <option value="">كل الحالات</option>
                             <?php foreach ($STATUS_MAP as $k => $v): ?>
-                                        <option value="<?= $k ?>" <?= $status === $k ? 'selected' : '' ?>><?= $v['label'] ?></option>
+                                    <option value="<?= $k ?>" <?= $status === $k ? 'selected' : '' ?>><?= $v['label'] ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <select name="supplier" class="form-select form-select-sm"
-                            style="width:160px;border-radius:8px">
+                        <select name="supplier" class="form-select form-select-sm" style="width:160px;border-radius:8px"
+                            onchange="this.form.submit()">
                             <option value="">كل الموردين</option>
                             <?php foreach ($suppliers as $sp): ?>
-                                        <option value="<?= $sp['id'] ?>" <?= $suppFil == $sp['id'] ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars($sp['name']) ?></option>
+                                    <option value="<?= $sp['id'] ?>" <?= $suppFil == $sp['id'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($sp['name']) ?>
+                                    </option>
                             <?php endforeach; ?>
                         </select>
                         <input type="date" name="from" value="<?= htmlspecialchars($dateFrom) ?>"
@@ -467,103 +571,120 @@ $PAY_MAP = [
                             <i class="bi bi-search me-1"></i>بحث
                         </button>
                         <?php if ($search || $status || $suppFil || $dateFrom || $dateTo): ?>
-                                    <a href="index.php" class="btn btn-sm btn-light" style="border-radius:8px">
-                                        <i class="bi bi-x-lg me-1"></i>مسح
-                                    </a>
+                                <a href="index.php" class="btn btn-sm btn-light" style="border-radius:8px">
+                                    <i class="bi bi-x-lg me-1"></i>مسح
+                                </a>
                         <?php endif; ?>
                     </form>
+                    <a href="../accounting/payments.php" class="btn btn-sm fw-600"
+                        style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem;text-decoration:none"
+                        target="_blank" title="سندات الدفع (قسم المالية)">
+                        <i class="bi bi-credit-card me-1"></i>سندات الدفع
+                    </a>
+                    <a href="invoice_new.php" class="btn btn-sm fw-600"
+                        style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem;text-decoration:none"
+                        target="_blank">
+                        <i class="bi bi-plus-lg me-1"></i>فاتورة جديدة
+                    </a>
                 </div>
             </div>
-
-            <!-- الجدول -->
-            <div class="tbl-wrap">
-                <div class="table-responsive">
-                    <table class="mtbl">
-                        <thead>
-                            <tr>
-                                <th>رقم الفاتورة</th>
-                                <th>التاريخ</th>
-                                <th>المورد</th>
-                                <th>البنود</th>
-                                <th>العملة</th>
-                                <th>الإجمالي</th>
-                                <th>بالدولار</th>
-                                <th>الدفع</th>
-                                <th>الحالة</th>
-                                <th style="text-align:center">إجراءات</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (empty($purchases)): ?>
-                                        <tr>
-                                            <td colspan="10" class="text-center text-muted py-5">
-                                                <i class="bi bi-receipt d-block mb-2" style="font-size:2rem;opacity:.2"></i>
-                                                لا توجد فواتير<?= $search ? " تطابق \"{$search}\"" : '' ?>
-                                            </td>
-                                        </tr>
-                            <?php endif; ?>
-                            <?php foreach ($purchases as $pur):
-                                $st = $STATUS_MAP[$pur['status']] ?? $STATUS_MAP['draft'];
-                                $pay = $PAY_MAP[$pur['payment_status']] ?? $PAY_MAP['pending'];
-                                $sym = $pur['currency_symbol'] ?? '$';
-                                ?>
-                                        <tr>
-                                            <td class="n fw-600" style="direction:ltr">
-                                                <a href="invoice_view.php?id=<?= $pur['id'] ?>"
-                                                    style="color:#1e3a8a;text-decoration:none">
-                                                    <?= htmlspecialchars($pur['purchase_number']) ?>
-                                                </a>
-                                            </td>
-                                            <td class="text-muted"><?= $pur['purchase_date'] ?></td>
-                                            <td>
-                                                <div class="fw-600" style="font-size:.83rem">
-                                                    <?= htmlspecialchars($pur['supplier_name'] ?? '—') ?></div>
-                                            </td>
-                                            <td class="text-center">
-                                                <span class="badge bg-secondary-subtle text-secondary"><?= $pur['items_count'] ?>
-                                                    بند</span>
-                                            </td>
-                                            <td><span class="badge bg-secondary-subtle text-secondary"
-                                                    style="font-size:.68rem"><?= $pur['currency'] ?></span></td>
-                                            <td class="n fw-600"><?= number_format($pur['final_amount'], 2) ?>             <?= $sym ?></td>
-                                            <td class="n text-muted" style="font-size:.78rem">
-                                                <?= $pur['final_amount_base_currency'] ? number_format($pur['final_amount_base_currency'], 2) . ' $' : '—' ?>
-                                            </td>
-                                            <td><span class="<?= $pay['cls'] ?>"
-                                                    style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
-                                            <td><span class="badge <?= $st['cls'] ?>"
-                                                    style="font-size:.68rem"><?= $st['label'] ?></span></td>
-                                            <td>
-                                                <div class="d-flex gap-1 justify-content-center">
-                                                    <button class="act-btn info-h" onclick="viewInvoice(<?= $pur['id'] ?>)"
-                                                        title="عرض">
-                                                        <i class="bi bi-eye"></i>
+            <div class="table-responsive">
+                <table class="mtbl" id="purchasesTbl">
+                    <thead>
+                        <tr>
+                            <th style="color:#1e3a8a">رقم الفاتورة</th>
+                            <th>التاريخ</th>
+                            <th style="color:#1e3a8a">المورد</th>
+                            <th>البنود</th>
+                            <th>العملة</th>
+                            <th>الإجمالي</th>
+                            <th>بعملة الفرع (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
+                            <th>حالة الدفع</th>
+                            <th>الحالة</th>
+                            <th style="text-align:center" data-no-sort>إجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($purchases)): ?>
+                                <tr>
+                                    <td colspan="10" class="text-center text-muted py-5">
+                                        <i class="bi bi-receipt d-block mb-2" style="font-size:2rem;opacity:.2"></i>
+                                        لا توجد فواتير<?= $search ? " تطابق \"{$search}\"" : '' ?>
+                                    </td>
+                                </tr>
+                        <?php endif; ?>
+                        <?php foreach ($purchases as $pur):
+                            $st = $STATUS_MAP[$pur['status']] ?? $STATUS_MAP['draft'];
+                            $pay = $PAY_MAP[$pur['payment_status']] ?? $PAY_MAP['pending'];
+                            $sym = $pur['currency_symbol'] ?? '$';
+                            ?>
+                                <tr style="<?= purchaseRowStyle($pur['status']) ?>">
+                                    <td class="n fw-600" style="direction:rtl;color:#16a34a">
+                                        <a href="invoice_view.php?id=<?= $pur['id'] ?>"
+                                            style="color:#1e3a8a;text-decoration:none">
+                                            <?= htmlspecialchars($pur['purchase_number']) ?>
+                                        </a>
+                                    </td>
+                                    <td class="text-muted" style="direction:rtl"><?= $pur['purchase_date'] ?></td>
+                                    <td>
+                                        <div class="fw-600" style="font-size:.83rem;color:#16a34a;direction:rtl">
+                                            <?= htmlspecialchars($pur['supplier_name'] ?? '—') ?>
+                                        </div>
+                                    </td>
+                                    <td class=" text-center" style="direction:rtl">
+                                        <span class="badge bg-secondary-subtle text-secondary"><?= $pur['items_count'] ?>
+                                            بند</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info-subtle text-info" style="font-size:.72rem" dir="rtl">
+                                            <?= htmlspecialchars($pur['currency_code'] ?: '—') ?>
+                                        </span>
+                                    </td>
+                                    <td class="n fw-600"><?= number_format($pur['final_amount'], 2) ?>         <?= $sym ?></td>
+                                    <td class="n text-muted" style="font-size:.78rem">
+                                        <?= $pur['final_amount_base_currency'] ? number_format($pur['final_amount_base_currency'], 2) . ' $' : '—' ?>
+                                    </td>
+                                    <td><span class="<?= $pay['cls'] ?>"
+                                            style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
+                                    <td><span class="badge <?= $st['cls'] ?>"
+                                            style="font-size:.68rem"><?= $st['label'] ?></span></td>
+                                    <td>
+                                        <div class="d-flex gap-1 justify-content-center">
+                                            <button class="act-btn info-h" onclick="viewInvoice(<?= $pur['id'] ?>)" title="عرض">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <?php if ($pur['status'] === 'draft'): ?>
+                                                    <a href="invoice_edit.php?id=<?= $pur['id'] ?>" class="act-btn" title="تعديل">
+                                                        <i class="bi bi-pencil"></i>
+                                                    </a>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] === 'draft'): ?>
+                                                    <button class="act-btn success-h"
+                                                        onclick="confirmInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
+                                                        title="تأكيد الفاتورة"><i class="bi bi-check-circle"></i>
                                                     </button>
-                                                    <?php if ($pur['status'] === 'draft'): ?>
-                                                                <a href="invoice_edit.php?id=<?= $pur['id'] ?>" class="act-btn" title="تعديل">
-                                                                    <i class="bi bi-pencil"></i>
-                                                                </a>
-                                                    <?php endif; ?>
-                                                    <?php if ($pur['status'] === 'draft'): ?>
-                                                                <button class="act-btn success-h"
-                                                                    onclick="confirmInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
-                                                                    title="تأكيد الفاتورة"><i class="bi bi-check-circle"></i>
-                                                                </button>
-                                                    <?php endif; ?>
-                                                    <?php if ($pur['status'] !== 'cancelled'): ?>
-                                                                <button class="act-btn danger"
-                                                                    onclick="cancelInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
-                                                                    title="إلغاء"><i class="bi bi-x-circle"></i>
-                                                                </button>
-                                                    <?php endif; ?>
-                                                </div>
-                                            </td>
-                                        </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] === 'confirmed'): ?>
+
+                                                    <a href="returns.php?open_purchase_id=<?= $pur['id'] ?>" class="act-btn"
+                                                        style="color:#dc2626" title="إنشاء مرتجع لهذه الفاتورة">
+                                                        <i class="bi bi-arrow-return-right"></i>
+                                                    </a>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] !== 'cancelled'): ?>
+                                                    <button class="act-btn danger"
+                                                        onclick="cancelInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
+                                                        title="إلغاء"><i class="bi bi-x-circle"></i>
+                                                    </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
+        </div>
         </div>
     </main>
 
@@ -572,12 +693,16 @@ $PAY_MAP = [
         <div class="modal-dialog modal-xl modal-dialog-scrollable">
             <div class="modal-content" style="border-radius:16px;border:none">
                 <div class="modal-header py-3 px-4 border-0"
-                    style="background:linear-gradient(135deg,#0c447c,#1e3a8a);border-radius:16px 16px 0 0">
+                    style="background:linear-gradient(135deg,#0c447c,var(--section-color));border-radius:16px 16px 0 0">
                     <div>
                         <h6 class="modal-title text-white fw-700 mb-0" id="vTitle">تفاصيل الفاتورة</h6>
                         <div id="vSub" style="font-size:.75rem;color:rgba(255,255,255,.7);margin-top:2px"></div>
                     </div>
                     <div class="d-flex gap-2 align-items-center">
+                        <button type="button" class="btn btn-sm" onclick="printPurchaseInvoice()"
+                            style="border-radius:8px;background:rgba(255,255,255,.15);color:#fff;font-size:.76rem;border:1px solid rgba(255,255,255,.3)">
+                            <i class="bi bi-printer me-1"></i>طباعة
+                        </button>
                         <a id="vEditBtn" href="#" class="btn btn-sm"
                             style="display:none;border-radius:8px;background:rgba(255,255,255,.15);color:#fff;font-size:.76rem;border:1px solid rgba(255,255,255,.3)">
                             <i class="bi bi-pencil me-1"></i>تعديل
@@ -640,7 +765,13 @@ $PAY_MAP = [
                                                     بيان القطعة</th>
                                                 <th
                                                     style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">
-                                                    الكمية</th>
+                                                    القياس</th>
+                                                <th
+                                                    style="padding:6px 10px;color:#16a34a;font-weight:600;border-bottom:1px solid #e2e8f0">
+                                                    اللون</th>
+                                                <th
+                                                    style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">
+                                                    عدد الكروبات</th>
                                                 <th
                                                     style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">
                                                     سعر الوحدة</th>
@@ -655,41 +786,60 @@ $PAY_MAP = [
                             </div>
                         </div>
 
-                        <!-- ── ملخص المبالغ ── -->
-                        <div class="col-md-6">
+                        <!-- ── ملخص المبالغ — بنفس عرض المودال، مباشرة تحت جدول البنود ── -->
+                        <div class="col-12">
                             <div
                                 style="background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;padding:10px 14px;font-size:.8rem">
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="text-muted">المبلغ الصافي للمنتجات</span>
-                                    <span class="fw-600" id="cSumProducts">—</span>
-                                </div>
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="text-muted">نسبة الخصم</span>
-                                    <span class="fw-600 text-danger" id="cSumDiscount">0%</span>
-                                </div>
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="text-muted">قيمة الخصم</span>
-                                    <span class="fw-600 text-danger" id="cSumDiscountAmt">0.00</span>
-                                </div>
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="text-muted">الضريبة</span>
-                                    <span class="fw-600" id="cSumTax">0.00</span>
-                                </div>
-                                <hr style="margin:5px 0;border-color:#e2e8f0">
-                                <div class="d-flex justify-content-between fw-700">
-                                    <span>المبلغ الإجمالي النهائي</span>
-                                    <span style="color:#1e3a8a" id="cSumFinal">—</span>
+                                <div class="row g-2 text-center text-md-start">
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">المبلغ الصافي للمنتجات</div>
+                                        <div class="fw-600" id="cSumProducts">—</div>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">نسبة الخصم</div>
+                                        <div class="fw-600 text-danger" id="cSumDiscount">0%</div>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">قيمة الخصم</div>
+                                        <div class="fw-600 text-danger" id="cSumDiscountAmt">0.00</div>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">الضريبة</div>
+                                        <div class="fw-600" id="cSumTax">0.00</div>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">سعر الصرف عند الإنشاء</div>
+                                        <div class="fw-600" style="color:#7c3aed" id="cSumExRate">—</div>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <div class="text-muted" style="font-size:.7rem">المبلغ الإجمالي النهائي</div>
+                                        <div class="fw-700" style="color:var(--section-color);font-size:.95rem"
+                                            id="cSumFinal">—</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
+                        <!-- ── بانر خصم تعجيل الدفع (يظهر بس لو الفاتورة مؤهلة) ── -->
+                        <div class="col-12" id="cSettleDiscBanner" style="display:none">
+                            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 14px;font-size:.8rem"
+                                class="d-flex align-items-center flex-wrap gap-2">
+                                <i class="bi bi-lightning-charge-fill" style="color:#16a34a"></i>
+                                <span id="cSettleDiscText" class="text-success fw-600"></span>
+                                <button type="button" class="btn btn-sm btn-success ms-auto" id="cSettleDiscBtn"
+                                    style="border-radius:8px;font-size:.75rem" onclick="applySettlementDiscount()">
+                                    <i class="bi bi-check2 me-1"></i>دفع كامل بالخصم الآن
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- ── تكاليف الشحن ── -->
-                        <div class="col-md-6">
+                        <div class="col-12">
                             <label class="form-label small fw-600 text-secondary mb-1">
                                 <i class="bi bi-truck me-1 text-warning"></i>تكاليف الشحن والنقلية
                             </label>
                             <div class="row g-2">
-                                <div class="col-12">
+                                <div class="col-12 col-md-4">
                                     <div class="btn-group w-100 mb-2" role="group">
                                         <input type="radio" class="btn-check" name="shippingOn" id="shipOnUs" value="us"
                                             checked onchange="updateTotal()">
@@ -705,34 +855,52 @@ $PAY_MAP = [
                                         </label>
                                     </div>
                                 </div>
-                                <div class="col-7" id="shippingAmtWrap">
+                                <div class="col-7 col-md-4" id="shippingAmtWrap">
                                     <div class="input-group input-group-sm">
                                         <input type="number" id="cShipping" class="form-control" placeholder="0.00"
                                             min="0" step="0.01" oninput="updateTotal()">
+                                        <!-- عملة الشحن مستقلة كلياً عن قرار حصر عملة الدفع — بتقدر تكون
+                                        أي عملة من الجدول (مو محصورة بالفاتورة/الفرع)، لأنه غالباً شركة
+                                        الشحن نفسها بتحدد عملتها -->
                                         <select id="cShippingCur" class="form-select" style="max-width:85px"
-                                            onchange="updateTotal()">
+                                            onchange="onShippingCurChange()">
                                             <?php foreach ($currencies as $cur): ?>
-                                                        <option value="<?= $cur['code'] ?>"><?= $cur['code'] ?></option>
+                                                    <option value="<?= $cur['code'] ?>"><?= $cur['code'] ?></option>
                                             <?php endforeach; ?>
                                         </select>
                                     </div>
                                 </div>
-                                <div class="col-5" id="shippingAmtWrap2">
+                                <!-- سعر صرف الشحن — يظهر بس لو عملة الشحن عملة ثالثة (مو عملة
+                                الفاتورة ومو عملة الفرع)، لأنه بهاتين الحالتين السعر معروف أصلاً
+                                (سعر الفاتورة نفسه، أو 1 على التوالي) وما في داعي حقل إضافي -->
+                                <div class="col-12 col-md-4" id="shippingRateWrap" style="display:none">
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text" style="font-size:.72rem" id="shippingRateLbl">1
+                                            ? =</span>
+                                        <input type="number" id="cShippingRate" class="form-control" min="0.0001"
+                                            step="0.0001" placeholder="سعر الصرف" oninput="updateTotal()">
+                                    </div>
+                                    <div class="form-text" style="font-size:.68rem">
+                                        عملة الشحن مختلفة عن عملة الفاتورة وعملة الفرع — أدخل سعر الصرف الفعلي وقت
+                                        هالشحنة يدوياً
+                                    </div>
+                                </div>
+                                <div class="col-5 col-md-4" id="shippingAmtWrap2">
                                     <div class="input-group input-group-sm">
                                         <select id="cShippingCarrier" class="form-select form-select-sm"
                                             onchange="onCarrierChange(this)">
                                             <option value="">— شركة الشحن —</option>
                                             <?php foreach ($shippingCarriers as $sc): ?>
-                                                        <option value="<?= $sc['id'] ?>"
-                                                            data-name="<?= htmlspecialchars($sc['name'], ENT_QUOTES) ?>"
-                                                            data-phone="<?= htmlspecialchars($sc['phone'] ?? '', ENT_QUOTES) ?>"
-                                                            data-payable-id="<?= $sc['payable_account_id'] ?? 0 ?>">
-                                                            <?= htmlspecialchars($sc['name']) ?>
-                                                            <?php if ($sc['contact_person']): ?>(<?= htmlspecialchars($sc['contact_person']) ?>)<?php endif; ?>
-                                                        </option>
+                                                    <option value="<?= $sc['id'] ?>"
+                                                        data-name="<?= htmlspecialchars($sc['name'], ENT_QUOTES) ?>"
+                                                        data-phone="<?= htmlspecialchars($sc['phone'] ?? '', ENT_QUOTES) ?>"
+                                                        data-payable-id="<?= $sc['payable_account_id'] ?? 0 ?>">
+                                                        <?= htmlspecialchars($sc['name']) ?>
+                                                        <?php if ($sc['contact_person']): ?>(<?= htmlspecialchars($sc['contact_person']) ?>)<?php endif; ?>
+                                                    </option>
                                             <?php endforeach; ?>
                                             <?php if (empty($shippingCarriers)): ?>
-                                                        <option value="" disabled>لا توجد شركات — أضف من الإعدادات</option>
+                                                    <option value="" disabled>لا توجد شركات — أضف من الإعدادات</option>
                                             <?php endif; ?>
                                         </select>
                                         <a href="<?= BASE_PATH ?>/retail1/modules/accounting/shipping_carriers.php"
@@ -765,11 +933,11 @@ $PAY_MAP = [
                                         <select id="cShipCashAccount" class="form-select form-select-sm">
                                             <option value="">— حساب الصندوق —</option>
                                             <?php foreach ($cashAccounts as $ca): ?>
-                                                        <option value="<?= $ca['id'] ?>"
-                                                            data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
-                                                            <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                                            (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                                        </option>
+                                                    <option value="<?= $ca['id'] ?>"
+                                                        data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
+                                                        <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                                        (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
+                                                    </option>
                                             <?php endforeach; ?>
                                         </select>
                                     </div>
@@ -814,26 +982,31 @@ $PAY_MAP = [
                                     <div class="input-group input-group-sm">
                                         <input type="number" id="cPaidAmt" class="form-control fw-600"
                                             placeholder="0.00" min="0" step="0.01" oninput="onPaidChange()">
+                                        <!-- ⚠ قرار تصميمي متعمَّد: عملة دفع الفاتورة (لا الشحن) محصورة
+                                        عملة الفاتورة أو عملة الفرع فقط، بدون أي تعقيد — تُملأ ديناميكياً
+                                        فور تحميل بيانات الفاتورة. أي دفع بعملة ثالثة يصير من صفحة
+                                        "المدفوعات" بقسم المحاسبة، مو من هون. -->
                                         <select id="cPaidCur" class="form-select" style="max-width:85px"
-                                            onchange="onPaidChange()">
-                                            <?php foreach ($currencies as $cur): ?>
-                                                        <option value="<?= $cur['code'] ?>"><?= $cur['code'] ?></option>
-                                            <?php endforeach; ?>
+                                            onchange="_cPaidRateTouched=false; onPaidChange()">
                                         </select>
                                     </div>
                                 </div>
-                                <!-- سعر الصرف — يظهر فقط عند اختلاف العملة -->
+                                <!-- سعر الصرف — يظهر فقط لو الدفع بعملة الفرع (مختلفة عن الفاتورة).
+                                عملة الفرع هي المرجع الثابت دايماً ("1 عملة الفرع = س عملة الفاتورة")
+                                — نفس اتفاقية exchange_rate المخزَّن على الفاتورة نفسها بالضبط.
+                                مقترح تلقائياً، وقابل للتعديل اليدوي بالكامل، مع زر تحديث يجيب آخر
+                                سعر من جدول currencies العام وقت الحاجة. -->
                                 <div class="col-md-7" id="cPaidRateWrap" style="display:none">
                                     <div class="input-group input-group-sm">
                                         <span class="input-group-text" style="font-size:.73rem" id="cPaidRateLabel">1 ?
                                             =</span>
                                         <input type="number" id="cPaidRate" class="form-control fw-600" min="0.000001"
-                                            step="0.001" dir="ltr" placeholder="سعر الصرف" oninput="updateTotal()">
+                                            step="0.0001" dir="ltr" oninput="_cPaidRateTouched=true; updateTotal()">
                                         <span class="input-group-text" id="cPaidRateSuffix"
                                             style="font-size:.73rem"></span>
                                         <button type="button" class="btn btn-sm btn-outline-primary"
                                             style="border-radius:0 7px 7px 0" onclick="fetchPaidRate()"
-                                            title="جلب السعر من الإنترنت">
+                                            title="تحديث السعر من جدول العملات">
                                             <i class="bi bi-arrow-repeat" id="paidRateIcon"></i>
                                         </button>
                                     </div>
@@ -853,17 +1026,23 @@ $PAY_MAP = [
                         <!-- حساب الدفع -->
                         <div class="col-md-6">
                             <label class="form-label small fw-600 text-secondary mb-1">
-                                <i class="bi bi-safe me-1"></i>حساب الدفع (صندوق/بنك)
+                                <i class="bi bi-safe me-1"></i>حساب الدفع (صندوق / بنك / دفعة مقدمة للمورد)
                             </label>
-                            <select id="cCashAccount" class="form-select form-select-sm">
+                            <select id="cCashAccount" class="form-select form-select-sm"
+                                onchange="onCashAccountChange()">
                                 <option value="">— اختر حساب الدفع —</option>
                                 <?php foreach ($cashAccounts as $ca): ?>
-                                            <option value="<?= $ca['id'] ?>" data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
-                                                <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                                (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                            </option>
+                                        <option value="<?= $ca['id'] ?>"
+                                            data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>"
+                                            data-balance="<?= (float) $ca['balance'] ?>"
+                                            data-sym="<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>" data-type="regular">
+                                            <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                            (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
+                                        </option>
                                 <?php endforeach; ?>
+                                <!-- خيار حساب الدفعة المقدمة الخاص بمورد هالفاتورة ينضاف ديناميكياً بالجافاسكربت -->
                             </select>
+                            <div id="cCashAccBalanceHint" style="font-size:.72rem;margin-top:4px"></div>
                         </div>
 
                         <!-- صورة الفاتورة -->
@@ -904,6 +1083,18 @@ $PAY_MAP = [
                             </div>
                         </div>
 
+                        <!-- تسوية فروقات التقريب الصغيرة -->
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="cExactSettle">
+                                <label class="form-check-label" for="cExactSettle"
+                                    style="font-size:.78rem;cursor:pointer">
+                                    <i class="bi bi-check2-circle me-1 text-success"></i>
+                                    اعتبار الفاتورة مسدَّدة بالكامل (تسوية فروقات التقريب الصغيرة تلقائياً، حتى ٠.٠١$)
+                                </label>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
                 <div class="modal-footer border-0 px-4 pb-4 gap-2">
@@ -923,20 +1114,9 @@ $PAY_MAP = [
 
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
-        const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
-        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
-        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
-        function toggleGroup(g) {
-            const o = g.classList.contains('open');
-            document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
-            g.classList.toggle('open', !o);
-            localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());
-        }
-        document.querySelectorAll('.sb-group').forEach(g => {
-            if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');
-        });
+
         const viewModal = new bootstrap.Modal(document.getElementById('viewModal'));
         const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
         const STATUS_MAP = <?= json_encode($STATUS_MAP) ?>;
@@ -944,7 +1124,7 @@ $PAY_MAP = [
         function post(data) {
             const fd = new FormData();
             Object.entries(data).forEach(([k, v]) => fd.append(k, v ?? ''));
-            return fetch(location.href, { method: 'POST', body: fd }).then(r => r.json());
+            return fetch(location.href, {method: 'POST', body: fd}).then(r => r.json());
         }
         function toast(msg, type = 'success') {
             const t = document.createElement('div');
@@ -953,21 +1133,34 @@ $PAY_MAP = [
             t.innerHTML = `<i class="bi bi-${type === 'success' ? 'check-circle-fill text-success' : 'exclamation-triangle-fill text-danger'} me-2"></i>${msg}`;
             document.body.appendChild(t); setTimeout(() => t.remove(), 3200);
         }
+        // ⚠ عرض القياس كنطاق مختصر بدل تعداد كل المقاسات: "{نوع العمر}
+        // {أصغر}-{أكبر}" — نفس منطق returns.php بالضبط، لضمان الاتساق.
+        function formatSizeRange(g) {
+            if (!g.sizes.length) return '—';
+            const nums = g.sizes.map(s => parseFloat(s)).filter(n => !isNaN(n));
+            if (!nums.length) return g.sizes.join(' · ') + (g.ageType ? ' ' + g.ageType : '');
+            const min = Math.min(...nums), max = Math.max(...nums);
+            const rangeTxt = min === max ? `${min}` : `${min}-${max}`;
+            return g.ageType ? `${g.ageType} ${rangeTxt}` : rangeTxt;
+        }
+
         function viewInvoice(id) {
             document.getElementById('vTitle').textContent = 'جارٍ التحميل...';
             document.getElementById('vSub').textContent = '';
             document.getElementById('vEditBtn').style.display = 'none';
             document.getElementById('vBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-primary"></span></div>';
             viewModal.show();
-            post({ _action: 'get_purchase', id }).then(d => {
-                if (!d.ok) { document.getElementById('vBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return; }
+            post({_action: 'get_purchase', id}).then(d => {
+                if (!d.ok) {document.getElementById('vBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return;}
                 const p = d.data;
+                _cPurchaseData = p; // ⚠ حتى يشتغل زر الطباعة صح من مودال التفاصيل مباشرة، بدون الحاجة لفتح مودال التأكيد قبله
                 const st = STATUS_MAP[p.status] || STATUS_MAP['draft'];
                 const pay = PAY_MAP[p.payment_status] || PAY_MAP['pending'];
                 const sym = p.currency_symbol || '$';
                 const cur = p.currency || 'USD';
                 const rate = parseFloat(p.exchange_rate) || 1;
                 const isUSD = cur === 'USD';
+                const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
                 document.getElementById('vTitle').textContent = 'فاتورة: ' + p.purchase_number;
                 document.getElementById('vSub').textContent = p.supplier_name || '';
                 if (p.status === 'draft') {
@@ -975,30 +1168,41 @@ $PAY_MAP = [
                     eb.href = `invoice_edit.php?id=${p.id}`;
                     eb.style.display = '';
                 }
-                // تجميع البنود بـ (product × unit_price × color)
-                const GRP_COLORS = [['#eff6ff', '#1e3a8a', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'],
+                // تجميع البنود بـ (product × unit_price) فقط — الكروب —
+                // بدون اللون بالمفتاح، حتى تنجمع كل ألوان نفس الكروب
+                // بصف واحد بدل تكرار صف منفصل لكل لون (تصحيح مطلوب:
+                // "تجميع حسب الكروب مو حسب اللون").
+                const GRP_COLORS = [['#eff6ff', '#dc2626', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'],
                 ['#fff7ed', '#7c2d12', '#fed7aa'], ['#f5f3ff', '#4c1d95', '#ddd6fe']];
                 const grpMap = {};
                 (p.items || []).forEach(it => {
-                    const k = `${it.product_id || it.product_name || it.id}_${it.unit_price}_${it.color || ''}`;
+                    const k = `${it.product_id || it.product_name || it.id}_${it.unit_price}`;
                     if (!grpMap[k]) {
                         grpMap[k] = {
                             product_name: it.product_name || '—', model_number: it.model_number || '',
                             unit_price: parseFloat(it.unit_price),
                             unit_price_base: parseFloat(it.unit_price_base_currency || (parseFloat(it.unit_price) / rate)),
-                            color: it.color || '—', wh_name: it.wh_name || '—',
-                            qty: parseFloat(it.quantity), // كمية أول سطر = كمية اللون
-                            total: 0, sizes: [], sizeCount: 0
+                            wh_name: p.warehouse_name || '—', // ⚠ المستودع مستوى فاتورة واحد (راجع تعليق get_purchase) — it.wh_name كان دايماً فاضي لأنه العمود أصلاً مش مُختار باستعلام البنود، مصدر الشرطات "-------" يلي كانت تطلع
+                            qty: 0, total: 0, sizes: [], colors: [], ageType: it.age_type || '', _colorQty: {}
                         };
                     }
-                    // نجمع الإجمالي من total_price مباشرة
+                    // ⚠ إصلاح جوهري: كل كروب (منتج+سعر) ممكن يمثّل عدة
+                    // ألوان مدموجة مع بعض، وكل لون اتدخل له "عدد كروبات"
+                    // منفصل بنفسه. الاستبدال المباشر (=) كان يحتفظ بآخر
+                    // لون بس ويضيع الباقي (10 بدل 10+10+10=30). الصح: نسجّل
+                    // القيمة مرة وحدة لكل لون فريد (كل مقاسات نفس اللون
+                    // مشتركة بنفس الرقم أصلاً، فالاستبدال هون صحيح جوا
+                    // نطاق اللون الواحد بس)، وبعدين نجمع كل الألوان مع بعض.
+                    const colorKey = it.color || '_none';
+                    grpMap[k]._colorQty[colorKey] = parseFloat(it.quantity);
+                    grpMap[k].qty = Object.values(grpMap[k]._colorQty).reduce((s, v) => s + v, 0);
                     grpMap[k].total += parseFloat(it.total_price);
                     if (it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
-                    grpMap[k].sizeCount++;
+                    if (it.color && !grpMap[k].colors.includes(it.color)) grpMap[k].colors.push(it.color);
                 });
 
-                // ترتيب الكروبات بالسعر ثم اللون
-                const grpRows = Object.values(grpMap).sort((a, b) => a.unit_price - b.unit_price || (a.color || '').localeCompare(b.color || ''));
+                // ترتيب الكروبات بالسعر
+                const grpRows = Object.values(grpMap).sort((a, b) => a.unit_price - b.unit_price);
                 // تلوين الكروبات بحسب السعر
                 const priceList = [...new Set(grpRows.map(g => g.unit_price))];
                 const itemsHtml = grpRows.map(g => {
@@ -1011,9 +1215,9 @@ $PAY_MAP = [
                     <div style="font-size:.7rem;color:#94a3b8" dir="ltr">${g.model_number}</div>
                 </td>
                 <td>${grpBadge}
-                    <div style="font-size:.72rem;font-weight:600;color:#334155;margin-top:3px">${g.sizes.join(' · ')}</div>
+                    <div style="font-size:.72rem;font-weight:600;color:#334155;margin-top:3px">${formatSizeRange(g)}</div>
                 </td>
-                <td class="text-center" style="font-size:.78rem">${g.color}</td>
+                <td class="text-center" style="font-size:.78rem">${g.colors.join(' · ') || '—'}</td>
                 <td class="n text-center fw-600">${g.qty.toFixed(0)}</td>
                 <td class="n text-center">${g.unit_price.toFixed(4)} ${sym}</td>
                 <td class="n text-center" style="color:#16a34a;font-size:.72rem">${g.unit_price_base.toFixed(4)} $</td>
@@ -1041,7 +1245,7 @@ $PAY_MAP = [
         <table class="mtbl" style="font-size:.78rem">
             <thead><tr style="background:#f8fafc">
                 <th>المنتج</th><th class="text-center">القياس</th><th class="text-center">اللون</th>
-                <th class="text-center">الكمية</th>
+                <th class="text-center">عدد الكروبات</th>
                 <th class="text-center">سعر الوحدة (${sym})</th>
                 <th class="text-center" style="color:#16a34a">سعر/$</th>
                 <th class="text-end">الإجمالي (${sym})</th>
@@ -1051,33 +1255,115 @@ $PAY_MAP = [
         </table>
         </div>
         <div class="row justify-content-end">
-          <div class="col-md-4">
+          <div class="col-md-5">
             <div style="background:#f8fafc;border-radius:10px;padding:10px 14px">
                 ${parseFloat(p.discount_amount) > 0 ? `<div class="det-row"><span style="color:#64748b">الخصم</span><span class="n text-danger">-${parseFloat(p.discount_amount).toFixed(2)} ${sym}</span></div>` : ''}
                 ${parseFloat(p.tax_amount) > 0 ? `<div class="det-row"><span style="color:#64748b">الضريبة</span><span class="n">+${parseFloat(p.tax_amount).toFixed(2)} ${sym}</span></div>` : ''}
                 <div class="det-row" style="font-weight:700;font-size:.9rem;border-top:1px solid #e2e8f0;padding-top:6px">
                     <span>الصافي</span>
-                    <span class="n">${grpRows.reduce((s, g) => s + g.total, 0).toFixed(2)} ${sym}
+                    <span class="n">${fmt(p.final_amount)} ${sym}
                     ${!isUSD && p.final_amount_base_currency ? `<small style="color:#94a3b8;font-weight:400"> (${parseFloat(p.final_amount_base_currency).toFixed(2)} $)</small>` : ''}</span>
                 </div>
             </div>
+            ${(() => {
+                        // ⚠ تحقق تحذيري فقط — الصافي المعروض فوق دايماً من
+                        // final_amount المخزّن (الحقيقة المحاسبية المعتمدة)،
+                        // مو من مجموع البنود المعروضة. لو فيه فرق حقيقي بينهم
+                        // (زي الفاتورة يلي كشفت باگ الكمية المضاعفة)، نطلع
+                        // تحذير صريح بدل ما نخبيه أو نعرض رقم البنود بصمت
+                        // وكأنه هو "الصافي" الرسمي.
+                        // ⚠ تصحيح: المقارنة الصح هي مع total_amount (المجموع
+                        // قبل الخصم والضريبة) — final_amount هو بعد تطبيقهم
+                        // فطبيعي يختلف عن مجموع البنود الخام دايماً لو فيه
+                        // خصم أو ضريبة على الفاتورة (هاد مو باگ، هيك المفروض).
+                        const itemsSum = grpRows.reduce((s, g) => s + g.total, 0);
+                        const diff = Math.abs(itemsSum - parseFloat(p.total_amount || 0));
+                        if (diff > 0.05) {
+                            return `<div class="mt-2" style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;font-size:.75rem;color:#dc2626">
+                    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                    تحذير: مجموع البنود المعروضة (${fmt(itemsSum)} ${sym}) لا يطابق المجموع الفرعي المخزَّن على الفاتورة (قبل الخصم والضريبة) —
+                    فرق ${fmt(diff)} ${sym}. راجع الفاتورة يدوياً.
+                </div>`;
+                        }
+                        return '';
+                    })()}
           </div>
         </div>
+        ${buildConfirmationDetailsHtml(p)}
         ${p.notes ? `<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${p.notes}</div>` : ''}
-        ${p.status === 'draft' ? `<div style="margin-top:12px;display:flex;gap:8px">
-            <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;flex:1;font-size:.8rem"
-                onclick="confirmInvoice(${p.id},'${p.purchase_number}')">
-                <i class="bi bi-check-circle me-1"></i>تأكيد الفاتورة
-            </button>
+        ${p.status === 'draft' ? `<div style="margin-top:12px">
             <a href="invoice_edit.php?id=${p.id}" class="btn btn-sm fw-600"
-               style="border-radius:8px;border:1px solid #1e3a8a;color:#1e3a8a;flex:1;font-size:.8rem;text-decoration:none;text-align:center">
+               style="border-radius:8px;border:1px solid var(--section-color);color:var(--section-color);width:100%;font-size:.8rem;text-decoration:none;text-align:center;display:block;padding:.5rem">
                 <i class="bi bi-pencil me-1"></i>تعديل
             </a>
         </div>`: ''}`;
             });
         }
-        let _cId = 0, _cTotal = 0, _cCurSym = '$', _cDiscount = 0, _cTax = 0, _cProducts = 0, _cPurchaseData = null;
-        function float(v) { return parseFloat(v) || 0; }
+        let _cId = 0, _cTotal = 0, _cCurSym = '$', _cDiscount = 0, _cTax = 0, _cProducts = 0, _cPurchaseData = null, _cSettleDiscAmt = 0;
+
+        // ⚠ يبني قسم "تفاصيل التأكيد" من القيود الفعلية المرجعة من
+        // get_purchase (p.journal_entries) — مو من تخمين أو حساب محلي،
+        // حتى ما يصير عرض غير مطابق للواقع المحاسبي الحقيقي.
+        function buildConfirmationDetailsHtml(p) {
+            if (p.status === 'draft') return '';
+            const JE_LABELS = {
+                purchase: {label: 'استلام الفاتورة (مخزون)', icon: 'bi-box-seam', color: '#dc2626'},
+                purchase_shipping: {label: 'أجور شحن', icon: 'bi-truck', color: '#92400e'},
+                purchase_payment: {label: 'دفعة نقدية', icon: 'bi-cash-coin', color: '#16a34a'},
+                purchase_settlement_discount: {label: 'خصم تعجيل دفع', icon: 'bi-lightning-charge', color: '#16a34a'},
+            };
+            const jes = p.journal_entries || [];
+            const mainJe = jes.find(j => j.reference_type === 'purchase');
+            const confirmDate = mainJe?.entry_date || p.updated_at || '—';
+            const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
+
+            const rows = jes.map(j => {
+                const meta = JE_LABELS[j.reference_type] || {label: j.reference_type, icon: 'bi-receipt', color: '#64748b'};
+                return `<tr>
+            <td style="font-size:.78rem"><i class="bi ${meta.icon} me-1" style="color:${meta.color}"></i>${meta.label}</td>
+            <td style="font-size:.76rem;color:#94a3b8">${j.entry_date}</td>
+            <td style="font-size:.76rem;color:#94a3b8" dir="ltr">${j.entry_number}</td>
+            <td class="n text-end fw-600" style="font-size:.8rem">${fmt(j.total_debit)} ${j.je_currency || ''}</td>
+        </tr>`;
+            }).join('');
+
+            const payStatusColor = p.payment_status === 'paid' ? '#16a34a' : (p.payment_status === 'partial' ? '#d97706' : '#dc2626');
+
+            return `
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;margin-top:12px">
+            <div style="font-size:.82rem;font-weight:700;color:#065f46;margin-bottom:8px">
+                <i class="bi bi-check-circle-fill me-1"></i>تفاصيل التأكيد — بتاريخ ${confirmDate}
+            </div>
+            <div class="row g-2 mb-2">
+                <div class="col-6 col-md-3">
+                    <small style="color:#64748b">حالة الدفع</small>
+                    <div class="fw-600" style="color:${payStatusColor}">${PAY_MAP[p.payment_status]?.label || p.payment_status}</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <small style="color:#64748b">إجمالي المسدَّد</small>
+                    <div class="fw-600">${fmt(p.paid_amount)} ${p.currency_symbol || '$'}</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <small style="color:#64748b">المتبقي على المورد</small>
+                    <div class="fw-600" style="color:${parseFloat(p.balance_amount) > 0 ? '#dc2626' : '#16a34a'}">${fmt(p.balance_amount)} ${p.currency_symbol || '$'}</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <small style="color:#64748b">عدد القيود المرتبطة</small>
+                    <div class="fw-600">${jes.length}</div>
+                </div>
+            </div>
+            ${rows ? `<div class="table-responsive">
+                <table class="mtbl" style="font-size:.78rem;background:#fff;border-radius:8px">
+                    <thead><tr style="background:#f8fafc">
+                        <th>نوع القيد</th><th>التاريخ</th><th>رقم القيد</th><th class="text-end">المبلغ</th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>` : '<div class="text-muted" style="font-size:.78rem">لا قيود مرتبطة موجودة</div>'}
+        </div>`;
+        }
+
+        function float(v) {return parseFloat(v) || 0;}
 
         function openConfirmModal(id, no, total, sym) {
             _cId = id; _cTotal = parseFloat(total) || 0; _cCurSym = sym || '$';
@@ -1097,19 +1383,34 @@ $PAY_MAP = [
             document.getElementById('cNotes').value = '';
             document.getElementById('cWarehouse').value = '';
             document.getElementById('cCashAccount').value = '';
-            document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="5" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
+            document.getElementById('cExactSettle').checked = false;
+            _cPaidRateTouched = false;
+            document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="7" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
             clearImg();
             confirmModal.show();
             // جلب بنود الفاتورة
-            post({ _action: 'get_purchase', id }).then(d => {
-                if (!d.ok) { document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="5" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return; }
+            post({_action: 'get_purchase', id}).then(d => {
+                if (!d.ok) {document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="7" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return;}
                 const p = d.data;
                 _cPurchaseData = p; // حفظ للطباعة
+
+                // ⚠ عملة دفع الفاتورة محصورة بخيارين بس (قرار تصميمي
+                // متعمَّد): عملة الفاتورة نفسها، أو عملة الفرع الأساسية —
+                // بدون أي عملة ثالثة، حتى ما نحتاج سعر صرف يدوي إطلاقاً
+                // بهالحقل. دفع بعملة ثالثة (نادر) يصير من صفحة "المدفوعات"
+                // بقسم المحاسبة، مو من هون.
+                (function populatePaidCurOptions() {
+                    const sel = document.getElementById('cPaidCur');
+                    const invC = p.currency_code || 'USD';
+                    const baseC = p.base_currency_code || 'USD';
+                    const opts = invC === baseC ? [invC] : [invC, baseC];
+                    sel.innerHTML = opts.map(c => `<option value="${c}">${c}</option>`).join('');
+                })();
                 _cProducts = parseFloat(p.total_amount) || 0;
                 _cDiscount = parseFloat(p.discount_amount) || 0;
                 _cTax = parseFloat(p.tax_amount) || 0;
                 const sym = p.currency_symbol || '$';
-                const cur = p.currency || 'USD';
+                const cur = p.currency_code || 'USD';
                 const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
 
                 // ── المستودع من الفاتورة ──
@@ -1117,77 +1418,246 @@ $PAY_MAP = [
                 // whole invoice) instead of purchase_items_{TS} — see get_purchase.
                 document.getElementById('cWarehouseName').textContent = p.warehouse_name || 'المستودع الرئيسي';
                 document.getElementById('cWarehouse').value = p.warehouse_id || '';
-                // بنود — مجمعة حسب المنتج
+                // بنود — مجمعة حسب الكروب (منتج × سعر)، مع تجميع كل
+                // الألوان ضمن نفس الكروب بعمود واحد بدل صف منفصل لكل لون
                 const groups = {};
                 (p.items || []).forEach(it => {
-                    const key = (it.product_name || ('بند #' + it.id)) + (it.color ? ' - ' + it.color : '');
-                    if (!groups[key]) groups[key] = { name: key, qty: 0, unit: parseFloat(it.unit_price), total: 0 };
-                    groups[key].qty += parseFloat(it.quantity);
+                    const key = (it.product_id || it.product_name || it.id) + '_' + it.unit_price;
+                    if (!groups[key]) groups[key] = {
+                        name: it.product_name || ('بند #' + it.id), colors: [], sizes: [], ageType: it.age_type || '',
+                        qty: 0, unit: parseFloat(it.unit_price), total: 0, _colorQty: {}
+                    };
+                    // ⚠ إصلاح جوهري: نجمع مرة وحدة لكل لون فريد ثم نجمع
+                    // الألوان مع بعض — راجع نفس الشرح المفصَّل بمودال
+                    // التفاصيل (viewInvoice) أعلاه بالضبط.
+                    const colorKey2 = it.color || '_none';
+                    groups[key]._colorQty[colorKey2] = parseFloat(it.quantity);
+                    groups[key].qty = Object.values(groups[key]._colorQty).reduce((s, v) => s + v, 0);
                     groups[key].total += parseFloat(it.total_price);
+                    if (it.color && !groups[key].colors.includes(it.color)) groups[key].colors.push(it.color);
+                    if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
                 });
                 let rows = '', i = 1;
                 Object.values(groups).forEach(g => {
                     rows += `<tr style="border-bottom:1px solid #f1f5f9">
                 <td style="padding:5px 10px;color:#94a3b8">${i++}</td>
                 <td style="padding:5px 10px;font-weight:600">${g.name}</td>
+                <td style="padding:5px 10px;text-align:center;font-size:.72rem;font-weight:600;color:#334155">${formatSizeRange(g)}</td>
+                <td style="padding:5px 10px;text-align:center;color:#16a34a">${g.colors.join(' · ') || '—'}</td>
                 <td style="padding:5px 10px;text-align:center">${g.qty}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr">${sym} ${fmt(g.unit)}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr;font-weight:600">${sym} ${fmt(g.total)}</td>
             </tr>`;
                 });
-                document.getElementById('cItemsBody').innerHTML = rows || '<tr><td colspan="5" class="text-center text-muted p-2">لا توجد بنود</td></tr>';
+                document.getElementById('cItemsBody').innerHTML = rows || '<tr><td colspan="7" class="text-center text-muted p-2">لا توجد بنود</td></tr>';
                 // ملخص المبالغ
                 document.getElementById('cSumProducts').textContent = sym + ' ' + fmt(p.total_amount);
                 document.getElementById('cSumDiscount').textContent = (parseFloat(p.discount_amount || 0) / parseFloat(p.total_amount || 1) * 100).toFixed(2) + '%';
                 document.getElementById('cSumDiscountAmt').textContent = '- ' + sym + ' ' + fmt(p.discount_amount);
                 document.getElementById('cSumTax').textContent = sym + ' ' + fmt(p.tax_amount);
                 document.getElementById('cSumFinal').textContent = sym + ' ' + fmt(p.final_amount);
+                const exRate = parseFloat(p.exchange_rate) || 1;
+                document.getElementById('cSumExRate').textContent = cur === (p.base_currency_code || 'USD') ? '—' : ('1 ' + (p.base_currency_code || 'USD') + ' = ' + exRate.toFixed(4) + ' ' + cur);
                 _cCurSym = sym; _cTotal = parseFloat(p.final_amount) || 0;
                 updateTotal();
+
+                // ── خصم تعجيل الدفع ──
+                // ⚠ العرض هون بس معلومة/اقتراح — القرار النهائي (هل
+                // ينطبق فعلاً) بيصير على السيرفر وقت التأكيد (تحقق من
+                // التاريخ + كون الدفعة كاملة)، مو من هالعرض. الزر هون
+                // بس بيعبّي المبلغ المخصوم بحقل الدفع كاقتراح مريح.
+                const settlePct = parseFloat(p.settlement_discount_pct || 0);
+                const banner = document.getElementById('cSettleDiscBanner');
+                _cSettleDiscAmt = 0;
+                if (settlePct > 0 && p.due_date) {
+                    const today = new Date().toISOString().slice(0, 10);
+                    const stillEligible = today <= p.due_date;
+                    _cSettleDiscAmt = parseFloat(p.final_amount) * settlePct / 100;
+                    const discountedTotal = parseFloat(p.final_amount) - _cSettleDiscAmt;
+                    if (stillEligible) {
+                        banner.style.display = '';
+                        document.getElementById('cSettleDiscText').innerHTML =
+                            `خصم تعجيل دفع ${settlePct}% متاح لو سدّدت الفاتورة كاملة اليوم (قبل ${p.due_date}) —
+                             المبلغ بعد الخصم: <strong>${sym} ${fmt(discountedTotal)}</strong> بدل ${sym} ${fmt(p.final_amount)}`;
+                        document.getElementById('cSettleDiscBtn').style.display = '';
+                    } else {
+                        banner.style.display = '';
+                        banner.querySelector('div').style.background = '#fef2f2';
+                        banner.querySelector('div').style.borderColor = '#fecaca';
+                        document.getElementById('cSettleDiscText').className = 'text-danger fw-600';
+                        document.getElementById('cSettleDiscText').innerHTML =
+                            `فات موعد خصم تعجيل الدفع (${settlePct}%) — كان لازم السداد قبل ${p.due_date}. المبلغ الكامل مستحق الآن.`;
+                        document.getElementById('cSettleDiscBtn').style.display = 'none';
+                    }
+                } else {
+                    banner.style.display = 'none';
+                }
+
+                // إضافة خيار حساب الدفعة المقدمة الخاص بمورد هالفاتورة
+                // بالتحديد (لو معرَّف له حساب أصلاً) — تحكّم يدوي كامل،
+                // بدون أي تطبيق تلقائي بالخلفية (راجع confirm_purchase_invoice.php:
+                // تعطّلت كتلة التطبيق التلقائي القديمة لتفادي خصم مزدوج).
+                const cashSel = document.getElementById('cCashAccount');
+                cashSel.querySelectorAll('option[data-type="advance"]').forEach(o => o.remove());
+                if (p.advance_account) {
+                    const av = p.advance_account;
+                    const opt = document.createElement('option');
+                    opt.value = av.id;
+                    opt.dataset.cur = av.cur_code || '';
+                    opt.dataset.balance = av.balance || 0;
+                    opt.dataset.sym = av.cur_sym || '';
+                    opt.dataset.type = 'advance';
+                    opt.textContent = `🔸 دفعة مقدمة — ${p.supplier_name} (الرصيد: ${Number(av.balance).toFixed(2)} ${av.cur_sym || ''})`;
+                    cashSel.appendChild(opt);
+                }
+                document.getElementById('cCashAccBalanceHint').innerHTML = '';
+
+                // فلترة حسابات الصندوق/البنك حسب العملة المختارة أول ما تفتح
+                onShippingCurChange();
+                filterAccountsByCurrency('cCashAccount', document.getElementById('cPaidCur').value);
             });
         }
 
+        // عرض رصيد الحساب المختار (صندوق/بنك/دفعة مقدمة) كتلميح — وتحذير
+        // أحمر صريح لو الحساب المختار هو "دفعة مقدمة" ورصيده أقل من
+        // المبلغ المطلوب دفعه من خلاله (مو رفض تلقائي، بس تنبيه واضح؛
+        // الرفض الفعلي بيصير عند الضغط على "تأكيد" — راجع doConfirm()).
+        function applySettlementDiscount() {
+            if (!_cPurchaseData || !_cSettleDiscAmt) return;
+            const invCur = _cPurchaseData.currency_code || 'USD';
+            document.getElementById('cPaidCur').value = invCur;
+            const discountedTotal = parseFloat(_cPurchaseData.final_amount) - _cSettleDiscAmt;
+            document.getElementById('cPaidAmt').value = discountedTotal.toFixed(2);
+            onPaidChange();
+            // ⚠ تفعيل تلقائي لتسوية فروقات التقريب — بما إنه المستخدم
+            // فعّل خصم التعجيل بنية التسديد الكامل صراحة، منطقي نضمن
+            // إنه فرق تقريب بسيط (كسور سنت) ما يمنع تسجيلها "مدفوعة
+            // بالكامل". لو ضغط المستخدم هالزر، هاي التسوية تلقائية —
+            // ما بتحتاج تفعيل يدوي إضافي منه.
+            document.getElementById('cExactSettle').checked = true;
+            toast('✅ تم تعبئة المبلغ بعد خصم التعجيل — بقي تختار حساب الدفع وتضغط تأكيد اليوم بالذات');
+        }
+
+        function onCashAccountChange() {
+            const sel = document.getElementById('cCashAccount');
+            const opt = sel.options[sel.selectedIndex];
+            const hint = document.getElementById('cCashAccBalanceHint');
+            if (!opt || !opt.value) {hint.innerHTML = ''; return;}
+
+            const balance = parseFloat(opt.dataset.balance || 0);
+            const sym = opt.dataset.sym || '';
+            const isAdvance = opt.dataset.type === 'advance';
+            const paidAmt = parseFloat(document.getElementById('cPaidAmt')?.value || 0);
+
+            if (isAdvance && paidAmt > 0 && paidAmt > balance) {
+                hint.innerHTML = `<i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>
+                    <span class="text-danger fw-600">رصيد الدفعة المقدمة للمورد صفر أو غير كافٍ
+                    (المتاح: ${balance.toFixed(2)} ${sym}) — قلّل المبلغ أو اختر حساب صندوق/بنك للباقي</span>`;
+                return;
+            }
+
+            // تلوين الرصيد حسب إشارته: أخضر = موجب، أحمر = سالب، أصفر = صفر تماماً
+            let color, icon;
+            if (balance > 0) {color = '#16a34a'; icon = 'bi-wallet2';}
+            else if (balance < 0) {color = '#dc2626'; icon = 'bi-exclamation-circle';}
+            else {color = '#ca8a04'; icon = 'bi-dash-circle';}
+
+            hint.innerHTML = `<i class="bi ${icon} me-1" style="color:${color}"></i>
+                الرصيد الحالي: <strong style="color:${color}">${balance.toFixed(2)} ${sym}</strong>`;
+        }
+
+        // فلترة قائمة حسابات صندوق/بنك لتُظهر فقط الحسابات بنفس عملة
+        // currencyCode المطلوبة (عبر data-cur المُخزّن أصلاً بكل <option>)
+        // — بدل ما تظهر كل الحسابات بكل العملات مع بعض (مو منطقي تختار
+        // صندوق ليرة سورية وتدفع منه بالدولار).
+        function filterAccountsByCurrency(selectId, currencyCode) {
+            const sel = document.getElementById(selectId);
+            if (!sel) return;
+            let stillValid = false;
+            Array.from(sel.options).forEach(opt => {
+                if (!opt.value) {opt.style.display = ''; return;} // خيار "— اختر —" دائماً ظاهر
+                const show = !currencyCode || opt.dataset.cur === currencyCode;
+                opt.style.display = show ? '' : 'none';
+                if (show && opt.value === sel.value) stillValid = true;
+            });
+            if (!stillValid) sel.value = '';
+        }
+
+        function onShippingCurChange() {
+            filterAccountsByCurrency('cShipCashAccount', document.getElementById('cShippingCur').value);
+
+            // ⚠ حقل سعر صرف الشحن يظهر فقط لو عملة الشحن "عملة ثالثة" —
+            // مختلفة عن عملة الفاتورة (يلي سعرها معروف أصلاً من الفاتورة
+            // نفسها) ومختلفة عن عملة الفرع (يلي سعرها = 1 بديهياً). هالسعر
+            // يُدخَل يدوياً من المستخدم (لحظة الشحنة الفعلية)، مو من جدول
+            // currencies العام — لأنه ممكن يختلف عن "آخر سعر معروف" بالجدول.
+            const shipCur = document.getElementById('cShippingCur').value;
+            const invCur = _cPurchaseData?.currency_code || 'USD';
+            const baseCur = _cPurchaseData?.base_currency_code || 'USD';
+            const wrap = document.getElementById('shippingRateWrap');
+            const isThirdCur = shipCur && shipCur !== invCur && shipCur !== baseCur;
+            wrap.style.display = isThirdCur ? '' : 'none';
+            if (isThirdCur) {
+                document.getElementById('shippingRateLbl').textContent = `1 ${baseCur} =`;
+            }
+            updateTotal();
+        }
+
+        let _cPaidRateTouched = false;
+
         function onPaidChange() {
             const paidCur = document.getElementById('cPaidCur').value;
-            const invCur = _cPurchaseData?.currency || 'USD';
+            const invCur = _cPurchaseData?.currency_code || 'USD';
+            const baseCur = _cPurchaseData?.base_currency_code || 'USD';
             const rateWrap = document.getElementById('cPaidRateWrap');
             const convertWrap = document.getElementById('cPaidConvertWrap');
+            filterAccountsByCurrency('cCashAccount', paidCur);
             if (paidCur && paidCur !== invCur) {
+                // ⚠ عملة الفرع هي المرجع الثابت دايماً ("1 عملة الفرع = س
+                // عملة الفاتورة") — نفس exchange_rate المخزَّن على الفاتورة
+                // نفسها مباشرة، بدون أي عكس. لو وصلنا هون (عملة الدفع ≠
+                // عملة الفاتورة)، فهاد يعني الدفع بعملة الفرع تحديداً.
                 rateWrap.style.display = '';
-                document.getElementById('cPaidRateLabel').textContent = '1 ' + paidCur + ' =';
+                document.getElementById('cPaidRateLabel').textContent = '1 ' + baseCur + ' =';
                 document.getElementById('cPaidRateSuffix').textContent = invCur;
+                if (!_cPaidRateTouched) {
+                    document.getElementById('cPaidRate').value = (parseFloat(_cPurchaseData?.exchange_rate) || 1).toFixed(4);
+                }
                 convertWrap.style.display = '';
-                if (!document.getElementById('cPaidRate').value) fetchPaidRate();
             } else {
                 rateWrap.style.display = 'none';
                 convertWrap.style.display = 'none';
                 document.getElementById('cPaidRate').value = '1';
             }
             updateTotal();
+            onCashAccountChange();
         }
 
+        // جلب آخر سعر صرف من جدول currencies العام — بمعنى "1 عملة الفرع
+        // = س عملة الفاتورة" (عملة الفرع مرجع ثابت، نفس اتفاقية exchange_rate
+        // المخزَّن على أي فاتورة). القيمة تبقى قابلة للتعديل اليدوي بعدها
+        // بكل الأحوال — هالزر بس اقتراح/تحديث، مو تثبيت.
         async function fetchPaidRate() {
-            const paidCur = document.getElementById('cPaidCur').value;
-            const invCur = _cPurchaseData?.currency || 'USD';
+            const invCur = _cPurchaseData?.currency_code || 'USD';
+            const baseCur = _cPurchaseData?.base_currency_code || 'USD';
             const icon = document.getElementById('paidRateIcon');
             icon.classList.add('spin');
             try {
-                const resp = await fetch('https://api.exchangerate-api.com/v4/latest/' + invCur);
-                const data = await resp.json();
-                const rate = data.rates[paidCur];
-                if (rate) {
-                    document.getElementById('cPaidRate').value = rate.toFixed(4);
+                const d = await post({_action: 'get_currency_rate', from: baseCur, to: invCur});
+                if (d.ok && d.rate) {
+                    document.getElementById('cPaidRate').value = d.rate.toFixed(4);
+                    _cPaidRateTouched = false; // القيمة صارت من جدول العملات، مو تعديل يدوي
                     document.getElementById('cPaidRateHint').innerHTML =
-                        '<i class="bi bi-check-circle-fill text-success me-1"></i>1 ' + paidCur + ' = ' + rate.toFixed(4) + ' ' + invCur;
+                        '<i class="bi bi-check-circle-fill text-success me-1"></i>1 ' + baseCur + ' = ' + d.rate.toFixed(4) + ' ' + invCur + ' (من جدول العملات — قابل للتعديل يدوياً)';
                     updateTotal();
                 } else {
                     document.getElementById('cPaidRateHint').innerHTML =
-                        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>غير متوفر — أدخل يدوياً';
+                        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>' + (d.msg || 'غير متوفر') + ' — أدخل السعر يدوياً';
                 }
             } catch (e) {
                 document.getElementById('cPaidRateHint').innerHTML =
-                    '<i class="bi bi-wifi-off text-danger me-1"></i>تعذّر الاتصال';
-            } finally { icon.classList.remove('spin'); }
+                    '<i class="bi bi-wifi-off text-danger me-1"></i>تعذّر الجلب — أدخل السعر يدوياً';
+            } finally {icon.classList.remove('spin');}
         }
 
         function onCarrierChange(sel) {
@@ -1210,15 +1680,20 @@ $PAY_MAP = [
             const shipOn = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
             const ship = parseFloat(document.getElementById('cShipping').value) || 0;
             const shipCur = document.getElementById('cShippingCur').value || 'USD';
-            const invCur = _cPurchaseData?.currency || 'USD';
+            const invCur = _cPurchaseData?.currency_code || 'USD';
             const invSym = _cPurchaseData?.currency_symbol || '$';
             const fmt = n => new Intl.NumberFormat('en').format(Math.abs(parseFloat(n || 0)).toFixed(2));
 
             // الدفع الجزئي مع التحويل
             const paidAmt = parseFloat(document.getElementById('cPaidAmt').value) || 0;
             const paidCur = document.getElementById('cPaidCur').value || invCur;
+            // ⚠ cPaidRate معناه "1 عملة الفرع = س عملة الفاتورة" (عملة
+            // الفرع هي المرجع الثابت — نفس اتفاقية exchange_rate المخزَّن
+            // على الفاتورة نفسها بالضبط، بدون أي عكس). لما تدفع بعملة
+            // الفرع، التحويل لعملة الفاتورة = ضرب (مبلغ الفرع × السعر)،
+            // مو قسمة.
             const paidRate = parseFloat(document.getElementById('cPaidRate').value) || 1;
-            const paidInInvCur = paidCur === invCur ? paidAmt : paidAmt / paidRate;
+            const paidInInvCur = paidCur === invCur ? paidAmt : paidAmt * paidRate;
 
             // عرض المبلغ المحوّل
             if (paidAmt > 0 && paidCur !== invCur) {
@@ -1226,43 +1701,54 @@ $PAY_MAP = [
                     invSym + ' ' + new Intl.NumberFormat('en').format(paidInInvCur.toFixed(2));
             }
 
-            // تجميع المبالغ حسب العملة
+            // تجميع مبالغ الفاتورة والمدفوع حسب العملة — الشحن عمداً
+            // برّا هالتجميع (راجع تعليق أسفل)
             const totals = {};
-            if (!totals[invCur]) totals[invCur] = { sym: invSym, inv: 0, ship: 0, paid: 0 };
+            if (!totals[invCur]) totals[invCur] = {sym: invSym, inv: 0, paid: 0};
             totals[invCur].inv = _cTotal;
-
-            if (shipOn === 'us' && ship > 0) {
-                if (!totals[shipCur]) totals[shipCur] = { sym: shipCur, inv: 0, ship: 0, paid: 0 };
-                totals[shipCur].ship = ship;
-            }
             if (paidAmt > 0) {
-                if (!totals[invCur]) totals[invCur] = { sym: invSym, inv: 0, ship: 0, paid: 0 };
+                if (!totals[invCur]) totals[invCur] = {sym: invSym, inv: 0, paid: 0};
                 totals[invCur].paid = paidInInvCur;
             }
 
-            // بناء HTML الملخص
+            // بناء HTML الملخص — قسمين منفصلين تماماً عمداً:
+            // (١) رصيد الفاتورة نفسها (المدفوع/المتبقي عبر cPaidAmt) —
+            // (٢) تكلفة الشحن، بشكل معلوماتي بس، بدون أي "متبقي" أو دمج
+            // مع رصيد الفاتورة — لأنها بتتسوى بآلية منفصلة كلياً (نقدي
+            // فوري من حسابها الخاص، أو آجل كذمة لشركة الشحن)، مش من
+            // خلال حقل الدفع الجزئي إطلاقاً. دمجهم سابقاً كان مضلّل —
+            // بيوهم إنه فيه "رصيد شحن معلّق" لسا لازم يُدفع من نفس
+            // مصدر دفع الفاتورة، وهاد غير صحيح.
             let html = '';
             Object.entries(totals).forEach(([cur, t]) => {
-                const invTotal = t.inv + t.ship;
-                const balance = invTotal - t.paid;
+                const balance = t.inv - t.paid;
+                if (!t.inv) return;
                 html += `<div style="border:1px solid #d1fae5;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fff">
             <div style="font-size:.72rem;font-weight:700;color:#065f46;margin-bottom:4px">
                 <i class="bi bi-currency-exchange me-1"></i>عملة: ${cur}
-            </div>`;
-                if (t.inv) html += `<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
+            </div>
+            <div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
             <span class="text-muted">إجمالي الفاتورة</span>
             <span class="fw-600">${t.sym} ${fmt(t.inv)}</span></div>`;
-                if (t.ship && shipOn === 'us') html += `<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
-            <span class="text-muted">+ تكاليف الشحن</span>
-            <span class="fw-600 text-warning">${t.sym} ${fmt(t.ship)}</span></div>`;
                 if (t.paid) html += `<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
             <span class="text-muted">— المدفوع الآن</span>
             <span class="fw-600 text-success">${t.sym} ${fmt(t.paid)}</span></div>`;
-                if (t.inv || t.ship) html += `<div class="d-flex justify-content-between fw-700 border-top pt-1 mt-1" style="font-size:.82rem">
-            <span>المتبقي</span>
-            <span style="color:${balance > 0 ? '#dc2626' : '#16a34a'}">${t.sym} ${fmt(balance)}</span></div>`;
-                html += '</div>';
+                html += `<div class="d-flex justify-content-between fw-700 border-top pt-1 mt-1" style="font-size:.82rem">
+            <span>المتبقي من الفاتورة</span>
+            <span style="color:${balance > 0 ? '#dc2626' : '#16a34a'}">${t.sym} ${fmt(balance)}</span></div>
+            </div>`;
             });
+            // بطاقة الشحن — منفصلة، معلوماتية بس، بدون أي دمج مع رصيد الفاتورة
+            if (ship > 0 && shipOn === 'us') {
+                html += `<div style="border:1px solid #fde68a;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fffbeb">
+            <div style="font-size:.72rem;font-weight:700;color:#92400e;margin-bottom:4px">
+                <i class="bi bi-truck me-1"></i>تكاليف الشحن (منفصلة عن الفاتورة)
+            </div>
+            <div class="d-flex justify-content-between" style="font-size:.79rem">
+            <span class="text-muted">ستُسجَّل بقيد محاسبي مستقل</span>
+            <span class="fw-600 text-warning">${shipCur} ${fmt(ship)}</span></div>
+            </div>`;
+            }
             document.getElementById('cTotSummary').innerHTML = html ||
                 '<div class="text-muted" style="font-size:.79rem">أدخل المبالغ لعرض الملخص</div>';
 
@@ -1284,9 +1770,9 @@ $PAY_MAP = [
             const f = inp.files[0];
             if (f.type.startsWith('image/')) {
                 const rd = new FileReader();
-                rd.onload = e => { document.getElementById('cImgThumb').src = e.target.result; document.getElementById('cImgPreview').style.display = ''; };
+                rd.onload = e => {document.getElementById('cImgThumb').src = e.target.result; document.getElementById('cImgPreview').style.display = '';};
                 rd.readAsDataURL(f);
-            } else { document.getElementById('cImgPreview').style.display = ''; }
+            } else {document.getElementById('cImgPreview').style.display = '';}
         }
         function clearImg() {
             document.getElementById('cInvoiceImg').value = '';
@@ -1306,66 +1792,80 @@ $PAY_MAP = [
 
         function printPurchaseInvoice() {
             const p = _cPurchaseData;
-            if (!p) { toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return; }
+            if (!p) {toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return;}
             const sym = p.currency_symbol || '$';
             const fmt = n => sym + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
-            // تجميع البنود
+            // تجميع البنود بـ (product × unit_price) — الكروب — مع تجميع
+            // كل الألوان والمقاسات ضمن نفس الكروب بعمود واحد لكل منهما
             const groups = {};
             (p.items || []).forEach(it => {
-                const key = (it.model_number || '') + '|' + (it.product_name || ('بند #' + it.id)) + '|' + (it.color || '');
+                const key = (it.product_id || it.product_name || it.id) + '|' + it.unit_price;
                 if (!groups[key]) groups[key] = {
                     name: it.product_name || '—', model: it.model_number || '',
-                    color: it.color || '', size: it.size || '',
-                    qty: 0, unit: parseFloat(it.unit_price), total: 0
+                    colors: [], sizes: [], ageType: it.age_type || '',
+                    qty: 0, unit: parseFloat(it.unit_price), total: 0, _colorQty: {}
                 };
-                groups[key].qty += parseFloat(it.quantity);
+                // ⚠ إصلاح جوهري: نجمع مرة وحدة لكل لون فريد ثم نجمع
+                // الألوان مع بعض — نفس الشرح المفصَّل بمودال التفاصيل.
+                const colorKey3 = it.color || '_none';
+                groups[key]._colorQty[colorKey3] = parseFloat(it.quantity);
+                groups[key].qty = Object.values(groups[key]._colorQty).reduce((s, v) => s + v, 0);
                 groups[key].total += parseFloat(it.total_price);
+                if (it.color && !groups[key].colors.includes(it.color)) groups[key].colors.push(it.color);
+                if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
             });
             let rows = '', i = 1;
             Object.values(groups).forEach(g => {
                 rows += `<tr>
                 <td>${i++}</td>
                 <td>${g.name}</td>
-                <td>${g.size}</td>
-                <td style="color:#2563eb">${g.color}</td>
+                <td>${formatSizeRange(g)}</td>
+                <td style="color:#2563eb">${g.colors.join(' · ') || '—'}</td>
                 <td>${g.model}</td>
                 <td>${g.qty}</td>
                 <td>${fmt(g.unit)}</td>
                 <td>${fmt(g.total)}</td>
             </tr>`;
             });
-            const LOGO_URL = '<?= BASE_PATH ?>/assets/images/bayhas_logo.png';
+            const LOGO_URL_fatorize = '<?= BASE_PATH ?>/assets/images/fatorize.png';
+            const LOGO_URL_tenant = '<?= BASE_PATH ?>/assets/images/bayhas_logo.png';
+            // ⚠ نافذة الطباعة مستند DOM منفصل بالكامل (window.open فاضي +
+            // document.write) — ما بترث :root{--section-color} من الصفحة
+            // الأصلية تلقائياً. لازم نقرأ القيمة الفعلية المحسوبة ونحقنها
+            // صراحة، وإلا اللون بيختفي بالطباعة (var غير معرَّف = فارغ).
+            const sectionColorVal = getComputedStyle(document.documentElement).getPropertyValue('--section-color').trim() || '#dc2626';
             const html = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8">
 <title>فاتورة شراء ${p.purchase_number}</title>
 <style>
+:root{--section-color:${sectionColorVal}}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Arial',sans-serif;font-size:11px;color:#111;padding:20px;max-width:800px;margin:0 auto}
-.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #1e3a8a}
-.header-logo{width:100px;height:auto;object-fit:contain}
-.header-center{text-align:center;flex:1;padding:0 16px}
-.header-title{font-size:22px;font-weight:800;color:#1e3a8a;margin-bottom:4px}
-.header-sub{font-size:10px;color:#64748b}
-.header-branch{text-align:right;font-size:10px;min-width:160px}
-.header-branch .br-name{font-size:14px;font-weight:800;color:#1e3a8a}
-.inv-meta{display:flex;gap:8px;margin-bottom:12px}
-.inv-meta-box{flex:1;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:#f8fafc}
-.inv-meta-box h4{font-size:9px;font-weight:700;color:#1e3a8a;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #e2e8f0}
-.meta-row{display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px}
+body{font-family:'Arial',sans-serif;font-size:9px;color:#111;padding:16px;max-width:800px;margin:0 auto}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid var(--section-color)}
+.header-logo{width:80px;height:auto;object-fit:contain}
+.header-center{text-align:center;flex:1;padding:0 14px}
+.header-title{font-size:18px;font-weight:800;color:var(--section-color);margin-bottom:3px}
+.header-sub{font-size:8px;color:#64748b}
+.header-branch{text-align:right;font-size:8px;min-width:150px}
+.header-branch .br-name{font-size:11px;font-weight:800;color:var(--section-color)}
+.inv-meta{display:flex;gap:8px;margin-bottom:10px}
+.inv-meta-box{flex:1;border:1px solid #e2e8f0;border-radius:6px;padding:6px 10px;background:#f8fafc}
+.inv-meta-box h4{font-size:7.5px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;padding-bottom:2px;border-bottom:1px solid #e2e8f0}
+.meta-row{display:flex;justify-content:space-between;font-size:8px;margin-bottom:2px}
 .meta-row span:first-child{color:#64748b}
 .meta-row span:last-child{font-weight:600}
-table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:10px}
-thead th{background:#1e3a8a;color:#fff;padding:6px 8px;text-align:right;font-weight:600}
-tbody td{padding:5px 8px;border-bottom:1px solid #f1f5f9}
+table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:8px}
+thead th{background:var(--section-color);color:#fff;padding:5px 6px;text-align:right;font-weight:600}
+tbody td{padding:4px 6px;border-bottom:1px solid #f1f5f9}
 tbody tr:nth-child(even) td{background:#f8fafc}
-tfoot td{background:#f1f5f9;font-weight:700;padding:5px 8px}
-.totals-wrap{display:flex;justify-content:flex-end;margin-top:8px}
+tfoot td{background:#f1f5f9;font-weight:700;padding:4px 6px}
+.totals-wrap{display:flex;justify-content:flex-end;margin-top:6px}
 .totals{width:55%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
-.tot-row{display:flex;justify-content:space-between;padding:5px 12px;font-size:10px;border-bottom:1px solid #f1f5f9}
-.tot-row.final{background:#1e3a8a;color:#fff;font-weight:700;font-size:12px;border:none}
-.footer{text-align:center;margin-top:16px;font-size:9px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:8px}
+.tot-row{display:flex;justify-content:space-between;padding:4px 10px;font-size:8px;border-bottom:1px solid #f1f5f9}
+.tot-row.final{background:var(--section-color);color:#fff;font-weight:700;font-size:10px;border:none}
+.footer{text-align:center;margin-top:14px;font-size:7.5px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:6px}
 @media print{@page{margin:10mm}button{display:none}}
 </style>
 </head>
@@ -1373,7 +1873,9 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px 8px}
 
 <!-- الرأسية -->
 <div class="header">
-  <img src="${LOGO_URL}" class="header-logo" alt="Logo"
+  <img src="${LOGO_URL_fatorize}" class="header-logo" alt="Logo"
+       onerror="this.style.display='none'">
+  <img src="${LOGO_URL_tenant}" class="header-logo" alt="Logo"
        onerror="this.style.display='none'">
   <div class="header-center">
     <div class="header-title">فاتورة شراء</div>
@@ -1396,7 +1898,9 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px 8px}
     <div class="meta-row"><span>رقم الفاتورة:</span><span>${p.purchase_number}</span></div>
     <div class="meta-row"><span>تاريخ الفاتورة:</span><span>${p.purchase_date || '—'}</span></div>
     <div class="meta-row"><span>تاريخ الاستحقاق:</span><span>${p.due_date || '—'}</span></div>
-    <div class="meta-row"><span>العملة:</span><span>${p.currency || 'USD'}</span></div>
+    <div class="meta-row"><span>حالة الفاتورة:</span><span>${(STATUS_MAP[p.status] || STATUS_MAP['draft']).label}</span></div>
+    <div class="meta-row"><span>حالة الدفع:</span><span>${(PAY_MAP[p.payment_status] || PAY_MAP['pending']).label}</span></div>
+    <div class="meta-row"><span>العملة:</span><span>${p.currency_code || 'USD'}</span></div>
     <div class="meta-row"><span>طريقة الدفع:</span><span>${p.payment_method || '—'}</span></div>
   </div>
   <!-- معلومات المورد -->
@@ -1415,7 +1919,7 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px 8px}
   <thead><tr>
     <th>#</th><th>بيان القطعة</th><th>القياس</th>
     <th>اللون</th><th>رقم الموديل</th>
-    <th>الكمية</th><th>سعر الوحدة</th><th>المجموع</th>
+    <th>عدد الكروبات</th><th>سعر الوحدة</th><th>المجموع</th>
   </tr></thead>
   <tbody>${rows}</tbody>
   <tfoot><tr>
@@ -1450,7 +1954,54 @@ ${p.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
         function doConfirm() {
             const paid = parseFloat(document.getElementById('cPaidAmt').value) || 0;
             const cashAcc = document.getElementById('cCashAccount').value;
-            if (paid > 0 && !cashAcc) { toast('اختر حساب الدفع', 'danger'); return; }
+            if (paid > 0 && !cashAcc) {toast('اختر حساب الدفع', 'danger'); return;}
+
+            // ⚠ لو حقل سعر صرف الشحن ظاهر (عملة شحن ثالثة) وفيه مبلغ شحن،
+            // لازم يكون معبّى — ما منسمح نمرر بدون سعر صرف حقيقي.
+            const shipCost = parseFloat(document.getElementById('cShipping').value) || 0;
+            const shipOn2 = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
+            if (shipCost > 0 && shipOn2 === 'us' && document.getElementById('shippingRateWrap').style.display !== 'none'
+                && !document.getElementById('cShippingRate').value) {
+                toast('أدخل سعر صرف الشحن (عملته مختلفة عن الفاتورة والفرع)', 'danger'); return;
+            }
+
+            // ⚠ تحقق إلزامي (مو تلميح فقط): لو الحساب المختار "دفعة مقدمة"
+            // ورصيده أقل من المبلغ المطلوب دفعه منه، امنع التأكيد نهائياً —
+            // بدل ما نسمح برصيد سالب لحساب دفعة مقدمة مورد.
+            if (paid > 0 && cashAcc) {
+                const sel = document.getElementById('cCashAccount');
+                const opt = sel.options[sel.selectedIndex];
+                if (opt?.dataset.type === 'advance') {
+                    const balance = parseFloat(opt.dataset.balance || 0);
+                    if (paid > balance) {
+                        toast(`رصيد الدفعة المقدمة للمورد صفر أو غير كافٍ (المتاح: ${balance.toFixed(2)} ${opt.dataset.sym || ''}) — قلّل المبلغ أو اختر حساب صندوق/بنك`, 'danger');
+                        return;
+                    }
+                }
+            }
+
+            // ⚠ تحذير تأكيدي (مو منع) لو المبلغ المدفوع أكبر من المتبقي
+            // فعلياً على الفاتورة — سيناريو مشروع (دفعة مقدمة إضافية
+            // لفاتورة جاية)، بس برضو محتمل يكون غلطة كتابية (رقم زيادة
+            // بالغلط)، فلازم تنبيه صريح قبل ما يكمل، مو منع كامل.
+            if (paid > 0) {
+                const paidCur = document.getElementById('cPaidCur').value;
+                const invCur = _cPurchaseData?.currency || 'USD';
+                const rate = parseFloat(_cPurchaseData?.exchange_rate) || 1;
+                // المتبقي الفعلي بنفس عملة الدفع المختارة (لا نقارن عملتين مختلفتين مع بعض)
+                const balanceInInvCur = parseFloat(_cPurchaseData?.balance_amount) || 0;
+                const outstanding = paidCur === invCur ? balanceInInvCur : balanceInInvCur * rate;
+                if (paid > outstanding + 0.01) {
+                    const diff = (paid - outstanding).toFixed(2);
+                    const ok = confirm(
+                        `المبلغ المدخل (${paid.toFixed(2)} ${paidCur}) أكبر من المتبقي على الفاتورة (${outstanding.toFixed(2)} ${paidCur}) بفارق ${diff} ${paidCur}.\n\n` +
+                        `هل تقصد دفعة مقدمة إضافية للمورد (رح يترحّل الفرق كرصيد له لصالحك)؟\n\n` +
+                        `اضغط "موافق" للمتابعة، أو "إلغاء" لتصحيح المبلغ.`
+                    );
+                    if (!ok) return;
+                }
+            }
+
             const shipOn = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
             const ship = shipOn === 'us' ? (parseFloat(document.getElementById('cShipping').value) || 0) : 0;
             document.getElementById('confirmTxt').style.opacity = '0';
@@ -1464,10 +2015,12 @@ ${p.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
             fd.append('shipping_cost', ship);
             fd.append('shipping_on', shipOn);
             fd.append('shipping_currency', document.getElementById('cShippingCur').value);
+            fd.append('shipping_exchange_rate', document.getElementById('cShippingRate').value || '');
             fd.append('shipping_carrier_id', document.getElementById('cShippingCarrier').value);
             fd.append('shipping_payable_id', document.getElementById('cShippingPayableId').value);
             fd.append('shipping_pay_method', document.querySelector('input[name="shippingPay"]:checked')?.value || 'cash');
             fd.append('shipping_cash_account', document.getElementById('cShipCashAccount').value);
+            fd.append('exact_settle', document.getElementById('cExactSettle').checked ? '1' : '0');
             fd.append('shipping_desc', document.getElementById('cShippingDesc').value);
             fd.append('paid_amount', document.getElementById('cPaidAmt').value || '0');
             fd.append('paid_currency', document.getElementById('cPaidCur').value);
@@ -1476,12 +2029,12 @@ ${p.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
             fd.append('notes', document.getElementById('cNotes').value);
             const img = document.getElementById('cInvoiceImg');
             if (img.files && img.files[0]) fd.append('invoice_image', img.files[0]);
-            fetch('../../api/confirm_purchase_invoice.php', { method: 'POST', body: fd })
+            fetch('../../api/confirm_purchase_invoice.php', {method: 'POST', body: fd})
                 .then(r => r.json()).then(d => {
                     document.getElementById('confirmTxt').style.opacity = '1';
                     document.getElementById('confirmSpin').style.display = 'none';
                     document.getElementById('btnConfirm').disabled = false;
-                    if (d.ok) { toast('✅ ' + d.msg); confirmModal.hide(); setTimeout(() => location.reload(), 800); }
+                    if (d.ok) {toast('✅ ' + d.msg); confirmModal.hide(); setTimeout(() => location.reload(), 800);}
                     else toast(d.msg, 'danger');
                 }).catch(() => {
                     document.getElementById('confirmTxt').style.opacity = '1';
@@ -1495,17 +2048,80 @@ ${p.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
             openConfirmModal(id, no, 0, '$');
         }
         function cancelInvoice(id, no) {
-            if (!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المستلمة سيتم عكس مخزونها وقيودها.`)) return;
+            if (!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المؤكدة سيتم عكس مخزونها وقيودها.`)) return;
             const fd = new FormData();
             fd.append('_action', 'cancel');
             fd.append('invoice_id', id);
-            fetch('../../api/confirm_purchase_invoice.php', { method: 'POST', body: fd })
+            fetch('../../api/confirm_purchase_invoice.php', {method: 'POST', body: fd})
                 .then(r => r.json())
                 .then(d => {
-                    if (d.ok) { toast(d.msg); setTimeout(() => location.reload(), 700); }
+                    if (d.ok) {toast(d.msg); setTimeout(() => location.reload(), 700);}
                     else toast(d.msg, 'danger');
                 });
         }
+
+        // ══════════════════════════════════════════════════════════
+        // فرز الجداول بالنقر على رأس العمود — عام لأي جدول بالصفحة
+        // ══════════════════════════════════════════════════════════
+        function makeSortable(table) {
+            if (!table) return;
+            const headers = table.querySelectorAll('thead th');
+            headers.forEach((th, colIndex) => {
+                if (th.hasAttribute('data-no-sort')) return;
+                th.style.cursor = 'pointer';
+                th.style.userSelect = 'none';
+                th.title = 'اضغط للفرز';
+                th.addEventListener('click', () => sortTableByColumn(table, colIndex, th));
+            });
+        }
+
+        function sortTableByColumn(table, colIndex, th) {
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.children.length > colIndex);
+            const isAsc = th.getAttribute('data-sort-dir') !== 'asc';
+
+            table.querySelectorAll('thead th').forEach(h => {
+                h.removeAttribute('data-sort-dir');
+                const ind = h.querySelector('.sort-ind');
+                if (ind) ind.remove();
+            });
+            th.setAttribute('data-sort-dir', isAsc ? 'asc' : 'desc');
+
+            const getCellValue = (row) => (row.children[colIndex]?.innerText || '').trim();
+
+            // ⚠ ترتيب فحص القيمة مهم: تاريخ أولاً (YYYY-MM-DD) — لأنه
+            // parseFloat على "2026-07-21" كان بيرجّع 2026 بس (بيوقف
+            // عند أول شرطة)، فكل تواريخ نفس السنة كانت تطلع "متساوية"
+            // ومفيش فرز فعلي بينهم. بعدين رقم صرف (تحقق مطابقة كاملة
+            // للنص، مش بس بادئة)، وأخيراً نص عربي عادي.
+            const isoDateRe = /^\d{4}-\d{2}-\d{2}/;
+            rows.sort((a, b) => {
+                const valA = getCellValue(a), valB = getCellValue(b);
+                if (isoDateRe.test(valA) && isoDateRe.test(valB)) {
+                    const dA = new Date(valA.slice(0, 10)).getTime();
+                    const dB = new Date(valB.slice(0, 10)).getTime();
+                    return isAsc ? dA - dB : dB - dA;
+                }
+                const cleanA = valA.replace(/[^0-9.\-]/g, '');
+                const cleanB = valB.replace(/[^0-9.\-]/g, '');
+                const fullyNumeric = /^-?[0-9]+(\.[0-9]+)?$/.test(cleanA) && /^-?[0-9]+(\.[0-9]+)?$/.test(cleanB)
+                    && cleanA !== '' && cleanB !== '' && cleanA !== '-' && cleanB !== '-';
+                if (fullyNumeric) {
+                    return isAsc ? parseFloat(cleanA) - parseFloat(cleanB) : parseFloat(cleanB) - parseFloat(cleanA);
+                }
+                return isAsc ? valA.localeCompare(valB, 'ar') : valB.localeCompare(valA, 'ar');
+            });
+
+            rows.forEach(row => tbody.appendChild(row));
+
+            const ind = document.createElement('i');
+            ind.className = 'bi bi-caret-' + (isAsc ? 'up' : 'down') + '-fill sort-ind';
+            ind.style.cssText = 'font-size:.65rem;margin-right:4px';
+            th.appendChild(ind);
+        }
+
+        makeSortable(document.getElementById('purchasesTbl'));
     </script>
 </body>
 

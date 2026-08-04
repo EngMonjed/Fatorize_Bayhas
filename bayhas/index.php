@@ -1,13 +1,8 @@
 <?php
 /**
  * index.php — الصفحة الرئيسية (Landing Page) لمنصة فاتورايز
- * المسار: _bayhas/index.php (جذر المشروع)
- *
- * ⚠ عمداً هذا الملف لا يستدعي config/database.php ولا config/tenant_resolver.php
- * إطلاقاً — لأنها صفحة عامة تسويقية، مش خاصة بأي شركة (tenant) محددة.
- * لو استدعينا نظام تحديد الـtenant هنا، أي زائر يفتح الدومين الرئيسي
- * بدون ساب دومين كان رح يشوف رسالة خطأ "الشركة غير موجودة" بدل صفحة
- * ترحيبية طبيعية — بالضبط المشكلة يلي كانت موجودة قبل هالملف.
+ * المسار: fatorize_erp_system/index.php (جذر المشروع)
+ * ⚠ لا تتصل بأي قاعدة بيانات عمداً — صفحة عامة، مش خاصة بأي tenant.
  */
 ?>
 <!DOCTYPE html>
@@ -16,161 +11,119 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>فاتورايز — نظام ERP لمصانع ومحلات الألبسة</title>
+<meta name="description" content="نظام محاسبي وإداري متكامل يربط مصنعك بفروع البيع — مبيعات، مشتريات، مخزون، محاسبة، رواتب. بسيط الاستخدام، مصمم لصناعة الألبسة بالمنطقة العربية.">
 <link rel="icon" type="image/png" href="assets/images/logo.png">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Changa:wght@500;600;700;800&family=Cairo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-:root { --brand: #1e3a8a; --brand-light: #3b82f6; --brand-hover: #1d4ed8; }
-* { box-sizing: border-box; }
-body { font-family: 'Cairo', sans-serif; color: #1e293b; }
-
-/* Nav */
-.navbar-custom {
-    background: rgba(255,255,255,.95); backdrop-filter: blur(10px);
-    border-bottom: 1px solid #e2e8f0; padding: .9rem 0;
-}
-.navbar-custom .brand { font-weight: 800; font-size: 1.3rem; color: var(--brand); }
-.navbar-custom .brand img { height: 34px; margin-left: 8px; }
-.btn-login-nav {
-    background: var(--brand); color: #fff; border-radius: 10px;
-    padding: .55rem 1.4rem; font-weight: 600; font-size: .9rem;
-    text-decoration: none; transition: all .2s;
-}
-.btn-login-nav:hover { background: var(--brand-hover); color: #fff; transform: translateY(-1px); }
-
-/* Hero */
-.hero {
-    background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
-    padding: 5rem 1rem 6rem; text-align: center;
-}
-.hero h1 { font-size: 2.4rem; font-weight: 800; color: var(--brand); margin-bottom: 1rem; line-height: 1.4; }
-.hero p { font-size: 1.1rem; color: #64748b; max-width: 640px; margin: 0 auto 2rem; line-height: 1.9; }
-.hero-cta { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-.btn-hero-primary {
-    background: linear-gradient(135deg, var(--brand-light), var(--brand));
-    color: #fff; border-radius: 12px; padding: .9rem 2.2rem; font-weight: 700;
-    text-decoration: none; font-size: 1rem; box-shadow: 0 8px 24px rgba(30,58,138,.2);
-    transition: all .25s;
-}
-.btn-hero-primary:hover { color: #fff; transform: translateY(-2px); box-shadow: 0 12px 32px rgba(30,58,138,.3); }
-.btn-hero-secondary {
-    background: #fff; color: var(--brand); border: 1.5px solid #dbeafe;
-    border-radius: 12px; padding: .9rem 2.2rem; font-weight: 700;
-    text-decoration: none; font-size: 1rem; transition: all .25s;
-}
-.btn-hero-secondary:hover { color: var(--brand); border-color: var(--brand-light); background: #eff6ff; }
-
-/* Features */
-.features { padding: 5rem 1rem; background: #fff; }
-.features h2 { text-align: center; font-weight: 800; color: var(--brand); font-size: 1.8rem; margin-bottom: 3rem; }
-.feature-card {
-    background: #f8fafc; border-radius: 16px; padding: 1.8rem; height: 100%;
-    border: 1px solid #f1f5f9; transition: all .25s;
-}
-.feature-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(0,0,0,.06); }
-.feature-icon {
-    width: 52px; height: 52px; border-radius: 14px; background: #eff6ff; color: var(--brand);
-    display: flex; align-items: center; justify-content: center; font-size: 1.4rem; margin-bottom: 1rem;
-}
-.feature-card h5 { font-weight: 700; margin-bottom: .5rem; }
-.feature-card p { color: #64748b; font-size: .9rem; line-height: 1.7; margin: 0; }
-
-/* Dashboards split */
-.split-section { padding: 5rem 1rem; background: linear-gradient(135deg, #f8fafc, #eff6ff); }
-.split-card {
-    background: #fff; border-radius: 20px; padding: 2.2rem; height: 100%;
-    box-shadow: 0 4px 20px rgba(0,0,0,.05);
-}
-.split-card .badge-type {
-    display: inline-block; padding: .35rem 1rem; border-radius: 20px; font-size: .78rem;
-    font-weight: 700; margin-bottom: 1rem;
-}
-.badge-factory { background: #ecfdf5; color: #059669; }
-.badge-shop { background: #fef3c7; color: #d97706; }
-
-footer { background: #0f172a; color: #94a3b8; padding: 2.5rem 1rem; text-align: center; font-size: .85rem; }
-footer a { color: #cbd5e1; text-decoration: none; }
-</style>
+<link href="assets/css/marketing.css" rel="stylesheet">
 </head>
 <body>
 
-<nav class="navbar-custom">
-    <div class="container d-flex justify-content-between align-items-center">
-        <div class="brand d-flex align-items-center">
-            <img src="assets/images/fatorize.png" alt="Fatorize" onerror="this.style.display='none'">
+<nav class="nav">
+    <div class="container">
+        <a href="index.php" class="nav-brand">
+            <img src="assets/images/fatorize.png" alt="" onerror="this.style.display='none'">
             فاتورايز
-        </div>
-        <a href="find-my-company.php" class="btn-login-nav">
-            <i class="bi bi-box-arrow-in-right me-1"></i>تسجيل الدخول
         </a>
+        <div class="nav-links">
+            <a href="about.php">من نحن</a>
+            <a href="about.php#audience">لمين هالنظام</a>
+            <a href="about.php#pilot">قصتنا مع أول شريك</a>
+            <a href="find-my-company.php" class="btn-nav-login">تسجيل الدخول</a>
+        </div>
+        <button class="nav-toggle" id="navToggle" aria-label="القائمة" aria-expanded="false"><i class="bi bi-list"></i></button>
     </div>
 </nav>
+<script>
+document.getElementById('navToggle').addEventListener('click', function(){
+    var links = document.querySelector('.nav-links');
+    var open = links.classList.toggle('open');
+    this.setAttribute('aria-expanded', open ? 'true' : 'false');
+    this.querySelector('i').className = open ? 'bi bi-x-lg' : 'bi bi-list';
+});
+</script>
 
 <section class="hero">
-    <div class="container">
-        <h1>نظام ERP متكامل لمصانع ومحلات الألبسة</h1>
-        <p>
-            فاتورايز نظام محاسبي وإداري شامل يربط المصنع بفرع المبيعات — مبيعات، مشتريات،
-            مخزون، محاسبة، رواتب، وصلاحيات دقيقة لكل مستخدم. بديل أبسط استخداماً
-            من أنظمة عالمية معقدة، مصمم خصيصاً للسوق العربي.
-        </p>
-        <div class="hero-cta">
-            <a href="find-my-company.php" class="btn-hero-primary">
-                <i class="bi bi-box-arrow-in-right me-1"></i>دخول حسابي
-            </a>
-            <a href="mailto:info@fatorize.com" class="btn-hero-secondary">
-                <i class="bi bi-chat-dots me-1"></i>اطلب عرض تجريبي
-            </a>
+    <div class="container hero-grid">
+        <div>
+            <span class="eyebrow"><i class="bi bi-scissors"></i> صُمم لصناعة الألبسة تحديداً</span>
+            <h1>نظام واحد يربط <em>المصنع</em> بمحلّك،<br>من القماش لحد الفاتورة</h1>
+            <p class="lede">
+                فاتورايز نظام محاسبي وإداري متكامل — مبيعات، مشتريات، مخزون، محاسبة حقيقية،
+                ورواتب. بديل أبسط بكتير من الأنظمة العالمية المعقّدة، وبالعربي بالكامل.
+            </p>
+            <div class="hero-cta">
+                <a href="find-my-company.php" class="btn-gold"><i class="bi bi-box-arrow-in-right"></i> دخول حسابي</a>
+                <a href="about.php" class="btn-outline">تعرّف علينا أكتر</a>
+            </div>
+            <div class="stat-row">
+                <div class="stat"><b>٦</b><span>وحدات متكاملة بمكان واحد</span></div>
+                <div class="stat"><b>٢</b><span>لوحتا تحكم: مصنع ومبيعات</span></div>
+                <div class="stat"><b>١٠٠٪</b><span>عربي، من التصميم للدعم</span></div>
+            </div>
+        </div>
+        <div class="hero-visual">
+            <div class="tag-card tag-2" aria-hidden="true">
+                <div class="tag-code">MODEL #5024</div>
+                <div class="tag-barcode">
+                    <span style="height:16px"></span><span style="height:22px"></span><span style="height:12px"></span>
+                    <span style="height:20px"></span><span style="height:16px"></span><span style="height:24px"></span>
+                    <span style="height:14px"></span><span style="height:20px"></span>
+                </div>
+            </div>
+            <div class="tag-card">
+                <div class="tag-hole-string" aria-hidden="true"></div>
+                <div class="tag-code">FTR-2026-00184</div>
+                <h4 style="font-size:1.05rem;margin:.5rem 0">بنطلون بوي فريند</h4>
+                <p style="color:var(--muted);font-size:.82rem;margin:0 0 .8rem">مقاس L · لون كحلي</p>
+                <div class="tag-barcode">
+                    <span style="height:20px"></span><span style="height:26px"></span><span style="height:14px"></span>
+                    <span style="height:22px"></span><span style="height:18px"></span><span style="height:26px"></span>
+                    <span style="height:12px"></span><span style="height:22px"></span><span style="height:16px"></span>
+                    <span style="height:24px"></span>
+                </div>
+            </div>
         </div>
     </div>
 </section>
 
-<section class="features">
+<section class="section" id="features">
     <div class="container">
-        <h2>كل شي بمكان واحد</h2>
-        <div class="row g-4">
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-bag"></i></div>
-                    <h5>المبيعات والمشتريات</h5>
-                    <p>فواتير كاملة بالمقاسات والألوان والباركود، مع تأكيد يعكس المخزون والقيود المحاسبية معاً تلقائياً.</p>
-                </div>
+        <div class="section-head">
+            <span class="eyebrow"><i class="bi bi-grid"></i> كل شي بمكان واحد</span>
+            <h2>لا داعي لخمس برامج منفصلة</h2>
+            <p>كل قسم بشركتك — من خط الإنتاج لحد سند القبض — بنظام واحد مترابط.</p>
+        </div>
+        <div class="feature-grid">
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-bag"></i></div>
+                <h5>المبيعات والمشتريات</h5>
+                <p>فواتير بالمقاسات والألوان والباركود، تأكيد واحد يعكس المخزون والقيود المحاسبية معاً.</p>
             </div>
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-box-seam"></i></div>
-                    <h5>المخزون متعدد المستودعات</h5>
-                    <p>تتبّع دقيق للكميات بكل مستودع، وطلبات داخلية مباشرة بين فرع المصنع وفروع المبيعات.</p>
-                </div>
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-box-seam"></i></div>
+                <h5>مخزون متعدد المستودعات</h5>
+                <p>كل مستودع بأرصدته الحقيقية، وطلب تجديد مباشر من المصنع بضغطة وحدة.</p>
             </div>
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-bank"></i></div>
-                    <h5>محاسبة حقيقية</h5>
-                    <p>دليل حسابات، قيود يومية، سندات قبض، عملات متعددة — كل عملية مالية تنعكس بقيد متوازن تلقائياً.</p>
-                </div>
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-bank"></i></div>
+                <h5>محاسبة حقيقية</h5>
+                <p>دليل حسابات، قيود يومية متوازنة تلقائياً، عملات متعددة، سندات قبض.</p>
             </div>
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-people"></i></div>
-                    <h5>الموارد البشرية والرواتب</h5>
-                    <p>حضور، رواتب، سلف، مكافآت — لكل موظف جدول دوام أسبوعي خاص فيه.</p>
-                </div>
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-people"></i></div>
+                <h5>الموظفون والرواتب</h5>
+                <p>حضور، رواتب، سلف، مكافآت — لكل موظف جدول دوامه الأسبوعي الخاص فيه.</p>
             </div>
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-shield-check"></i></div>
-                    <h5>صلاحيات دقيقة</h5>
-                    <p>لكل مستخدم صلاحيات منفصلة لكل قسم وفرع — عرض، إضافة، تعديل، حذف، تأكيد، طباعة.</p>
-                </div>
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-shield-check"></i></div>
+                <h5>صلاحيات دقيقة</h5>
+                <p>لكل مستخدم صلاحياته بكل قسم وفرع — عرض، إضافة، تعديل، تأكيد، طباعة.</p>
             </div>
-            <div class="col-md-4">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="bi bi-upc-scan"></i></div>
-                    <h5>باركود جاهز للطباعة</h5>
-                    <p>توليد باركود خطي فريد لكل قطعة، وطباعة ملصقات جاهزة للمستودع مباشرة من النظام.</p>
-                </div>
+            <div class="tag-card feature-tag">
+                <div class="ficon"><i class="bi bi-upc-scan"></i></div>
+                <h5>باركود جاهز للطباعة</h5>
+                <p>باركود خطي فريد لكل قطعة، وملصقات جاهزة للطباعة مباشرة من النظام.</p>
             </div>
         </div>
     </div>
@@ -178,29 +131,62 @@ footer a { color: #cbd5e1; text-decoration: none; }
 
 <section class="split-section">
     <div class="container">
-        <h2 class="text-center fw-bold mb-5" style="color:var(--brand)">لوحتا تحكم، لكل نوع نشاط</h2>
-        <div class="row g-4">
-            <div class="col-md-6">
-                <div class="split-card">
-                    <span class="badge-type badge-factory"><i class="bi bi-gear-wide-connected me-1"></i>فرع التصنيع</span>
-                    <h4 class="fw-bold mb-3">لأصحاب المصانع</h4>
-                    <p class="text-muted">خطوط الإنتاج، المواد الأولية، تكاليف التصنيع، والربط المباشر مع فروع البيع لتلبية طلباتها الداخلية.</p>
-                </div>
+        <div class="section-head">
+            <span class="eyebrow"><i class="bi bi-diagram-3"></i> لوحتان، مو لوحة واحدة</span>
+            <h2>كل نشاط إله لوحته المناسبة</h2>
+            <p>مصنعك مو زي محلك — فاتورايز بيفرّق بينهم من أول يوم.</p>
+        </div>
+        <div class="split-grid">
+            <div class="split-card">
+                <span class="eyebrow"><i class="bi bi-gear-wide-connected"></i> فرع التصنيع</span>
+                <h3>لأصحاب المصانع</h3>
+                <p>كل شي مرتبط بخط الإنتاج والمواد الأولية وتكلفة كل قطعة فعلياً.</p>
+                <ul>
+                    <li>خطوط الإنتاج وتكاليفها الحقيقية</li>
+                    <li>المواد الأولية ومخزونها</li>
+                    <li>استلام طلبات فروع البيع والرد عليها مباشرة</li>
+                </ul>
             </div>
-            <div class="col-md-6">
-                <div class="split-card">
-                    <span class="badge-type badge-shop"><i class="bi bi-shop me-1"></i>فرع المبيعات</span>
-                    <h4 class="fw-bold mb-3">لأصحاب المحلات</h4>
-                    <p class="text-muted">فواتير بيع سريعة، متابعة عملاء، وطلب تجديد المخزون مباشرة من المصنع بضغطة واحدة.</p>
-                </div>
+            <div class="split-card">
+                <span class="eyebrow"><i class="bi bi-shop"></i> فرع المبيعات</span>
+                <h3>لأصحاب المحلات</h3>
+                <p>واجهة أسرع وأبسط، مركّزة على البيع اليومي ومتابعة الزبائن.</p>
+                <ul>
+                    <li>فواتير بيع سريعة بالباركود</li>
+                    <li>متابعة العملاء وكشف حساباتهم</li>
+                    <li>طلب تجديد مخزون من المصنع مباشرة</li>
+                </ul>
             </div>
         </div>
     </div>
 </section>
 
-<footer>
-    <p class="mb-1">© <?= date('Y') ?> فاتورايز — نظام ERP لمصانع ومحلات الألبسة</p>
-    <a href="mailto:info@fatorize.com">تواصل معنا</a>
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <h6>فاتورايز</h6>
+                <p style="font-size:.86rem;line-height:1.8;max-width:280px">
+                    نظام ERP عربي مصمم خصيصاً لمصانع ومحلات الألبسة — من تطوير شركة كايلنك.
+                </p>
+            </div>
+            <div>
+                <h6>الشركة</h6>
+                <a href="about.php">من نحن</a>
+                <a href="about.php#audience">لمين هالنظام</a>
+                <a href="about.php#pilot">قصتنا مع أول شريك</a>
+            </div>
+            <div>
+                <h6>تواصل</h6>
+                <a href="mailto:info@fatorize.com">info@fatorize.com</a>
+                <a href="find-my-company.php">تسجيل الدخول</a>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>© <?= date('Y') ?> فاتورايز — تطوير شركة كايلنك</span>
+            <span>صُنع بعناية لصناعة الألبسة العربية</span>
+        </div>
+    </div>
 </footer>
 
 </body>

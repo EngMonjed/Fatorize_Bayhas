@@ -81,13 +81,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (!$prod)
                 throw new Exception('المنتج غير موجود');
 
-            // المقاسات مجمّعة بكروبات (بحسب selling_price)
+            // المقاسات مجمّعة بكروبات (بحسب selling_price) — ⚠ إصلاح: عمود
+            // price_group غير موجود فعلياً بالجدول ولا يُملأ أبداً من
+            // product_add.php/product_edit.php، فتم إسقاط الاعتماد عليه
+            // نهائياً والاكتفاء بمفتاح selling_price+currency_id الموثوق.
             $szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
             $szSt->execute([$id]);
             $sizes = $szSt->fetchAll();
             $grpMap = [];
             foreach ($sizes as $s) {
-                $key = isset($s['price_group']) ? 'pg_' . $s['price_group'] : (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
+                $key = (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
                 if (!isset($grpMap[$key]))
                     $grpMap[$key] = [
                         'sizes' => [],
@@ -265,8 +268,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 // فئات فرع البيع: نهائية + استهلاكية فقط (parent_id IS NULL)
 $categories = $pdo->query("SELECT * FROM `{$TC}` WHERE is_active=1 ORDER BY parent_id, id")->fetchAll();
 
-// مستودعات الفرع
-$warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
+// مستودعات الفرع — فقط المتخصصة بالمنتجات (نفس تصنيف warehouse_type
+// الموجود بـwarehouse.php)، مش كل المستودعات (كان يظهر مستودع المستهلكات هون بالغلط)
+$warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='products' ORDER BY id")->fetchAll();
 
 // فلتر
 $sel_cat = (int) ($_GET['cat'] ?? 0);
@@ -731,6 +735,10 @@ $catColors = [
             color: #475569;
             font-family: monospace
         }
+        .mtbl th[onclick] { cursor: pointer; user-select: none; }
+        .mtbl th[onclick]:hover { background: #f1f5f9; }
+        .mtbl th.sort-asc::after { content: ' ▲'; font-size: .65em; }
+        .mtbl th.sort-desc::after { content: ' ▼'; font-size: .65em; }
     </style>
 </head>
 
@@ -750,6 +758,35 @@ $catColors = [
 
     <main class="main-content">
         <div class="content-body">
+
+            <!-- الشريط الموحّد لقسم المنتجات/المخزون — نظير شريط المستهلكات
+                 بالضبط (نفس الأسلوب، بس بروابط نسبية لهذا القسم) -->
+            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                <li class="nav-item">
+                    <a class="nav-link fw-600 active" href="#"
+                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
+                        <i class="bi bi-boxes me-1"></i>المنتجات
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="warehouse.php?type=products"
+                        style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-building me-1"></i>المستودعات
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="movements.php?tab=products"
+                        style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-arrow-left-right me-1"></i>حركة المخزون
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="internal_orders.php"
+                        style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-signpost-split me-1"></i>الطلبات الداخلية
+                    </a>
+                </li>
+            </ul>
 
             <!-- إحصائيات -->
             <div class="row g-3 mb-3">
@@ -830,20 +867,20 @@ $catColors = [
                     <?php endif; ?>
                 </div>
                 <div class="table-responsive">
-                    <table>
+                    <table class="mtbl" id="productsTable">
                         <thead>
                             <tr>
-                                <th>#</th>
-                                <th>اسم المنتج</th>
-                                <th>الموديل</th>
-                                <th>الفئة</th>
-                                <th>القياسات</th>
-                                <th>الألوان</th>
-                                <th>نوع القماش</th>
-                                <th>المخزون</th>
-                                <th>الأسعار</th>
-                                <th>الحالة</th>
-                                <th style="text-align:center">إجراءات</th>
+                                <th data-no-sort>#</th>
+                                <th onclick="sortTableByColumn(this)">اسم المنتج</th>
+                                <th onclick="sortTableByColumn(this)">الموديل</th>
+                                <th onclick="sortTableByColumn(this)">الفئة</th>
+                                <th data-no-sort>القياسات</th>
+                                <th data-no-sort>الألوان</th>
+                                <th onclick="sortTableByColumn(this)">نوع القماش</th>
+                                <th onclick="sortTableByColumn(this)">المخزون</th>
+                                <th onclick="sortTableByColumn(this)">الأسعار</th>
+                                <th onclick="sortTableByColumn(this)">الحالة</th>
+                                <th data-no-sort style="text-align:center">إجراءات</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -860,24 +897,32 @@ $catColors = [
                                 $cc = $catColors[$rootId] ?? ['#f1f5f9', '#475569', '#e2e8f0'];
                                 $stock = (float) $prod['total_stock'];
 
-                                // جلب المقاسات بكروبات
+                                // جلب المقاسات بكروبات — ⚠ إصلاح: كان الاستعلام يذكر
+                                // عمود price_group صراحة، وهو غير موجود فعلياً بالجدول —
+                                // هذا كان يُسقط استثناء SQL في كل صف، يُبتلع بصمت بالـ
+                                // catch أدناه، فتظهر الأسعار/القياسات فارغة دائماً.
                                 $grps = [];
                                 $minSell = null;
+                                $maxSell = null;
                                 $priceCurInfo = null; // بيانات العملة المرتبطة بأقل سعر
                                 try {
-                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate, price_group FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
                                     $szSt->execute([$prod['id']]);
                                     $pSizes = $szSt->fetchAll();
                                     foreach ($pSizes as $s) {
-                                        $k = isset($s['price_group']) ? 'pg_' . $s['price_group'] : (string) $s['selling_price'];
+                                        $k = (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
                                         $grps[$k][] = $s['size'];
-                                        if ($minSell === null || (float) $s['selling_price'] < $minSell) {
-                                            $minSell = (float) $s['selling_price'];
+                                        $sp = (float) $s['selling_price'];
+                                        if ($minSell === null || $sp < $minSell) {
+                                            $minSell = $sp;
                                             $priceCurInfo = [
                                                 'base_currency_id' => $s['base_currency_id'] ?? null,
                                                 'currency_id' => $s['currency_id'] ?? null,
                                                 'exchange_rate' => $s['exchange_rate'] ?? 1,
                                             ];
+                                        }
+                                        if ($maxSell === null || $sp > $maxSell) {
+                                            $maxSell = $sp;
                                         }
                                     }
                                 } catch (Exception $e) {
@@ -968,20 +1013,25 @@ $catColors = [
                                         <span class="<?= $sCls ?> fw-600"><?= $sLbl ?></span>
                                     </td>
 
-                                    <!-- الأسعار: متعددة حسب الكروب — التفاصيل بمودال العرض -->
-                                    <td style="font-size:.78rem">
+                                    <!-- الأسعار: نعرض القيمة الفعلية (أو المدى لو الأسعار مختلفة)، مو بس عدّاد -->
+                                    <td style="font-size:.78rem" class="n">
                                         <?php $grpCount = count($grps); ?>
                                         <?php if ($grpCount > 0): ?>
-                                            <span class="text-muted">
-                                                <i class="bi bi-tags me-1"></i><?= $grpCount ?>
-                                                <?= $grpCount === 1 ? 'سعر' : 'أسعار' ?>
-                                            </span>
-                                            <button class="btn btn-sm p-0 border-0" style="font-size:.7rem;color:#2563eb"
-                                                onclick="viewDetail(<?= $prod['id'] ?>)">
-                                                عرض التفاصيل
-                                            </button>
+                                            <div class="fw-600" style="color:#1e293b">
+                                                <?php if ($grpCount === 1 || abs($maxSell - $minSell) < 0.0001): ?>
+                                                    <?= number_format($minSell, 2) ?> <?= htmlspecialchars($branchCurRow['symbol']) ?>
+                                                <?php else: ?>
+                                                    <?= number_format($minSell, 2) ?> – <?= number_format($maxSell, 2) ?> <?= htmlspecialchars($branchCurRow['symbol']) ?>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php if ($grpCount > 1): ?>
+                                                <button class="btn btn-sm p-0 border-0" style="font-size:.68rem;color:#2563eb"
+                                                    onclick="viewDetail(<?= $prod['id'] ?>)">
+                                                    <?= $grpCount ?> أسعار مختلفة — عرض التفاصيل
+                                                </button>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="text-muted">—</span>
+                                            <span class="text-muted">لا يوجد سعر مسجَّل</span>
                                         <?php endif; ?>
                                     </td>
 
@@ -1273,6 +1323,47 @@ $catColors = [
             document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
             g.classList.toggle('open', !o);
             localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());
+        }
+
+        // ── فرز جدول عند النقر على رأس عمود (نمط موحّد بكل صفحات القسم) ──
+        function sortTableByColumn(th) {
+            const table = th.closest('table');
+            const tbody = table.querySelector('tbody');
+            const headers = Array.from(th.parentElement.children);
+            const colIndex = headers.indexOf(th);
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => !r.querySelector('td[colspan]'));
+
+            const asc = th.dataset.sortDir !== 'asc';
+            headers.forEach(h => delete h.dataset.sortDir);
+            th.dataset.sortDir = asc ? 'asc' : 'desc';
+            headers.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+            th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+            const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+
+            rows.sort((r1, r2) => {
+                const c1 = r1.children[colIndex]?.innerText.trim() || '';
+                const c2 = r2.children[colIndex]?.innerText.trim() || '';
+
+                // ١. تاريخ ISO أولاً — مقارنة زمنية حقيقية (⚠ لا parseFloat على تاريخ مباشرة)
+                if (ISO_DATE.test(c1) && ISO_DATE.test(c2)) {
+                    const d1 = new Date(c1), d2 = new Date(c2);
+                    return asc ? d1 - d2 : d2 - d1;
+                }
+
+                // ٢. رقم صرف كامل المطابقة (النص كله رقم، مش رقم داخل نص أطول)
+                const numOnly = /^-?[\d,]+\.?\d*$/;
+                if (numOnly.test(c1) && numOnly.test(c2)) {
+                    const n1 = parseFloat(c1.replace(/,/g, ''));
+                    const n2 = parseFloat(c2.replace(/,/g, ''));
+                    return asc ? n1 - n2 : n2 - n1;
+                }
+
+                // ٣. نص عربي عادي
+                return asc ? c1.localeCompare(c2, 'ar') : c2.localeCompare(c1, 'ar');
+            });
+
+            rows.forEach(r => tbody.appendChild(r));
         }
 
         const prodModal = new bootstrap.Modal(document.getElementById('prodModal'));

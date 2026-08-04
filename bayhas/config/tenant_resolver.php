@@ -16,7 +16,7 @@ if (!defined('PLATFORM_BASE_DOMAIN')) define('PLATFORM_BASE_DOMAIN', 'fatorize.c
 
 // أثناء التطوير المحلي (localhost)، يمكن تحديد شركة افتراضية للاختبار
 // عبر: config/local_tenant_override.php (اختياري، غير مرفوع لأي سيرفر إنتاج)
-if (!defined('DEV_FALLBACK_SUBDOMAIN')) define('DEV_FALLBACK_SUBDOMAIN', '');
+if (!defined('DEV_FALLBACK_SUBDOMAIN')) define('DEV_FALLBACK_SUBDOMAIN', 'bayhas');
 
 /**
  * يستخرج الساب دومين من اسم المضيف الحالي (HTTP_HOST).

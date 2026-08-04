@@ -7,14 +7,14 @@ $pdo = getConnection();
 checkLogin($pdo);
 requirePermission('hr.employees', 'view');
 
-$branchName      = $_SESSION['branch_name'] ?? 'الفرع';
-$currentModule   = 'hr.employees';
-$T               = "hr_employees_{$_SESSION['table_suffix']}";
+$branchName = $_SESSION['branch_name'] ?? 'الفرع';
+$currentModule = 'hr.employees';
+$T = "hr_employees_{$_SESSION['table_suffix']}";
 
 $currencies = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,code")->fetchAll();
 
 // أيام الأسبوع بالترتيب
-const DAYS = ['friday', 'saturday', 'sunday','monday', 'tuesday', 'wednesday', 'thursday'];
+const DAYS = ['friday', 'saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday'];
 const DAY_LABELS = [
     'friday' => 'الجمعة',
     'saturday' => 'السبت',
@@ -24,7 +24,7 @@ const DAY_LABELS = [
     'wednesday' => 'الأربعاء',
     'thursday' => 'الخميس',
 ];
-const DAY_SHORT  = [
+const DAY_SHORT = [
     'friday' => 'ج',
     'saturday' => 'س',
     'sunday' => 'ح',
@@ -45,19 +45,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 ? requirePermission('hr.employees', 'create')
                 : requirePermission('hr.employees', 'edit');
 
-            $full_name   = trim($_POST['full_name']   ?? '');
-            $position    = trim($_POST['position']    ?? '');
-            $department  = $_POST['department']       ?? 'sales';
-            $phone       = trim($_POST['phone']       ?? '');
-            $email       = trim($_POST['email']       ?? '');
-            $hire_date   = $_POST['hire_date']        ?? date('Y-m-d');
-            $salary_type = $_POST['salary_type']      ?? 'monthly';
+            $full_name = trim($_POST['full_name'] ?? '');
+            $position = trim($_POST['position'] ?? '');
+            $department = $_POST['department'] ?? 'sales';
+            $phone = trim($_POST['phone'] ?? '');
+            $email = trim($_POST['email'] ?? '');
+            $hire_date = $_POST['hire_date'] ?? date('Y-m-d');
+            $salary_type = $_POST['salary_type'] ?? 'monthly';
             $basic_salary = floatval($_POST['basic_salary'] ?? 0);
-            $currency_id = (int)($_POST['currency_id'] ?? 1);
+            $currency_id = isset($_POST['currency_id']) ? (int) $_POST['currency_id'] : null;
+            if (!$currency_id) {
+                // احتياط دفاعي فقط — الواجهة دايماً بترسل currency_id (تُملأ من
+                // أول عملة بالقائمة، مرتبة is_base DESC). لو وصلنا هون فعلاً،
+                // نجلب عملة الفرع الأساسية ديناميكياً، لا معرّف ثابت مفترض
+                $baseCur = $pdo->query("SELECT id FROM currencies WHERE is_base=1 LIMIT 1")->fetchColumn();
+                $currency_id = $baseCur ?: null;
+                if (!$currency_id)
+                    throw new Exception('لا يوجد عملة أساسية معرَّفة بالنظام');
+            }
             $bank_account = trim($_POST['bank_account'] ?? '');
-            $notes       = trim($_POST['notes']       ?? '');
-            $status      = $_POST['status']           ?? 'active';
-            $ot_mult     = max(1.0, floatval($_POST['overtime_multiplier'] ?? 1.5));
+            $notes = trim($_POST['notes'] ?? '');
+            $status = $_POST['status'] ?? 'active';
+            $ot_mult = max(1.0, floatval($_POST['overtime_multiplier'] ?? 1.5));
 
             if (!$full_name || !$position)
                 throw new Exception('الاسم الكامل والمسمى الوظيفي مطلوبان');
@@ -67,9 +76,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $dayVals = [];
             foreach (DAYS as $day) {
                 $from = isset($_POST["{$day}_from"]) && $_POST["{$day}_from"] !== ''
-                    ? (int)$_POST["{$day}_from"] : null;
-                $to   = isset($_POST["{$day}_to"])   && $_POST["{$day}_to"]   !== ''
-                    ? (int)$_POST["{$day}_to"]   : null;
+                    ? (int) $_POST["{$day}_from"] : null;
+                $to = isset($_POST["{$day}_to"]) && $_POST["{$day}_to"] !== ''
+                    ? (int) $_POST["{$day}_to"] : null;
                 // إذا الاثنان null = عطلة، وإذا from موجود لكن to لا — عطلة
                 if ($from === null || $to === null) {
                     $from = null;
@@ -82,12 +91,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             }
 
             if ($act === 'create') {
-                $cols   = "full_name,position,department,phone,email,hire_date,
+                $cols = "full_name,position,department,phone,email,hire_date,
                            salary_type,basic_salary,currency_id,bank_account,notes,
                            overtime_multiplier,status,created_by,"
                     . implode(',', $dayCols);
-                $marks  = str_repeat('?,', 14 + count($dayCols));
-                $marks  = rtrim($marks, ',');
+                $marks = str_repeat('?,', 14 + count($dayCols));
+                $marks = rtrim($marks, ',');
                 $params = [
                     $full_name,
                     $position,
@@ -109,9 +118,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     ->execute($params);
                 echo json_encode(['ok' => true, 'msg' => 'تم إضافة الموظف', 'id' => $pdo->lastInsertId()]);
             } else {
-                $id = (int)($_POST['id'] ?? 0);
-                if (!$id) throw new Exception('معرف غير صحيح');
-                $sets   = "full_name=?,position=?,department=?,phone=?,email=?,hire_date=?,
+                $id = (int) ($_POST['id'] ?? 0);
+                if (!$id)
+                    throw new Exception('معرف غير صحيح');
+                $sets = "full_name=?,position=?,department=?,phone=?,email=?,hire_date=?,
                            salary_type=?,basic_salary=?,currency_id=?,bank_account=?,notes=?,
                            overtime_multiplier=?,status=?,updated_at=NOW(),"
                     . implode('=?,', $dayCols) . '=?';
@@ -137,23 +147,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             }
         } elseif ($act === 'get') {
             $stmt = $pdo->prepare("SELECT * FROM `{$T}` WHERE id=?");
-            $stmt->execute([(int)$_POST['id']]);
+            $stmt->execute([(int) $_POST['id']]);
             $emp = $stmt->fetch();
-            if (!$emp) throw new Exception('الموظف غير موجود');
+            if (!$emp)
+                throw new Exception('الموظف غير موجود');
             echo json_encode(['ok' => true, 'data' => $emp]);
         } elseif ($act === 'delete') {
             requirePermission('hr.employees', 'delete');
-            $pdo->prepare("DELETE FROM `{$T}` WHERE id=?")->execute([(int)$_POST['id']]);
+            $pdo->prepare("DELETE FROM `{$T}` WHERE id=?")->execute([(int) $_POST['id']]);
             echo json_encode(['ok' => true, 'msg' => 'تم حذف الموظف']);
         } elseif ($act === 'toggle') {
             requirePermission('hr.employees', 'edit');
-            $id = (int)($_POST['id'] ?? 0);
+            $id = (int) ($_POST['id'] ?? 0);
             $pdo->prepare("UPDATE `{$T}` SET status=IF(status='active','inactive','active'),updated_at=NOW() WHERE id=?")
                 ->execute([$id]);
             $s = $pdo->prepare("SELECT status FROM `{$T}` WHERE id=?");
             $s->execute([$id]);
             echo json_encode(['ok' => true, 'status' => $s->fetchColumn()]);
-        } else throw new Exception('إجراء غير معروف');
+        } else
+            throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
         echo json_encode(['ok' => false, 'msg' => $e->getMessage()]);
     }
@@ -168,7 +180,7 @@ $employees = $pdo->query("
     ORDER BY e.department, e.full_name
 ")->fetchAll();
 
-$deptLabels   = [
+$deptLabels = [
     'sales' => ['مبيعات', 'info'],
     'production' => ['إنتاج', 'primary'],
     'admin' => ['إدارة', 'secondary'],
@@ -184,11 +196,11 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>الموظفون — <?= htmlspecialchars($branchName) ?></title>
-    <link rel="icon" href="/bayhas/assets/images/logo.png">
+    <link rel="icon" href="<?= BASE_PATH ?>/assets/images/logo.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="/bayhas/assets/css/layout.css" rel="stylesheet">
+    <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
     <style>
         .emp-avatar {
             width: 38px;
@@ -524,21 +536,40 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
 
 <body>
     <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
-    <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+    <?php
+    require_once __DIR__ . '/../../../includes/sidebar.php';
+    require_once __DIR__ . '/../../../includes/breadcrumb.php';
+    ?>
 
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-        <span class="tb-title">إدارة الموظفين</span>
+        <span class="tb-title"><i class="bi bi-people-fill me-1 text-primary"></i>إدارة الموظفين</span>
         <span class="tb-branch"><i class="bi bi-people me-1"></i><?= htmlspecialchars($branchName) ?></span>
-        <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.8rem;color:#94a3b8">
-            <span>الموارد البشرية</span>
-            <i class="bi bi-chevron-left mx-1" style="font-size:.7rem"></i>
-            <span class="text-primary">الموظفون</span>
-        </nav>
+        <?= renderBreadcrumb() ?>
     </header>
 
     <main class="main-content">
         <div class="content-body">
+
+            <!-- تبويبات -->
+            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                <li class="nav-item">
+                    <a class="nav-link fw-600 active" href="employees.php"
+                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
+                        <i class="bi bi-people-fill me-1"></i>الموظفون
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="attendance.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-calendar-check me-1"></i>الحضور والانصراف
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="payroll.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-cash-stack me-1"></i>الرواتب والسلف والمكافآت
+                    </a>
+                </li>
+            </ul>
 
             <div class="page-header">
                 <h5><i class="bi bi-people-fill me-2 text-primary"></i>الموظفون (<?= count($employees) ?>)</h5>
@@ -598,28 +629,35 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                     $ini = mb_substr($emp['full_name'], 0, 1);
                                     $dept = $deptLabels[$emp['department']] ?? ['—', 'secondary'];
                                     $sym = $emp['currency_symbol'] ?? $emp['currency_code'] ?? '';
-                                ?>
+                                    ?>
                                     <tr data-dept="<?= $emp['department'] ?>" data-stat="<?= $emp['status'] ?>">
                                         <td class="text-muted small"><?= $i + 1 ?></td>
                                         <td>
                                             <div class="d-flex align-items-center gap-2">
-                                                <div class="emp-avatar" style="background:<?= $clr ?>"><?= htmlspecialchars($ini) ?></div>
+                                                <div class="emp-avatar" style="background:<?= $clr ?>">
+                                                    <?= htmlspecialchars($ini) ?></div>
                                                 <div>
-                                                    <div class="fw-600" style="font-size:.88rem"><?= htmlspecialchars($emp['full_name']) ?></div>
+                                                    <div class="fw-600" style="font-size:.88rem">
+                                                        <?= htmlspecialchars($emp['full_name']) ?></div>
                                                     <?php if ($emp['phone']): ?>
-                                                        <div class="text-muted" style="font-size:.73rem"><i class="bi bi-phone me-1"></i><?= htmlspecialchars($emp['phone']) ?></div>
+                                                        <div class="text-muted" style="font-size:.73rem"><i
+                                                                class="bi bi-phone me-1"></i><?= htmlspecialchars($emp['phone']) ?>
+                                                        </div>
                                                     <?php endif; ?>
                                                 </div>
                                             </div>
                                         </td>
                                         <td>
                                             <div style="font-size:.84rem"><?= htmlspecialchars($emp['position']) ?></div>
-                                            <span class="badge bg-<?= $dept[1] ?>-subtle text-<?= $dept[1] ?>" style="font-size:.7rem"><?= $dept[0] ?></span>
+                                            <span class="badge bg-<?= $dept[1] ?>-subtle text-<?= $dept[1] ?>"
+                                                style="font-size:.7rem"><?= $dept[0] ?></span>
                                         </td>
                                         <td class="text-nowrap">
                                             <span class="fw-600"><?= number_format($emp['basic_salary'], 0) ?></span>
-                                            <span class="text-muted" style="font-size:.74rem"> <?= htmlspecialchars($sym) ?></span>
-                                            <div class="text-muted" style="font-size:.72rem"><?= $salaryLabels[$emp['salary_type']] ?? '' ?></div>
+                                            <span class="text-muted" style="font-size:.74rem">
+                                                <?= htmlspecialchars($sym) ?></span>
+                                            <div class="text-muted" style="font-size:.72rem">
+                                                <?= $salaryLabels[$emp['salary_type']] ?? '' ?></div>
                                         </td>
                                         <td>
                                             <?php
@@ -628,24 +666,28 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                             echo '<div class="sched-days" title="">';
                                             foreach ($days as $di => $d):
                                                 $from = $emp["{$d}_from"] ?? null;
-                                                $to   = $emp["{$d}_to"]   ?? null;
-                                                $on   = $from !== null && $to !== null;
-                                                $tip  = $on ? "{$shorts[$di]}: {$from}:00→{$to}:00 (" . ($to - $from) . "س)" : "{$shorts[$di]}: عطلة";
+                                                $to = $emp["{$d}_to"] ?? null;
+                                                $on = $from !== null && $to !== null;
+                                                $tip = $on ? "{$shorts[$di]}: {$from}:00→{$to}:00 (" . ($to - $from) . "س)" : "{$shorts[$di]}: عطلة";
                                                 echo "<div class='sd " . ($on ? 'on' : 'off') . "' title='{$tip}'>{$shorts[$di]}</div>";
                                             endforeach;
                                             echo '</div>';
                                             ?>
                                         </td>
-                                        <td><span class="ot-badge">×<?= number_format((float)($emp['overtime_multiplier'] ?? 1.5), 1) ?></span></td>
+                                        <td><span
+                                                class="ot-badge">×<?= number_format((float) ($emp['overtime_multiplier'] ?? 1.5), 1) ?></span>
+                                        </td>
                                         <td class="text-muted small"><?= date('Y-m-d', strtotime($emp['hire_date'])) ?></td>
                                         <td>
                                             <?php if (can('hr.employees', 'edit')): ?>
                                                 <label class="ts">
-                                                    <input type="checkbox" <?= $emp['status'] === 'active' ? 'checked' : '' ?> onchange="toggleSt(<?= $emp['id'] ?>,this)">
+                                                    <input type="checkbox" <?= $emp['status'] === 'active' ? 'checked' : '' ?>
+                                                        onchange="toggleSt(<?= $emp['id'] ?>,this)">
                                                     <span class="ts-sl"></span>
                                                 </label>
                                             <?php else: ?>
-                                                <span class="badge bg-<?= $emp['status'] === 'active' ? 'success' : 'secondary' ?>-subtle text-<?= $emp['status'] === 'active' ? 'success' : 'secondary' ?>">
+                                                <span
+                                                    class="badge bg-<?= $emp['status'] === 'active' ? 'success' : 'secondary' ?>-subtle text-<?= $emp['status'] === 'active' ? 'success' : 'secondary' ?>">
                                                     <?= $emp['status'] === 'active' ? 'نشط' : 'معطل' ?>
                                                 </span>
                                             <?php endif; ?>
@@ -653,10 +695,13 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                         <td>
                                             <div class="d-flex gap-1">
                                                 <?php if (can('hr.employees', 'edit')): ?>
-                                                    <button class="btn-act edit" onclick="openEdit(<?= $emp['id'] ?>)" title="تعديل"><i class="bi bi-pencil"></i></button>
+                                                    <button class="btn-act edit" onclick="openEdit(<?= $emp['id'] ?>)"
+                                                        title="تعديل"><i class="bi bi-pencil"></i></button>
                                                 <?php endif; ?>
                                                 <?php if (can('hr.employees', 'delete')): ?>
-                                                    <button class="btn-act del" onclick="delEmp(<?= $emp['id'] ?>,'<?= htmlspecialchars($emp['full_name'], ENT_QUOTES) ?>')" title="حذف"><i class="bi bi-trash"></i></button>
+                                                    <button class="btn-act del"
+                                                        onclick="delEmp(<?= $emp['id'] ?>,'<?= htmlspecialchars($emp['full_name'], ENT_QUOTES) ?>')"
+                                                        title="حذف"><i class="bi bi-trash"></i></button>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -687,11 +732,13 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                             <div class="sec-label"><i class="bi bi-person me-1"></i>البيانات الأساسية</div>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-600 text-secondary mb-1">الاسم الكامل <span class="text-danger">*</span></label>
+                            <label class="form-label small fw-600 text-secondary mb-1">الاسم الكامل <span
+                                    class="text-danger">*</span></label>
                             <input type="text" id="eName" class="form-control" placeholder="محمد أحمد">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-600 text-secondary mb-1">المسمى الوظيفي <span class="text-danger">*</span></label>
+                            <label class="form-label small fw-600 text-secondary mb-1">المسمى الوظيفي <span
+                                    class="text-danger">*</span></label>
                             <input type="text" id="ePos" class="form-control" placeholder="بائع، خياط، محاسب...">
                         </div>
                         <div class="col-md-4">
@@ -744,7 +791,8 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                             <label class="form-label small fw-600 text-secondary mb-1">العملة</label>
                             <select id="eCurrency" class="form-select">
                                 <?php foreach ($currencies as $c): ?>
-                                    <option value="<?= $c['id'] ?>"><?= htmlspecialchars($c['code']) ?> - <?= htmlspecialchars($c['name']) ?></option>
+                                    <option value="<?= $c['id'] ?>"><?= htmlspecialchars($c['code']) ?> -
+                                        <?= htmlspecialchars($c['name']) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -767,15 +815,19 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                 <!-- ساعات عامة للتطبيق الجماعي -->
                                 <div class="ws-global">
                                     <span style="font-size:.82rem;color:#64748b;min-width:95px">تطبيق على الكل:</span>
-                                    <select id="gFrom" class="form-select form-select-sm" style="width:88px" onchange="applyAll()">
+                                    <select id="gFrom" class="form-select form-select-sm" style="width:88px"
+                                        onchange="applyAll()">
                                         <?php for ($h = 0; $h < 24; $h++): ?>
-                                            <option value="<?= $h ?>" <?= $h === 8 ? 'selected' : '' ?>><?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
+                                            <option value="<?= $h ?>" <?= $h === 8 ? 'selected' : '' ?>>
+                                                <?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
                                         <?php endfor; ?>
                                     </select>
                                     <span class="text-muted">→</span>
-                                    <select id="gTo" class="form-select form-select-sm" style="width:88px" onchange="applyAll()">
+                                    <select id="gTo" class="form-select form-select-sm" style="width:88px"
+                                        onchange="applyAll()">
                                         <?php for ($h = 0; $h < 24; $h++): ?>
-                                            <option value="<?= $h ?>" <?= $h === 18 ? 'selected' : '' ?>><?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
+                                            <option value="<?= $h ?>" <?= $h === 18 ? 'selected' : '' ?>>
+                                                <?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
                                         <?php endfor; ?>
                                     </select>
                                     <span id="gBadge" style="font-size:.75rem;color:#64748b">= 10 ساعات</span>
@@ -784,16 +836,16 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                 <!-- صفوف الأيام -->
                                 <?php
                                 $dayDefs = [
-                                    'friday'    => ['الجمعة',   false], // عطلة افتراضية
-                                    'saturday'  => ['السبت',    true],
-                                    'sunday'    => ['الأحد',    false], // عطلة افتراضية
-                                    'monday'    => ['الإثنين',  true],
-                                    'tuesday'   => ['الثلاثاء', true],
+                                    'friday' => ['الجمعة', false], // عطلة افتراضية
+                                    'saturday' => ['السبت', true],
+                                    'sunday' => ['الأحد', false], // عطلة افتراضية
+                                    'monday' => ['الإثنين', true],
+                                    'tuesday' => ['الثلاثاء', true],
                                     'wednesday' => ['الأربعاء', true],
-                                    'thursday'  => ['الخميس',   true],
+                                    'thursday' => ['الخميس', true],
                                 ];
                                 foreach ($dayDefs as $dk => [$dl, $defOn]):
-                                ?>
+                                    ?>
                                     <div class="ws-day-row <?= $defOn ? 'on' : 'off' ?>" id="dRow_<?= $dk ?>">
                                         <label class="ws-tog">
                                             <input type="checkbox" id="dChk_<?= $dk ?>" <?= $defOn ? 'checked' : '' ?>
@@ -801,23 +853,27 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                             <span class="ws-sl"></span>
                                         </label>
                                         <span class="ws-name"><?= $dl ?></span>
-                                        <div class="ws-hrs" id="dHrs_<?= $dk ?>" style="display:<?= $defOn ? 'flex' : 'none' ?>">
-                                            <select id="dFrom_<?= $dk ?>" class="form-select form-select-sm" style="width:86px"
-                                                onchange="updBadge('<?= $dk ?>')">
+                                        <div class="ws-hrs" id="dHrs_<?= $dk ?>"
+                                            style="display:<?= $defOn ? 'flex' : 'none' ?>">
+                                            <select id="dFrom_<?= $dk ?>" class="form-select form-select-sm"
+                                                style="width:86px" onchange="updBadge('<?= $dk ?>')">
                                                 <?php for ($h = 0; $h < 24; $h++): ?>
-                                                    <option value="<?= $h ?>" <?= $h === 8 ? 'selected' : '' ?>><?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
+                                                    <option value="<?= $h ?>" <?= $h === 8 ? 'selected' : '' ?>>
+                                                        <?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
                                                 <?php endfor; ?>
                                             </select>
                                             <span class="text-muted" style="font-size:.75rem">→</span>
-                                            <select id="dTo_<?= $dk ?>" class="form-select form-select-sm" style="width:86px"
-                                                onchange="updBadge('<?= $dk ?>')">
+                                            <select id="dTo_<?= $dk ?>" class="form-select form-select-sm"
+                                                style="width:86px" onchange="updBadge('<?= $dk ?>')">
                                                 <?php for ($h = 0; $h < 24; $h++): ?>
-                                                    <option value="<?= $h ?>" <?= $h === 18 ? 'selected' : '' ?>><?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
+                                                    <option value="<?= $h ?>" <?= $h === 18 ? 'selected' : '' ?>>
+                                                        <?= str_pad($h, 2, '0', STR_PAD_LEFT) ?>:00</option>
                                                 <?php endfor; ?>
                                             </select>
                                             <span class="ws-badge" id="dBadge_<?= $dk ?>">10 ساعات</span>
                                         </div>
-                                        <span class="ws-off-lbl" id="dOff_<?= $dk ?>" style="display:<?= $defOn ? 'none' : 'inline' ?>">
+                                        <span class="ws-off-lbl" id="dOff_<?= $dk ?>"
+                                            style="display:<?= $defOn ? 'none' : 'inline' ?>">
                                             <i class="bi bi-x-circle me-1"></i>عطلة
                                         </span>
                                     </div>
@@ -827,14 +883,16 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                                 <div class="d-flex align-items-center gap-2 mt-3 pt-3"
                                     style="border-top:1px dashed #e2e8f0;flex-wrap:wrap">
                                     <i class="bi bi-lightning-charge text-warning"></i>
-                                    <span style="font-size:.83rem;font-weight:600;color:#374151">معامل الأوفرتايم:</span>
+                                    <span style="font-size:.83rem;font-weight:600;color:#374151">معامل
+                                        الأوفرتايم:</span>
                                     <select id="eOT" class="form-select form-select-sm" style="width:175px">
                                         <option value="1.0">× 1.0 — نفس أجرة الساعة</option>
                                         <option value="1.5" selected>× 1.5 — ساعة ونص</option>
                                         <option value="2.0">× 2.0 — ضعف الأجرة</option>
                                         <option value="2.5">× 2.5 — ضعف ونص</option>
                                     </select>
-                                    <span class="text-muted" style="font-size:.74rem">لكل ساعة إضافية في يوم العطلة</span>
+                                    <span class="text-muted" style="font-size:.74rem">لكل ساعة إضافية في يوم
+                                        العطلة</span>
                                 </div>
 
                             </div>
@@ -844,8 +902,10 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                 </div><!-- /modal-body -->
 
                 <div class="modal-footer border-0 pb-4">
-                    <button type="button" class="btn btn-sm btn-light" data-bs-dismiss="modal" style="border-radius:8px">إلغاء</button>
-                    <button type="button" class="btn btn-sm btn-primary fw-600" style="border-radius:8px;min-width:100px" onclick="saveEmp()">
+                    <button type="button" class="btn btn-sm btn-light" data-bs-dismiss="modal"
+                        style="border-radius:8px">إلغاء</button>
+                    <button type="button" class="btn btn-sm btn-primary fw-600"
+                        style="border-radius:8px;min-width:100px" onclick="saveEmp()">
                         <span id="sBtnTxt">حفظ</span>
                         <span id="sSpin" class="spinner-border spinner-border-sm ms-1" style="display:none"></span>
                     </button>
@@ -889,6 +949,9 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
         let editMode = false;
         const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
         const OFF_DEF = ['friday', 'sunday']; // عطلة افتراضية
+        // أول عملة بالقائمة (مرتبة is_base DESC) — تُستخدم كاحتياط ديناميكي
+        // بدل أي معرّف عملة ثابت بالكود
+        const DEFAULT_CURRENCY_ID = <?= json_encode($currencies[0]['id'] ?? null) ?>;
 
         function openCreate() {
             editMode = false;
@@ -903,7 +966,7 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
             document.getElementById('eStat').value = 'active';
             document.getElementById('eSalType').value = 'monthly';
             document.getElementById('eSalAmt').value = '0';
-            document.getElementById('eCurrency').value = '<?= $currencies[0]['id'] ?? 1 ?>';
+            document.getElementById('eCurrency').value = DEFAULT_CURRENCY_ID;
             document.getElementById('eBank').value = '';
             document.getElementById('eNotes').value = '';
             document.getElementById('eOT').value = '1.5';
@@ -926,9 +989,9 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
             fd.append('_action', 'get');
             fd.append('id', id);
             fetch(location.href, {
-                    method: 'POST',
-                    body: fd
-                })
+                method: 'POST',
+                body: fd
+            })
                 .then(r => r.json()).then(d => {
                     if (!d.ok) {
                         alert(d.msg);
@@ -945,7 +1008,7 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                     document.getElementById('eStat').value = e.status;
                     document.getElementById('eSalType').value = e.salary_type;
                     document.getElementById('eSalAmt').value = e.basic_salary;
-                    document.getElementById('eCurrency').value = e.currency_id || 1;
+                    document.getElementById('eCurrency').value = e.currency_id || DEFAULT_CURRENCY_ID;
                     document.getElementById('eBank').value = e.bank_account || '';
                     document.getElementById('eNotes').value = e.notes || '';
                     document.getElementById('eOT').value = e.overtime_multiplier || '1.5';
@@ -1062,9 +1125,9 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
             });
 
             fetch(location.href, {
-                    method: 'POST',
-                    body: fd
-                })
+                method: 'POST',
+                body: fd
+            })
                 .then(r => r.json())
                 .then(d => {
                     document.getElementById('sBtnTxt').style.opacity = '1';
@@ -1088,9 +1151,9 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
             fd.append('_action', 'delete');
             fd.append('id', id);
             fetch(location.href, {
-                    method: 'POST',
-                    body: fd
-                }).then(r => r.json())
+                method: 'POST',
+                body: fd
+            }).then(r => r.json())
                 .then(d => {
                     if (d.ok) location.reload();
                     else alert(d.msg);
@@ -1102,9 +1165,9 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
             fd.append('_action', 'toggle');
             fd.append('id', id);
             fetch(location.href, {
-                    method: 'POST',
-                    body: fd
-                }).then(r => r.json())
+                method: 'POST',
+                body: fd
+            }).then(r => r.json())
                 .then(d => {
                     if (!d.ok) {
                         alert(d.msg);

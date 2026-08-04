@@ -108,7 +108,6 @@ function saveProductSizes(
                         $marginPct, $packetQty, $userId, $rowId,
                     ]);
             } else {
-                // ⚠ إصلاح: product_sizes_alp لا يحتوي عمود created_by إطلاقاً
                 // (تحقّقنا من CREATE TABLE الفعلي — فيه updated_by بس).
                 // النسخة السابقة كانت تحاول تدرج created_by فسبّبت خطأ
                 // SQL يوقف كل عملية إضافة منتج بمنتصفها (المقاسات

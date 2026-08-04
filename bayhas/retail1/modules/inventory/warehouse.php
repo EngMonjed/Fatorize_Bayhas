@@ -12,8 +12,20 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('inventory.warehouse', 'view');
-$currentModule = 'inventory.warehouse'; // ✅ كانت غير معرّفة — الشريط الجانبي ما كان يبيّن هالصفحة كـ"نشطة" أبداً
+
+// ⚠ لازم نحدد النوع (منتجات/مستهلكات) قبل فحص الصلاحية — الصفحة
+// مزدوجة الغرض، وكل نوع له مفتاح صلاحية مختلف بالقائمة الجانبية
+// (inventory.warehouse للمنتجات، expenses.warehouse للمستهلكات).
+// فحص ثابت على مفتاح واحد كان بيمنع مستخدم عنده صلاحية القسم التاني
+// بس من الوصول للصفحة بالكامل، حتى لسياق هو أصلاً مسموح له فيه.
+$type = $_GET['type'] ?? 'products';
+if (!in_array($type, ['products', 'consumables', 'raw_materials'], true)) {
+    $type = 'products';
+}
+$warehousePermKey = $type === 'consumables' ? 'expenses.warehouse' : 'inventory.warehouse';
+
+requirePermission($warehousePermKey, 'view');
+$currentModule = $warehousePermKey; // ✅ كانت غير معرّفة — الشريط الجانبي ما كان يبيّن هالصفحة كـ"نشطة" أبداً
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $TS  = $_SESSION['table_suffix'];
@@ -44,7 +56,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 throw new Exception('الكود والاسم مطلوبان');
             }
 
-            requirePermission('inventory.warehouse', $id ? 'edit' : 'create');
+            // ⚠ صلاحية الحفظ حسب نوع المستودع المُستهدف فعلياً (من الفورم)، مش
+            // نوع التبويب الحالي بس — أدق لو تحرير تم بطريقة غير مباشرة لاحقاً
+            $savePermKey = $whType === 'consumables' ? 'expenses.warehouse' : 'inventory.warehouse';
+            requirePermission($savePermKey, $id ? 'edit' : 'create');
 
             if ($id) {
                 $pdo->prepare("UPDATE `{$TW}` SET code=?, name=?, address=?, manager_id=? WHERE id=?")
@@ -59,7 +74,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         }
 
         elseif ($act === 'toggle_warehouse') {
-            requirePermission('inventory.warehouse', 'edit');
             $id = (int)($_POST['id'] ?? 0);
             if (!$id) throw new Exception('معرّف غير صالح');
 
@@ -67,6 +81,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $curRow->execute([$id]);
             $whRow = $curRow->fetch(PDO::FETCH_ASSOC);
             if (!$whRow) throw new Exception('المستودع غير موجود');
+            // ⚠ صلاحية التعطيل حسب نوع المستودع الفعلي بقاعدة البيانات
+            requirePermission($whRow['warehouse_type'] === 'consumables' ? 'expenses.warehouse' : 'inventory.warehouse', 'edit');
             $isActive = (int)$whRow['is_active'];
 
             // ⚠ فحص الأرصدة الفعلية قبل التعطيل — مصدر الفحص يختلف حسب
@@ -108,13 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ────────────────────────────────────────────────
-// ⚠ تبويب النوع — بنفس نمط movements.php?tab=. الافتراضي 'products'
-// لأنه هاد أصل الصفحة. من قسم "المصاريف والمستهلكات" مستقبلاً بالشريط
-// الجانبي، الرابط لازم يمرر ?type=consumables صراحة.
-$type = $_GET['type'] ?? 'products';
-if (!in_array($type, ['products', 'consumables', 'raw_materials'], true)) {
-    $type = 'products';
-}
+// ⚠ $type محدَّد مسبقاً فوق (قبل فحص الصلاحية) — راجع التعليق هناك
 
 $managers = [];
 try {
@@ -123,24 +133,44 @@ try {
     $managers = []; // جدول الموظفين قد لا يكون مُهيّأ بعد بهذا الفرع
 }
 
+// عملة الفرع الأساسية — لعرض قيمة كل مستودع بعملة صحيحة، مو رمز ثابت
+$branchCurRow = $pdo->prepare("SELECT c.symbol FROM branches b
+    JOIN currencies c ON c.id = b.base_currency_id
+    WHERE b.table_suffix = ? LIMIT 1");
+$branchCurRow->execute([$TS]);
+$baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
+
 // مصدر الرصيد يختلف حسب النوع — منتجات من warehouse_items، مستهلكات من
 // consumable_stock. لا يوجد بعد جدول رصيد لمواد أولية (raw_material_stock
 // موجود لكن بلا بيانات فعلية حتى الآن)، فبيرجع صفر مؤقتاً لهالنوع.
 if ($type === 'consumables') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(cs.quantity),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT cs.item_id) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id AND cs.quantity > 0)";
+    // قيمة المستودع = الكمية × متوسط التكلفة المرجّح (avg_cost_usd —
+    // رغم الاسم، مخزّن فعلياً بعملة الفرع الأساسية بهذا النظام)
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_usd),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
 } elseif ($type === 'raw_materials') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(rms.quantity),0) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT rms.material_id) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id AND rms.quantity > 0)";
+    $statsSubqueryValue   = "0";
 } else {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(wi.quantity),0) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT wi.variant_id) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id AND wi.quantity > 0)";
+    // قيمة المستودع = الكمية × سعر الشراء (cost_price بجدول المقاسات،
+    // مخزّن أصلاً بعملة الفرع الأساسية — راجع الدرس الموثّق بجلسة
+    // إلغاء اختيار عملة المنتج بـproduct_add.php/product_edit.php)
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(wi.quantity * psz.cost_price),0)
+        FROM `{$TWI}` wi
+        JOIN product_variants_{$TS} pv ON pv.id = wi.variant_id
+        JOIN product_sizes_{$TS} psz ON psz.id = pv.size_id
+        WHERE wi.warehouse_id = w.id)";
 }
 
 $stmt = $pdo->prepare("
     SELECT w.*, e.full_name AS manager_name,
         {$statsSubqueryQty} AS total_qty,
-        {$statsSubqueryCount} AS variant_count
+        {$statsSubqueryCount} AS variant_count,
+        {$statsSubqueryValue} AS total_value
     FROM `{$TW}` w
     LEFT JOIN `{$THR}` e ON e.id = w.manager_id
     WHERE w.warehouse_type = ?
@@ -152,6 +182,7 @@ $warehouses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $totalWh    = count($warehouses);
 $activeWh   = count(array_filter($warehouses, fn($w) => (int)$w['is_active'] === 1));
 $totalStock = array_sum(array_column($warehouses, 'total_qty'));
+$totalValue = array_sum(array_column($warehouses, 'total_value'));
 
 $TYPE_LABELS = [
     'products'      => ['label' => 'مستودعات المنتجات',       'icon' => 'bi-boxes',    'unit_label' => 'قطعة'],
@@ -199,13 +230,61 @@ $curTypeInfo = $TYPE_LABELS[$type];
         <span class="tb-title"><i class="bi <?= $curTypeInfo['icon'] ?> me-1 text-primary"></i><?= htmlspecialchars($curTypeInfo['label']) ?></span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
         <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.8rem;color:#94a3b8">
-            <span><?= $type === 'consumables' ? 'المصاريف والمستهلكات' : 'المخزون' ?></span><i class="bi bi-chevron-left mx-1" style="font-size:.7rem"></i>
+            <?php if ($type === 'consumables'): ?>
+                <a href="../expenses_and_consumables/consumables.php" style="color:#64748b;text-decoration:none">المصاريف والمستهلكات</a>
+            <?php else: ?>
+                <a href="products.php" style="color:#64748b;text-decoration:none">المخزون</a>
+            <?php endif; ?>
+            <i class="bi bi-chevron-left mx-1" style="font-size:.7rem"></i>
             <span class="text-primary">المستودعات</span>
         </nav>
     </header>
 
     <main class="main-content">
         <div class="content-body">
+
+            <?php if ($type === 'consumables'): ?>
+                <!-- الشريط الموحّد لقسم المستهلكات والمصاريف — يظهر بس بسياق المستهلكات -->
+                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumables.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-box-seam me-1"></i>المواد
+                            الاستهلاكية</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_purchases.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-cart-plus me-1"></i>فواتير
+                            الشراء</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_issues.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
+                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
+                                class="bi bi-building me-1"></i>مستودعات المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=consumables"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-left-right me-1"></i>حركة المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_transfers.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-signpost-split me-1"></i>مناقلة بين المستودعات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/expenses.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-wallet2 me-1"></i>إدارة
+                            المصاريف</a></li>
+                </ul>
+            <?php elseif ($type === 'products'): ?>
+                <!-- الشريط الموحّد لقسم المنتجات/المخزون — نظير شريط المستهلكات
+                     بالضبط، يظهر بس بسياق المنتجات (كان ناقصاً، هذا هو الإصلاح) -->
+                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                    <li class="nav-item"><a class="nav-link fw-600" href="products.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
+                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
+                                class="bi bi-building me-1"></i>المستودعات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="internal_orders.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-signpost-split me-1"></i>الطلبات الداخلية</a></li>
+                </ul>
+            <?php endif; ?>
 
             <!-- تبويبات النوع — بنفس نمط movements.php؟tab= -->
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
@@ -228,8 +307,9 @@ $curTypeInfo = $TYPE_LABELS[$type];
                     [$totalWh, 'إجمالي المستودعات', 'bi-building', '#2563eb', '#eff6ff'],
                     [$activeWh, 'مستودعات نشطة', 'bi-check-circle-fill', '#16a34a', '#f0fdf4'],
                     [number_format($totalStock, 0), 'إجمالي القطع بكل المستودعات', 'bi-boxes', '#7c3aed', '#f5f3ff'],
+                    [number_format($totalValue, 2) . ' ' . $baseCurSymbol, 'القيمة الإجمالية (سعر الشراء)', 'bi-cash-stack', '#d97706', '#fffbeb'],
                 ] as [$val, $lbl, $icon, $color, $bg]): ?>
-                    <div class="col-6 col-md-4">
+                    <div class="col-6 col-md-3">
                         <div class="stat-card">
                             <div class="stat-icon" style="background:<?= $bg ?>;color:<?= $color ?>"><i class="bi <?= $icon ?>"></i></div>
                             <div>
@@ -243,7 +323,7 @@ $curTypeInfo = $TYPE_LABELS[$type];
 
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h6 class="mb-0 fw-bold">قائمة المستودعات</h6>
-                <?php if (can('inventory.warehouse', 'create')): ?>
+                <?php if (can($warehousePermKey, 'create')): ?>
                     <button class="btn btn-primary btn-sm" onclick="openWhModal()">
                         <i class="bi bi-plus-circle me-1"></i>مستودع جديد
                     </button>
@@ -272,8 +352,9 @@ $curTypeInfo = $TYPE_LABELS[$type];
                                 <?php endif; ?>
                                 <div class="wh-meta"><i class="bi bi-person-badge"></i><?= htmlspecialchars($w['manager_name'] ?? 'بدون مدير محدد') ?></div>
                                 <div class="wh-meta"><i class="bi bi-boxes"></i><?= number_format((float)$w['total_qty'], 0) ?> <?= htmlspecialchars($curTypeInfo['unit_label']) ?> — <?= (int)$w['variant_count'] ?> صنف</div>
+                                <div class="wh-meta"><i class="bi bi-cash-stack"></i><?= number_format((float)$w['total_value'], 2) ?> <?= htmlspecialchars($baseCurSymbol) ?></div>
                                 <div class="d-flex gap-1 mt-2">
-                                    <?php if (can('inventory.warehouse', 'edit')): ?>
+                                    <?php if (can($warehousePermKey, 'edit')): ?>
                                         <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="openWhModal(<?= (int)$w['id'] ?>)">
                                             <i class="bi bi-pencil"></i> تعديل
                                         </button>
@@ -339,6 +420,7 @@ $curTypeInfo = $TYPE_LABELS[$type];
     <div id="toastBox" style="position:fixed;bottom:20px;left:20px;z-index:2000"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
         const whModal = new bootstrap.Modal(document.getElementById('whModal'));
 

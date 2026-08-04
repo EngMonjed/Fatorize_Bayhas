@@ -79,7 +79,12 @@ try {
         $dateFrom=$_POST['period_from']??'';
         $dateTo  =$_POST['period_to']??'';
         // عملة الفرع الأساسية بالـ id
-        $brSt=$pdo->prepare("SELECT COALESCE(base_currency_id,1) AS base_curr_id FROM branches WHERE table_suffix=? LIMIT 1");
+        // ⚠ كان الاستعلام يقرأ عمود base_currency_id غير موجود إطلاقاً
+        // بجدول branches (الاسم الحقيقي base_currency، وهو نص كود عملة
+        // مثل 'USD' مو رقم id) — كل استدعاء لهالإجراء كان يفشل بخطأ SQL.
+        $brSt=$pdo->prepare("SELECT c.id FROM branches b
+            JOIN currencies c ON c.code = b.base_currency
+            WHERE b.table_suffix=? LIMIT 1");
         $brSt->execute([$TS]);
         $branchBaseCurrId=(int)($brSt->fetchColumn()?:1);
         $st=$pdo->prepare("SELECT * FROM `{$TE}` WHERE id=?");
@@ -189,7 +194,10 @@ try {
     if($act==='pay'){
         $empId   =(int)($_POST['employee_id']??0);
         // عملة الفرع
-        $brSt2=$pdo->prepare("SELECT COALESCE(base_currency_id,1) AS base_curr_id FROM branches WHERE table_suffix=? LIMIT 1");
+        // ⚠ نفس البق المُصلح أعلاه بـ calculate — راجع التعليق هناك
+        $brSt2=$pdo->prepare("SELECT c.id FROM branches b
+            JOIN currencies c ON c.code = b.base_currency
+            WHERE b.table_suffix=? LIMIT 1");
         $brSt2->execute([$TS]);
         $branchBaseCurrId2=(int)($brSt2->fetchColumn()?:1);
         $month   =$_POST['payroll_month']??'';
@@ -247,16 +255,16 @@ try {
         $curRatePost=(float)($_POST['exchange_rate']??0);
         if($curRatePost>0 && $needsRate){
             $exchangeRate=$curRatePost;
-            $netUsd=round($netOrig/$exchangeRate,4);
+            $netBase=round($netOrig/$exchangeRate,4);
         } elseif(!$needsRate){
             $exchangeRate=1;
-            $netUsd=$netOrig;
+            $netBase=$netOrig;
         } else {
             $curRateSt=$pdo->prepare("SELECT exchange_rate FROM currencies WHERE id=? LIMIT 1");
             $curRateSt->execute([$curId]);
             $dbRate=(float)($curRateSt->fetchColumn()?:1);
             $exchangeRate=$dbRate>0?$dbRate:1;
-            $netUsd=round($netOrig/$exchangeRate,4);
+            $netBase=round($netOrig/$exchangeRate,4);
         }
         $aS=$pdo->query("SELECT ac.* FROM `{$TIAS}` i JOIN `{$TAC}` ac ON ac.id=i.account_id WHERE i.setting_key='salary_expense' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         // حساب الدفع: المختار أو الافتراضي حسب طريقة الدفع
@@ -283,21 +291,21 @@ try {
             // القيد متوازن بعملة الفرع (base_amount)
             // سطر الصندوق: original بعملته، base بعملة الفرع
             $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','payroll',?,?)")
-                ->execute([$jeNo,date('Y-m-d'),"راتب {$en} {$month}",$branchCurCode,$exchangeRate,$netUsd,$netUsd,$payId,$_SESSION['user_id']]);
+                ->execute([$jeNo,date('Y-m-d'),"راتب {$en} {$month}",$branchCurCode,$exchangeRate,$netBase,$netBase,$payId,$_SESSION['user_id']]);
             $jeId=(int)$pdo->lastInsertId();
 
             // مدين: مصروف الرواتب — بعملة الفرع (متوازن)
             $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
-                ->execute([$jeId,$aS['id'],$netUsd,$netUsd,$netUsd,"راتب {$en}",$branchCurCode]);
+                ->execute([$jeId,$aS['id'],$netBase,$netBase,$netBase,"راتب {$en}",$branchCurCode]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                ->execute([$netUsd,$netUsd,$aS['id']]);
+                ->execute([$netBase,$netBase,$aS['id']]);
 
             // دائن: الصندوق — base_amount بعملة الفرع (للتوازن)، original بعملة الصندوق (للرصيد الفعلي)
             $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
-                ->execute([$jeId,$aC['id'],$netUsd,$netOrig,$netUsd,"دفع راتب {$en}",$cashCur,$exchangeRate]);
+                ->execute([$jeId,$aC['id'],$netBase,$netOrig,$netBase,"دفع راتب {$en}",$cashCur,$exchangeRate]);
             // base_balance بعملة الفرع، balance بعملة الصندوق الفعلية
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                ->execute([$netUsd,$netOrig,$aC['id']]);
+                ->execute([$netBase,$netOrig,$aC['id']]);
         }
         // ربط القيد بسند الصرف
         if(isset($jeId)){

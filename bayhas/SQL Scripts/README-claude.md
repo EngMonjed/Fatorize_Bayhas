@@ -19,26 +19,28 @@ consumables, and inter-branch internal orders.
 ## Table of Contents
 
 1. [Migration Log (July 2026 — generic branch/tenant naming)](#migration-log-july-2026--generic-branchtenant-naming)
-2. [Project Description & Purpose](#project-description--purpose)
-3. [Technologies Used](#technologies-used)
-4. [Folder / File Structure](#folder--file-structure)
-5. [The BASE_PATH Constant](#the-base_path-constant)
-6. [Deployment Environments](#deployment-environments)
-7. [System Architecture](#system-architecture)
-8. [Multi-Branch Model](#multi-branch-model)
-9. [Multi-Tenant SaaS Architecture](#multi-tenant-saas-architecture)
-10. [Database Overview](#database-overview)
-11. [Authentication & Authorization](#authentication--authorization)
-12. [Application Workflow](#application-workflow)
-13. [Features](#features)
-14. [Barcode Module](#barcode-module-generation--scanning)
-15. [Purchase Invoice Currency-Mismatch Bug (fixed)](#purchase-invoice-currency-mismatch-bug-fixed)
-16. [Consumables Module Findings](#consumables-module-findings)
-17. [Security Notes](#security-notes)
-18. [Known Limitations](#known-limitations)
-19. [Future Improvements](#future-improvements)
-20. [Troubleshooting](#troubleshooting)
-21. [Development Guidelines](#development-guidelines)
+2. [Currency Architecture (July 2026 — reporting currency reform)](#currency-architecture-july-2026--reporting-currency-reform)
+3. [Project Description & Purpose](#project-description--purpose)
+4. [Technologies Used](#technologies-used)
+5. [Folder / File Structure](#folder--file-structure)
+6. [The BASE_PATH Constant](#the-base_path-constant)
+7. [Deployment Environments](#deployment-environments)
+8. [System Architecture](#system-architecture)
+9. [Multi-Branch Model](#multi-branch-model)
+10. [Multi-Tenant SaaS Architecture](#multi-tenant-saas-architecture)
+11. [Database Overview](#database-overview)
+12. [Authentication & Authorization](#authentication--authorization)
+13. [Application Workflow](#application-workflow)
+14. [Features](#features)
+15. [Barcode Module](#barcode-module-generation--scanning)
+16. [Purchase Invoice Currency-Mismatch Bug (fixed)](#purchase-invoice-currency-mismatch-bug-fixed)
+17. [Consumables Module Findings](#consumables-module-findings)
+    - [جلسة توسعة قسم المستهلكات والمصاريف الكاملة (يوليو ٢٠٢٦)](#جلسة-توسعة-قسم-المستهلكات-والمصاريف-الكاملة-يوليو-٢٠٢٦)
+18. [Security Notes](#security-notes)
+19. [Known Limitations](#known-limitations)
+20. [Future Improvements](#future-improvements)
+21. [Troubleshooting](#troubleshooting)
+22. [Development Guidelines](#development-guidelines)
 
 ---
 
@@ -77,7 +79,117 @@ consumables, and inter-branch internal orders.
 
 ---
 
-## Project Description & Purpose
+## Currency Architecture (July 2026 — reporting currency reform)
+
+بجلسة منفصلة (بعد جلسة الترحيل البنيوي أعلاه) اكتشفنا وصلحنا Anti-pattern
+حقيقي: كل عمود مالي بقاعدة بيانات كل tenant كان مسمّى صراحة بلاحقة
+`_usd` — يعني اسم العمود نفسه كان مقفول على افتراض "العملة المرجعية
+دايماً دولار"، رغم إنه المفروض تكون قابلة للاختيار من كل شركة عميلة.
+
+### النموذج الصحيح المعتمد الآن (مطابق لـ IAS 21)
+
+نظام العملات صار بمستويين منفصلين تماماً، كل وحد مجمّد بلحظة إنشائه ولا
+يتغيّر بعدها كإعداد روتيني:
+
+| المستوى | الاسم المحاسبي | وين يُختار | وين يُخزَّن | يشمل |
+|---|---|---|---|---|
+| **الشركة كاملة** | Reporting/Group Currency (عملة التقارير) | وقت تسجيل الشركة (tenant جديد) | `fatorize_master.tenants.reporting_currency_id` (FK) | كل فروع نفس الشركة — موحّدة إجبارياً بينهم، عشان مقارنة التكلفة بين الفروع تصير ممكنة |
+| **كل فرع لحاله** | Functional Currency (العملة الوظيفية) | وقت إنشاء الفرع | `branches.base_currency` (varchar(3)، داخل قاعدة الـ tenant نفسها) | فرع واحد بس — منفصل تماماً عن عملة التقارير، ما بينلمس بهالإصلاح |
+
+**الفرق الجوهري بينهم:** عملة التقارير هي "لغة المقارنة" المشتركة بين
+كل فروع الشركة (مهما كانت عملتها الوظيفية الفعلية)؛ العملة الوظيفية هي
+العملة يلي الفرع فعلياً بيشتغل/بيسعّر فيها يومياً. **الاثنين مجمّدان بعد
+أول تحديد** — تغييرهم لاحقاً كإعداد عادي غير مسموح (فرق عن سعر الصرف
+اليومي، يلي بيتغيّر بشكل طبيعي عبر جدول `currencies`/`exchange_rates_{TS}`).
+
+### قاعدة `fatorize_master` — التنفيذ
+
+- جدول جديد `currencies` (مصغّر، **بدون أسعار صرف** — مجرد قاموس هوية
+  عملة: `id`, `code`, `name`, `symbol`)، معبّى بـ٦ عملات شائعة بالمنطقة
+- عمود `tenants.reporting_currency_id` — FK حقيقي لهالجدول، `NOT NULL`
+- تينانت Bayhas الحالي اتعبّى تلقائياً على `USD` (مطابق للافتراض الضمني
+  الموجود سابقاً بكل تسميات `_usd`)
+- **Trigger فعلي بقاعدة البيانات** (`trg_tenants_freeze_reporting_currency`)
+  بيمنع أي `UPDATE` يغيّر القيمة بعد أول تحديد — تجميد حقيقي بمستوى الـDB
+  نفسها، مو بس اتفاق ضمني بالتطبيق
+- السكريبت: `09_master_reporting_currency.sql`
+
+### قاعدة كل tenant — إعادة تسمية الأعمدة
+
+**الصيغة المعتمدة:** `_usd` → `_base` (مثال: `unit_price_usd` →
+`unit_price_base`). **٢٣ عمود بـ١٥ جدول** بقاعدة `bayhas_local` (السكريبت:
+`10_rename_usd_to_base_columns.sql`، **✅ منفّذ ومؤكّد من المستخدم**):
+
+`consumable_issue_items_ret`, `consumable_items_ret`,
+`consumable_movements_ret`, `consumable_purchases_ret` (٦ أعمدة),
+`consumable_purchase_items_ret`, `consumable_stock_ret`, `expenses_ret`,
+`internal_order_items`, `inventory_movements_ret`, `payroll_ret` (الجدول
+الميت القديم، غير `hr_payroll_ret`), `production_entries_ret`,
+`production_operations_ret`, `raw_material_stock_ret`, `receipts_ret`,
+`sales_invoice_items_ret`.
+
+**تعليقات مضلّلة إضافية اتصلحت** (بدون رينيم — أسماء الأعمدة كانت أصلاً
+عامة، بس التوصيف مكتوب "USD" صراحة): `branches.base_currency`،
+`currencies.exchange_rate`/`is_base`، `inventory_movement_details_ret.cost_price`،
+`receipt_invoices_ret.allocated_amount`، `sales_invoices_ret.cost_total`
++ تعليق الجدول نفسه، `sales_invoice_items_ret.unit_price`.
+
+### ملفات PHP — الجرد الكامل والإصلاحات (١٦ ملف، ✅ كلهم منتهين)
+
+بعد رينيم الأعمدة، كل ملف PHP بيستعلم/يكتب لهالأعمدة كان لازم يتفحص
+ويتحدّث. الجرد تم عبر VS Code "Find in Files" عن `_usd` بكامل المشروع:
+
+| الملف | شو صار |
+|---|---|
+| `config/create_branch_tables.php` | ✅ (من جلسة الترحيل البنيوي — القالب المرجعي) |
+| `api/confirm_purchase_invoice.php` | ✅ رينيم + **٣ إصلاحات hardcoded `'USD'`** بقيود الدفعة المقدمة/الشحن/الدفع → عملة الفرع الفعلية أو عملة المعاملة الحقيقية |
+| `api/confirm_sale_invoice.php` | ✅ رينيم + hardcoded `'USD'` بقيد COGS. ⚠ تضارب منطقي بحساب `original_amount` بقيد ذمم العملاء — **موثّق بالكود، لم يُصلح** (نفس فئة تضارب اتجاه سعر الصرف الموثّق سابقاً، يحتاج قرار محاسبي منفصل) |
+| `api/payroll_api.php` | ✅ رينيم + **🔴 بق حرج**: استعلام `base_currency_id` (عمود غير موجود بـ`branches`، الاسم الحقيقي `base_currency` نصي) كان يفشل بخطأ SQL — **حساب وصرف الرواتب كانا معطّلين بالكامل**. أُصلح بـJOIN حقيقي لجدول `currencies` |
+| `accounting/receipts.php` | ✅ رينيم + **🔴 بق `_alp` منفصل تماماً** (`account_charts_alp` حرفياً بدالة `getSettingAccount()` — بقايا ترحيل قديمة نجت من كل الفحوصات السابقة لأنها جوا نص SQL مش مسار) — كانت **كل عملية سند قبض فيها قيد محاسبي تفشل بالكامل** |
+| `accounting/expenses.php` | ✅ رينيم بحت — صفر بق |
+| `inventory/consumable_issues.php` | ✅ رينيم + hardcoded `'USD'` بقيد الصرف + فلترة مستودعات بالنوع + `$currentModule` كانت بمفتاح غلط |
+| `inventory/consumable_purchases.php` (الأكبر، ٢١٤٣ سطر) | ✅ ١١ عمود + ١١ متغير PHP + `$currentModule` **غير معرّفة إطلاقاً** + hardcoded `'USD'` بـ٥ أماكن (ترحيل + إلغاء عكسي) |
+| `inventory/consumables.php` | ✅ رينيم بحت (`avg_cost_usd`) |
+| `inventory/internal_orders.php` | ✅ رينيم + **🔴 بقّان حرجان**: `final_amount_usd`/`unit_price_usd` بجدولي `purchases_ret`/`purchase_items_ret` — **أسماء غير موجودة إطلاقاً** (الاسم الحقيقي `_base_currency`، نفس فئة بق `confirm_purchase_invoice.php` بالضبط) — **تحويل أي طلب داخلي لفاتورة شراء كان يفشل بالكامل** |
+| `inventory/movements.php` | ✅ رينيم أعمدة حقيقية (`consumable_movements_ret`) + أسماء مستعارة PHP |
+| `sales/customers.php`, `sales/sales_index.php` | ✅ أسماء مستعارة PHP فقط (`total_amount`/`balance_amount` أصلاً عامة) |
+| `sales/sales_invoice_new.php` | ✅ عمود حقيقي وحيد (`cost_price_usd`) |
+| `purchases/invoice_new.php`, `purchases/invoice_edit.php` | ✅ **لا بق** — السيرفر كان أصلاً يستخدم `unit_price_base_currency` الصحيح؛ الـ`_usd` كانت بس تسمية متغيرات JS بالمتصفح |
+
+### اكتشاف مهم: نمطين مختلفين من "الاسم الصحيح" بنفس المشروع
+
+بعض الجداول (`purchases_ret.final_amount_base_currency`,
+`purchase_items_ret.unit_price_base_currency`) **كانت أصلاً مسمّاة صح
+من البداية** (`_base_currency`، مش `_usd`) — المشكلة فيها كانت كود بأماكن
+تانية (`confirm_purchase_invoice.php`, `internal_orders.php`) بيستخدم
+اسم **مختلف وغير موجود** (`_usd`) بدل الاسم الحقيقي، فيفشل الاستعلام
+بصمت أو بخطأ SQL. **هاي بقّات كتابة/قراءة لعمود غلط، مش تسميات تحتاج
+توحيد** — كانت موجودة *قبل* إصلاح اليوم، ومكتشفة بالصدفة أثناء الفحص.
+
+### 🟢 مؤجّل بقرار واعٍ (مو نسيان)
+
+- **مفتاح `'cash_usd'`** بجدول `invoice_account_settings_{TS}` (يستخدمه
+  `payroll_api.php` و`receipts.php`) — **تأكّد من المستخدم إنه مقصود
+  فعلاً**: يمثّل حساب صندوق نقدي مخصص للدولار تحديداً بشجرة الحسابات
+  (الشركة ممكن يكون عندها أكتر من صندوق بعملات مختلفة) — **لن يُغيَّر**.
+- **توحيد رمز العملة بالواجهة** — `$` مكتوبة حرفياً بعشرات الأماكن
+  (`dashboard.php` وغيره)، وفحوصات JS من نوع `=== 'USD'` (مثل
+  `onExpCurrChange()` بـ`expenses.php`، `isUSD` بعدة ملفات) — طبقة واجهة
+  متكاملة تستاهل جلسة تصليح مخصصة موحّدة، مش تصليح متجزّئ ملف-ملف.
+- **فجوة سعر صرف الشحن** بـ`confirm_purchase_invoice.php` — لا يوجد حقل
+  لسعر صرف مستقل لتكلفة الشحن؛ لو أُدخلت بعملة غير عملة الفرع، ما في
+  تحويل حقيقي (rate=1 مفترض). ميزة مستقبلية، مش إصلاح تسمية.
+- **تضارب اتجاه سعر الصرف** بقيد ذمم العملاء (`confirm_sale_invoice.php`)
+  — موثّق بالكود، ينتظر قرار محاسبي منفصل.
+
+### ⚠ لسا مفتوح
+
+**جرد `_alp` شامل عبر كل المشروع** (`grep -rn "_alp"`، مش `/bayhas/`
+ولا `_usd`) — بما إنه اكتُشفت وحدة حقيقية بـ`receipts.php` كانت خفية
+عن كل الفحوصات السابقة (جوا نص SQL، مش مسار ملف)، فيه احتمال حقيقي
+لوجود نظائر بملفات تانية ما فُحصت بعد لهالغرض تحديداً.
+
+
 
 **FATORIZE** هو ERP بُني أصلاً لشركة **بايهاس** (تصنيع/بيع ألبسة)، وعم
 يتحوّل حالياً لمنتج **SaaS متعدد المستأجرين (multi-tenant)** يُباع لعدة
@@ -322,12 +434,19 @@ $table = "products_{$TS}";
 محاسبة، مستهلكات، HR، تصنيع، إشعارات) — القائمة الكاملة موجودة بملف
 `01_migrate_alp_to_ret.sql` كمرجع دقيق لكل اسم جدول قبل/بعد.
 
-> **الجداول القديمة الميتة** (`employees_alp`→`employees_ret`,
-> `attendance_alp`→`attendance_ret`, `payroll_alp`→`payroll_ret`,
-> `consumables_alp`→`consumables_ret`, `consumable_entries_alp`→
-> `consumable_entries_ret`) **اترحّلت هي كمان** لنفس لاحقة `_ret` رغم
-> إنها ميتة (الكود الفعلي بيستخدم النسخ `hr_*`)، حفاظاً على الاتساق —
-> بس لسا ميتة وظيفياً، وما زالت مرشّحة للحذف لاحقاً.
+**+ ٣ جداول جديدة (إنشاء فعلي، مش رينيم)** أُضيفت بجلسة توسعة قسم
+المستهلكات: `consumable_categories_ret`, `consumable_units_ret`,
+`consumable_item_packagings_ret` — راجع [قسم المستهلكات والمصاريف](#جلسة-توسعة-قسم-المستهلكات-والمصاريف-الكاملة-يوليو-٢٠٢٦)
+للتفاصيل الكاملة.
+
+> **✅ تحديث مؤكّد (كان "ميت بس موجود"، تبيّن أنه غير موجود إطلاقاً):**
+> فحص مباشر لملف تصدير هيكل قاعدة البيانات كاملاً (`bayhas_local_full_structure.sql`)
+> أكّد إنه `consumables_ret`/`consumable_entries_ret` **غير موجودين
+> بالسكيما الحالية إطلاقاً** — إما اتحذفوا مسبقاً أو أصلاً ما اترحّلوا
+> لهالنسخة من قاعدة البيانات. البند "جدول ميت مرشّح للحذف" بـ
+> [Known Limitations](#known-limitations)/[Future Improvements](#future-improvements)
+> **مقفول لهالجدولين تحديداً** — الباقي (`employees_ret`, `attendance_ret`,
+> `payroll_ret` القديم) لسا يحتاج تأكيد مماثل.
 
 ---
 
@@ -416,6 +535,145 @@ $table = "products_{$TS}";
 
 ---
 
+### جلسة توسعة قسم المستهلكات والمصاريف الكاملة (يوليو ٢٠٢٦)
+
+جلسة منفصلة، مركّزة بالكامل على مراجعة/توسعة الملفين
+`inventory/consumables.php`, `inventory/consumable_purchases.php`,
+`inventory/consumable_issues.php` — أعمق بكتير من مجرد رينيم. **٣ جداول
+جديدة و٤ أعمدة جديدة** انضافوا لأول مرة (مو رينيم، إنشاء فعلي).
+
+#### جداول وأعمدة جديدة (إنشاء فعلي، مش رينيم)
+
+| الجدول/العمود | الغرض |
+|---|---|
+| `consumable_categories_ret` (جدول جديد) | فئات المستهلكات — استبدلت enum ثابت (`utility/supplies/food/maintenance/other`) بجدول حقيقي قابل للتوسعة من الواجهة |
+| `consumable_units_ret` (جدول جديد) | وحدات القياس الأساسية (غرام، كيلوغرام...) — استبدلت عمود نصي حر |
+| `consumable_item_packagings_ret` (جدول جديد) | عبوات شراء خاصة **بكل مادة على حدة** (كرتونة سكر=١٠٠٠غ، عبوة شاي=٥٠٠غ) — معامل التحويل مربوط بـ`item_id`، **مش عالمي**، تفادياً لتعارض بين مواد مختلفة بنفس اسم العبوة وعدد مختلف |
+| `consumable_items_ret.category_id`, `.unit_id` (أعمدة جديدة) | FK للجدولين أعلاه — العمودان النصيان القديمان (`category`, `unit`) بقوا كأرشيف، الكود الجديد ما بيقرأ/يكتب فيهم |
+| `consumable_purchase_items_ret.packaging_id`, `.packaging_qty` (أعمدة جديدة) | تسجيل العبوة المُختارة وقت الشراء (للعرض/التدقيق) — عمود `quantity` الأصلي يضل دايماً بوحدة المخزون الأساسية، صفر تغيير على منطق التأكيد/المتوسط المرجّح |
+
+#### `inventory/consumables.php` (الكتالوج)
+
+- **فحص تكرار مبسّط:** الاسم وحده هو معيار الهوية (مو الاسم+الوحدة) —
+  اشتراك وحدة قياس بين مواد مختلفة طبيعي وما إله علاقة بالتكرار؛ السعر
+  ليس معياراً للهوية أبداً (نفس فلسفة `avg_cost_base`).
+- **🔴 بق حقيقي وأُصلح:** إحياء عبوة/فئة **معطّلة (soft-deleted)** كان
+  يفشل برسالة "موجودة مسبقاً" بدل إعادة تفعيلها — لأنه الحذف "ناعم"
+  (`is_active=0`) بينما القيد الفريد بقاعدة البيانات (`UNIQUE(item_id,
+  name)`) بيضل يحجز الاسم حتى لو معطّل. الفحص هلق بيتحقق من الحالة أولاً:
+  لو موجود ومعطّل → يُحيا (`UPDATE is_active=1`) بدل رفض أو محاولة `INSERT`
+  جديد (كانت رح تنكسر عالقيد الفريد أصلاً).
+- **🔴 بق حقيقي وأُصلح:** حذف مادة كان يفشل بخطأ قيد أجنبي
+  (`Cannot delete or update a parent row`) من جدول العبوات الجديد — لأنه
+  فحص "منع الحذف" الموجود كان بيتحقق من الحركات بس، مش من العبوات. أُضيف
+  تنظيف عبوات المادة تلقائياً (بيانات تعريف بس، مش سجل تاريخي) قبل الحذف،
+  مع إبقاء منع الحذف لو للمادة حركات حقيقية.
+- **بق عرض (مش بق بيانات):** تقريب `estimated_cost` لخانتين عشريتين بس
+  (بالقائمة، مودال التفاصيل) كان يخفي قيم صغيرة حقيقية (`0.001` تبان
+  `0.00`) رغم إنها محفوظة صح بقاعدة البيانات. وُسّع العرض لأربع خانات.
+- زر "حذف" الموجود بالجدول أُبقي (بعكس صفحة المنتجات يلي فيها تعطيل بس)
+  — بناءً على قرار صريح، بشرط إصلاح البق أعلاه أولاً.
+
+#### `inventory/consumable_purchases.php`
+
+- **🔴 مفتاح صلاحية غلط:** كان `inventory.consumables` (نفس مفتاح صفحة
+  الكتالوج) بدل `purchases.consumable_purchases` الخاص فيها — تعارض
+  صلاحيات حقيقي (مستخدم يشوف الرابط بالقائمة بس يُرفض عند الدخول، أو
+  العكس). ✅ مُصلح.
+- **🔴 قيد GL كان غائباً بالكامل عند التأكيد** — الفاتورة كانت تتأكد
+  وتحدّث المخزون بنجاح بدون أي أثر بدفتر الأستاذ. ✅ أُضيف قيد كامل عند
+  التأكيد (مدين `consumable_inventory` / دائن `consumable_supplier`)،
+  وقيد **عكسي** (مش حذف) عند الإلغاء — يحافظ على السجل التاريخي كاملاً.
+- كل عمليات التأكيد/الإلغاء صارت ملفوفة بـ `beginTransaction`/`commit`
+  (ما كانت أصلاً).
+- **نظام العبوات/التحويل التلقائي:** بند الفاتورة هلق فيه اختيار وحدة/عبوة
+  لكل مادة، والسعر المقترح يتضاعف بمعامل العبوة تلقائياً (مثال: اختيار
+  "علبة شاي=٥٠٠غ" بيحوّل السعر المقترح تلقائياً من سعر الغرام لسعر العلبة
+  الكاملة) — مع تلميح حي يوضح سعر الوحدة الأساسية المكافئ، تفادياً للبس
+  بين "سعر العبوة" و"سعر الوحدة".
+- **ميزة تعديل فاتورة مسودة** (كانت غير موجودة إطلاقاً — بس إنشاء/عرض/
+  تأكيد/إلغاء). التعديل مقصور على حالة `draft` فقط؛ يمسح البنود/الحركات
+  المعلّقة القديمة (`is_posted=0`، آمنة الحذف) ويعيد بناءها بمعاملة واحدة.
+  دالة `savePurchaseRows()` مشتركة بين الإنشاء والتعديل (لا تكرار منطق).
+- **🔴 بق حقيقي وأُصلح:** حذف سطر من نص القائمة كان يفقد اختيار المادة
+  والوحدة/العبوة **المرئي** لكل الأسطر الباقية (البيانات بالخلفية كانت
+  محفوظة صح، بس واجهة إعادة البناء ما كانت ترجع تعرضهم).
+  ~~- كذلك تفاعل سلبي: اختيار عبوة بعد اختيار مادة كان لا يعيد حساب السعر
+  المقترح بمعامل العبوة الجديد (يضل سعر الوحدة الأساسية بينما الكمية
+  المُدخلة صارت بوحدة العبوة) — استُخرجت دالة `applyReferencePrice()`
+  موحّدة تُستدعى بالحالتين.~~
+- **قراءة سعر صرف مؤرّخ** — تفضيل سعر مسجّل بجدول `exchange_rates_{TS}`
+  (بتاريخ ≤ تاريخ الفاتورة) على سعر اليوم الافتراضي من `currencies`، مع
+  fallback تلقائي لو ما في سعر مسجّل. **جهة القراءة بس مبنية — جهة
+  الكتابة (تسجيل سعر جديد عند إدخاله يدوياً) لسا غير مبنية بأي صفحة،
+  مؤجّلة لمحادثة محاسبة مخصصة** (مقترح: دالة مشتركة
+  `recordExchangeRateIfNeeded()` بدل تكرارها بكل صفحة).
+- **آلية الدفع أُزيلت بالكامل** من مودال الإنشاء (حقل "المبلغ المدفوع")
+  — بمبدأ فصل الالتزام عن التسوية (AP Subledger، IAS 21): تأكيد الفاتورة
+  = التزام بس، الدفع الفعلي حدث مستقل لاحق (سند دفع منفصل، غير مبني بعد).
+  كل فاتورة جديدة تُحفظ دايماً كـ`draft` بدون مبلغ مدفوع من الأساس؛
+  "طريقة الدفع" ضلّت كحقل معلوماتي بس.
+- **إعادة تصميم UI/UX كاملة:** مودال أوسع (`modal-xl`)، هيدر أخضر غامق
+  (دلالة "دخول للمخزون")، كل حقل بعنوانه الثابت (بدل الاعتماد على
+  placeholder يختفي)، عرض مرن بدل أعمدة ثابتة ضيقة كانت تقص النص، عناوين
+  "الكمية"/"السعر" ديناميكية تعرض اسم الوحدة المختارة فعلياً، سطر جديد
+  يظهر فوق (جنب الزر) مع تركيز تلقائي وتظليل مؤقت بدل الظهور بالأسفل.
+- **توسيع عمود `exchange_rate`** بجدول الفاتورة — كان `DECIMAL(10,6)`
+  (٤ خانات بس قبل الفاصلة، أقصى قيمة ٩٩٩٩) وما كان يستوعب عملات سعر
+  صرفها بالآلاف (الليرة السورية ~١٢٥٠٠) → `DECIMAL(14,6)`. نفس الفحص
+  الشامل كشف **٣ جداول تانية بنفس المشكلة بالضبط** (`exchange_rates_ret.rate`,
+  `consumable_entries_ret.exchange_rate`, `expenses_ret.exchange_rate`,
+  `payroll_ret.exchange_rate`) — كلهم وُسّعوا لنفس الدقة.
+
+#### `inventory/consumable_issues.php`
+
+- **🔴 مفتاح صلاحية غلط:** نفس فئة بق المشتريات بالضبط (كان
+  `inventory.consumables` بدل `expenses.consumable_issues`). ✅ مُصلح.
+- **القيد المحاسبي كان موجود وسليم فعلياً من الأساس** (بعكس المشتريات) —
+  تحقق مباشر ضد بيانات حقيقية (`invoice_account_settings_ret`) أكّد إنه
+  `consumable_expense`/`consumable_inventory` مضبوطين وشغالين صح.
+- **🔴 بق حرج وأُصلح:** حذف سطر من نص القائمة بمودال الإنشاء كان **يخرب
+  بيانات الأسطر التالية** (مش بس يفقد العرض المرئي متل المشتريات) — رقم
+  الـ`index` كان مكتوب حرفياً جوا نص الـ HTML وقت الإنشاء (`onchange`
+  inline)، فحذف سطر من الوسط كان يخلّي كل الأسطر يلي بعده تكتب كميتها/
+  ملاحظاتها بمكان غلط تماماً بالمصفوفة عند الحفظ. أُعيد بناء الربط بالكامل
+  عبر مرجع كائن مباشر (`addEventListener` + `lineData` reference) بدل رقم
+  ثابت.
+- **🔴 بق حرج آخر وأُصلح:** زر "أمر صرف جديد" على الأغلب **كان لا يفتح
+  المودال إطلاقاً من أول استخدام** — عنصر placeholder ("لا توجد مواد
+  بعد") كان جوا نفس الحاوية يلي بتنمسح بـ`innerHTML=''`، وبعدها الكود
+  يحاول يوصله بـ`getElementById` من جديد (برجع `null`، والعملية التالية
+  عليه ترمي خطأ يوقف تنفيذ باقي الدالة، ومنها فتح المودال نفسه). أُصلح
+  بتخزين مرجع العنصر مرة وحدة بمتغير بدل إعادة البحث عنه بعد ما ينمحى.
+- **إلغاء أمر صرف مؤكد ما كان بيعكس القيد المحاسبي** — نفس فجوة المشتريات
+  بالضبط قبل إصلاحها. ✅ أُضيف قيد عكسي (مش حذف) + لُفّت العملية بمعاملة.
+- **ميزة تعديل مسودة** (كانت غير موجودة) — بنفس نمط المشتريات (دالة
+  `saveIssueRows()` مشتركة، مسموح للمسودات فقط).
+- **رمز "$" ثابت بكل الصفحة** (إحصائيات، قائمة الأوامر، مودال العرض) —
+  ما كان يعكس عملة الفرع الفعلية رغم إنه الملف أصلاً بيقرأ
+  `branches.base_currency` ديناميكياً بمكان تاني. أُصلح ليعرض رمز العملة
+  الحقيقي بكل الأماكن.
+
+#### الشريط الجانبي (`includes/sidebar.php`)
+
+نُقل "مشتريات المستهلكات" من قسم "المشتريات" لقسم "المصاريف والمستهلكات"
+(`modules.parent_key` بقاعدة البيانات) — قرار تنظيمي بحت، المفتاح
+(`purchases.consumable_purchases`) ومسار الملف الفعلي بقوا بدون تغيير.
+
+#### قرارات معمارية مؤجّلة (نوقشت، غير منفّذة بعد — لمحادثة محاسبة/معمارية مخصصة)
+
+- **آلية الدفع الفعلية** (سند دفع منفصل: مدين ذمم موردين/دائن صندوق أو
+  بنك) — حالياً "المبلغ المدفوع" مجرد حقل عرض بلا أثر محاسبي حقيقي.
+- **جهة الكتابة لأسعار الصرف المؤرخة** (`exchange_rates_{TS}`) — القراءة
+  بس مبنية بالمشتريات (راجع أعلاه).
+- **تجميد `branches.base_currency`** (العملة الوظيفية لكل فرع، IAS 21)
+  بقيد حقيقي بقاعدة البيانات — **نقاش مبدئي بس، لسا غير منفّذ بالكود**؛
+  لا يلتبس مع تجميد `tenants.reporting_currency_id` (عملة التقارير على
+  مستوى الشركة كاملة) يلي **هو المنفّذ فعلاً** بـ`09_master_reporting_currency.sql`
+  (راجع [Currency Architecture](#currency-architecture-july-2026--reporting-currency-reform)) — الاثنان مفهومان منفصلان تماماً.
+
+---
+
 ## Security Notes
 
 | Severity | Issue | الحالة بعد الترحيل |
@@ -440,8 +698,10 @@ $table = "products_{$TS}";
    `'alp'` القديمة) بدل التحقق من `branch_type==='retail'` ديناميكياً —
    لو انضاف فرع بيع تاني بالمستقبل، لازم هالفحص يتعمم أولاً.
 3. **الجداول القديمة الميتة** (`employees_ret`, `attendance_ret`,
-   `payroll_ret`, `consumables_ret`, `consumable_entries_ret`) لسا
-   موجودة (اترحّلت اسمياً بس بقيت ميتة وظيفياً).
+   `payroll_ret` القديم) لسا موجودة (اترحّلت اسمياً بس بقيت ميتة وظيفياً)
+   — **باستثناء `consumables_ret`/`consumable_entries_ret`، يلي تأكّد
+   بفحص مباشر لهيكل قاعدة البيانات إنهم غير موجودين إطلاقاً** (راجع
+   [Database Overview](#database-overview)).
 4. **نسخة Hostinger (الإنتاج) لسا بالكامل على البنية القديمة** — `bayhas/`،
    `aleppo/`، `_alp`، بدون `BASE_PATH`، بدون `tenant_resolver.php`. أي
    قرار نشر فعلي لازم ينتظر ترحيل كامل مطابق لنسخة اللوكل أولاً.
@@ -469,6 +729,13 @@ $table = "products_{$TS}";
 - [ ] إضافة CSRF tokens
 - [ ] **🆕 ميزة نقل مستهلكات بين الفروع** — بدل `consumable_sales_ret` (بلا UI ولا حاجة فعلية). نفس نمط `internal_orders`/`internal_order_items`: جداول عامة جديدة `consumable_transfers`/`consumable_transfer_items` (`from_branch_id`→`to_branch_id`)، تُنتج عند التأكيد حركتين بجدولي `consumable_movements_{TS}` (فرع المصدر وفرع الوجهة) باستخدام قيمة `movement_type='transfer'` الموجودة أصلاً بالـ enum. غير مبنية بعد — مؤجّلة بقرار صريح لحين إنهاء فحص الأقسام الأساسية.
 - [ ] مراجعة `consumable_sale_items_ret`/`consumable_sales_ret` لاحقاً: حذف نهائي أم إبقاء schema-only كالجداول الميتة الأخرى (قرار غير مُتخذ بعد)
+- [ ] **🆕 جرد `_alp` شامل عبر كل المشروع** (`grep -rn "_alp"`) — اكتُشفت وحدة حقيقية بـ`receipts.php` كانت خفية عن كل الفحوصات السابقة (جوا نص SQL)، يحتمل وجود نظائر بملفات ما فُحصت بعد
+- [ ] **🆕 توحيد رمز العملة بالواجهة** — استبدال `$` الحرفية وفحوصات JS من نوع `=== 'USD'` بمنطق ديناميكي يعتمد عملة الفرع/التقارير الفعلية (راجع [Currency Architecture](#currency-architecture-july-2026--reporting-currency-reform))
+- [ ] **🆕 حقل سعر صرف مستقل لتكلفة الشحن** بفاتورة شراء المنتجات — حالياً بدون تحويل حقيقي لو أُدخلت بعملة مختلفة عن عملة الفرع
+- [ ] حسم تضارب اتجاه سعر الصرف بقيد ذمم العملاء (`confirm_sale_invoice.php`) — يحتاج جلسة محاسبة مخصصة
+- [ ] **🆕 آلية دفع فعلية لفواتير شراء المستهلكات** — سند دفع منفصل (مدين ذمم موردين/دائن صندوق أو بنك)، بدل حقل "مبلغ مدفوع" الحالي بلا أثر محاسبي (أُزيل من مودال الإنشاء بقرار صريح لحد ما تُبنى الآلية الحقيقية)
+- [ ] **🆕 جهة الكتابة لأسعار الصرف المؤرخة** (`exchange_rates_{TS}`) — القراءة بس مبنية بمشتريات المستهلكات؛ يُقترح دالة مشتركة `recordExchangeRateIfNeeded()` بدل تكرارها بكل صفحة فيها سعر صرف يدوي (قائمة الصفحات المرشحة موثقة بالجلسة)
+- [ ] **🆕 تجميد `branches.base_currency`** بقيد حقيقي بقاعدة البيانات (IAS 21 functional currency) — نقاش مبدئي بس، لسا غير منفّذ (منفصل تماماً عن تجميد عملة التقارير على مستوى الشركة، يلي هو منفّذ فعلاً)
 
 ---
 
@@ -506,7 +773,10 @@ header('Location: ' . BASE_PATH . '/select_account.php');
 
 ---
 
-*هالنسخة من التوثيق محدّثة حتى نهاية جلسة ترحيل التسمية (يوليو ٢٠٢٦).
-أي قسم غير مذكور تفصيلياً هون (Features الكاملة، الـ ERD، الجداول
-التفصيلية بالأعمدة) لم يتغيّر عن التوثيق الأصلي ولسا صالح كما هو —
-هالنسخة بتركّز على توثيق التغييرات البنيوية فقط لتفادي التكرار.*
+*هالنسخة من التوثيق محدّثة حتى نهاية جلسة توسعة قسم المستهلكات
+والمصاريف الكاملة (يوليو ٢٠٢٦) — راجع [جلسة توسعة قسم المستهلكات](#جلسة-توسعة-قسم-المستهلكات-والمصاريف-الكاملة-يوليو-٢٠٢٦)
+لتفاصيل هالجلسة، و[Currency Architecture](#currency-architecture-july-2026--reporting-currency-reform)
+لجلسة إصلاح العملات المرجعية، و[Migration Log](#migration-log-july-2026--generic-branchtenant-naming)
+لجلسة الترحيل البنيوي السابقة لهم كلهم. أي قسم غير مذكور تفصيلياً هون
+(Features الكاملة، الـ ERD، الجداول التفصيلية بالأعمدة) لم يتغيّر عن
+التوثيق الأصلي ولسا صالح كما هو.*

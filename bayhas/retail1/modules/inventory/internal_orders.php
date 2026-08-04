@@ -1,5 +1,6 @@
 <?php
-ini_set('display_errors', 1);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
 error_reporting(E_ALL);
 /**
  * internal_orders.php — الطلبات الداخلية بين الفروع
@@ -12,8 +13,108 @@ require_once __DIR__ . '/../../../config/auth.php';
 $pdo = getConnection();
 checkLogin($pdo);
 requirePermission('inventory.internal_orders', 'view');
+$currentModule = 'inventory.internal_orders'; // ✅ كانت غير معرّفة إطلاقاً
+$branchName = $_SESSION['branch_name'] ?? 'الفرع'; // ⬅ نُقلت لقبل وضع الصيانة، التوبار محتاجها
 
-$branchName = $_SESSION['branch_name'] ?? 'الفرع';
+// ─────────────────────────────────────────────────────────────
+// ⚠ الصفحة موقوفة مؤقتاً بقرار صريح — لسا ما بنينا فروع التصنيع،
+// فالربط (الوظيفة الأساسية لهذه الصفحة) مالوش معنى فعلي هلق.
+// ولا سطر من الكود تحت انحذف أو انلمس — بس هالخروج المبكر بيمنع
+// تنفيذه. لإعادة تفعيل الصفحة لاحقاً: احذف هذا البلوك بالكامل (من
+// "if (true)" لحد "// ── نهاية وضع الصيانة") ولا شي تاني تلزم تعديله.
+//
+// ⚠ بعكس النسخة الأولى من وضع الصيانة (صفحة معزولة بلا تنقّل)، هالنسخة
+// بتعرض نفس هيكل الصفحة الكامل (سايدبار + توبار + شريط تبويبات القسم)
+// تماماً متل صفحة "أوامر الشراء" الحقيقية بقسم المشتريات/المبيعات —
+// بس منطقة المحتوى الأساسية بس يلي تبدّلت برسالة الصيانة.
+// ─────────────────────────────────────────────────────────────
+if (true) {
+    ?>
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>الطلبات الداخلية — <?= htmlspecialchars($branchName) ?></title>
+        <link rel="icon" href="<?= BASE_PATH ?>/assets/images/logo.png">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
+    </head>
+
+    <body>
+        <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
+        <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+
+        <header class="topbar">
+            <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
+            <span class="tb-title"><i class="bi bi-signpost-split me-1 text-primary"></i>الطلبات الداخلية</span>
+            <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
+            <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.8rem;color:#94a3b8">
+                <span>المخزون</span><i class="bi bi-chevron-left mx-1" style="font-size:.7rem"></i>
+                <span class="text-primary">الطلبات الداخلية</span>
+            </nav>
+        </header>
+
+        <main class="main-content">
+            <div class="content-body">
+
+                <!-- الشريط الموحّد لقسم المنتجات/المخزون — نفس الأربع صفحات
+                     الأخرى بالضبط، مع "الطلبات الداخلية" كتبويب نشط هون -->
+                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                    <li class="nav-item"><a class="nav-link fw-600" href="products.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a>
+                    </li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=products"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-building me-1"></i>المستودعات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
+                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
+                                class="bi bi-signpost-split me-1"></i>الطلبات الداخلية</a></li>
+                </ul>
+
+                <div class="text-center py-5">
+                    <i class="bi bi-cone-striped" style="font-size:3rem;color:#f59e0b"></i>
+                    <h5 class="mt-3 fw-bold">هذا القسم تحت الإعداد مؤقتاً</h5>
+                    <p class="text-muted small mx-auto" style="max-width:420px">
+                        موقوف عمداً لحين إكمال بناء فروع التصنيع وربطها بفروع
+                        البيع. لا بيانات ولا كود انحذف — رح يرجع يشتغل تلقائياً
+                        بعد ما نكمل هالمرحلة.
+                    </p>
+                </div>
+
+            </div>
+        </main>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+        <script>
+            const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
+            function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+            function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+            window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
+            document.querySelectorAll('.sb-group').forEach(g => {
+                if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');
+            });
+            function toggleGroup(g) {
+                const o = g.classList.contains('open');
+                document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
+                g.classList.toggle('open', !o);
+                localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());
+            }
+        </script>
+    </body>
+
+    </html>
+    <?php
+    exit;
+}
+// ── نهاية وضع الصيانة ──────────────────────────────────────────
+
 $branchId = (int) ($_SESSION['branch_id'] ?? 0);
 $TS = $_SESSION['table_suffix'];
 
@@ -78,7 +179,7 @@ try {
         `quantity_requested` decimal(10,2) NOT NULL,
         `quantity_approved` decimal(10,2) DEFAULT NULL,
         `unit_price` decimal(10,4) DEFAULT NULL,
-        `unit_price_usd` decimal(10,4) DEFAULT NULL,
+        `unit_price_base` decimal(10,4) DEFAULT NULL,
         `total_price` decimal(12,2) DEFAULT NULL,
         `notes` text DEFAULT NULL,
         `status` enum('pending','approved','partially_approved','rejected','unavailable') NOT NULL DEFAULT 'pending',
@@ -192,7 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $pdo->prepare("INSERT INTO internal_order_items
                     (order_id,product_id,variant_id,product_name,model_number,
                      size,color,barcode,quantity_requested,unit_price,
-                     unit_price_usd,total_price)
+                     unit_price_base,total_price)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
                     ->execute([
                         $orderId,
@@ -287,8 +388,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // أصلاً (تحديث المخزون + ترحيل القيد معاً) بدل تكرار/تقليد
             // هذا المنطق المعقّد هنا من جديد بشكل منفصل وعرضة للتضارب.
             $purch_num = 'INV-' . $order['order_number'];
+            // ⚠ بق حرج مُصلح: كان الكود يكتب لعمود final_amount_usd —
+            // غير موجود إطلاقاً بجدول purchases_{TS}. الاسم الحقيقي
+            // final_amount_base_currency (نفس البق المكتشف والمُصلح
+            // بملف confirm_purchase_invoice.php سابقاً). كان هذا الـINSERT
+            // يفشل بخطأ SQL في كل مرة يُحوَّل فيها طلب داخلي لفاتورة شراء.
             $pdo->prepare("INSERT INTO `{$TP_buy}`
-                (purchase_number,purchase_date,total_amount,final_amount,final_amount_usd,
+                (purchase_number,purchase_date,total_amount,final_amount,final_amount_base_currency,
                  currency,exchange_rate,status,notes,user_id)
                 VALUES (?,NOW(),?,?,?,?,?,'draft',?,?)")
                 ->execute([
@@ -304,22 +410,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $purchId = $pdo->lastInsertId();
 
             foreach ($approved_items as $item) {
+                // ⚠ بق حرج مُصلح: كان يكتب unit_price_usd — عمود غير
+                // موجود بجدول purchase_items_{TS} (الاسم الحقيقي
+                // unit_price_base_currency). $item['unit_price_base'] هون
+                // قادمة من internal_order_items (اسمها بعد الرينيم أعلاه).
+                // ⚠ إصلاح: purchase_items_ret ما فيها أعمدة product_name/
+                // model_number/size/color/barcode إطلاقاً (تأكّدنا عبر
+                // DESCRIBE فعلي) — فقط product_id/variant_id، والاسم/المقاس/
+                // اللون تُقرأ لاحقاً عبر JOIN حقيقي مع products/product_variants
+                // وقت العرض (مثلاً بصفحة movements.php)، مش مخزّنة هون كنص.
                 $pdo->prepare("INSERT INTO `{$TPI_buy}`
-                    (purchase_id,product_id,variant_id,product_name,model_number,
-                     size,color,barcode,quantity,unit_price,unit_price_usd,total_price)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+                    (purchase_id,product_id,variant_id,quantity,unit_price,unit_price_base_currency,total_price)
+                    VALUES (?,?,?,?,?,?,?)")
                     ->execute([
                         $purchId,
                         $item['product_id'],
                         $item['variant_id'],
-                        $item['product_name'],
-                        $item['model_number'],
-                        $item['size'],
-                        $item['color'],
-                        $item['barcode'],
                         $item['quantity_approved'],
                         $item['unit_price'],
-                        $item['unit_price_usd'],
+                        $item['unit_price_base'],
                         $item['total_price'],
                     ]);
             }
