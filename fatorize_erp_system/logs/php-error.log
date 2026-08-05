@@ -1,0 +1,31 @@
+[04-Aug-2026 10:05:42 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'cs.avg_cost_usd' in 'field list' in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\warehouse.php:169
+Stack trace:
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\warehouse.php(169): PDO->prepare('\n    SELECT w.*...')
+#1 {main}
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\warehouse.php on line 169
+[04-Aug-2026 18:49:53 Asia/Damascus] PHP Warning:  Undefined array key "purchase_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:49:53 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:49:53 Asia/Damascus] PHP Warning:  Undefined array key "purchase_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:49:53 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:11 Asia/Damascus] PHP Warning:  Undefined array key "purchase_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:11 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:11 Asia/Damascus] PHP Warning:  Undefined array key "purchase_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:11 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:43 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:43 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:43 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:51:43 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:55:53 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:55:53 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:55:53 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:55:53 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:58:02 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:58:02 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:58:02 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[04-Aug-2026 18:58:02 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:15 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:15 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:19 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:19 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:45 Asia/Damascus] PHP Warning:  Undefined array key "sale_number" in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746
+[05-Aug-2026 08:53:45 Asia/Damascus] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in D:\laragon\www\fatorize_erp_system\retail1\modules\sales\sales_index.php on line 746

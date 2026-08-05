@@ -1,0 +1,172 @@
+/* ================================================================
+   layout.css — Sidebar + Topbar + Main Content
+   ================================================================ */
+:root {
+    --sb-w:      260px;
+    --sb-bg:     #1e3a8a;
+    --sb-hover:  rgba(255,255,255,.1);
+    --sb-active: rgba(255,255,255,.18);
+    --tb-h:      60px;
+    --brand:     #1e3a8a;
+    --brand-l:   #3b82f6;
+}
+*{box-sizing:border-box}
+body{font-family:'Cairo',sans-serif;background:#f1f5f9;margin:0;min-height:100vh}
+
+/* ── Sidebar ── */
+.sidebar{
+    position:fixed;top:0;right:0;
+    width:var(--sb-w);height:100vh;
+    background:var(--sb-bg);
+    display:flex;flex-direction:column;
+    z-index:1040;overflow-y:auto;
+    scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.15) transparent;
+    transition:transform .28s ease;
+}
+.sb-brand{
+    display:flex;align-items:center;gap:.75rem;
+    padding:1.1rem 1.25rem;
+    border-bottom:1px solid rgba(255,255,255,.1);
+    flex-shrink:0;
+}
+.sb-brand img{height:28px;filter:brightness(0) invert(1)}
+.sb-name{color:#fff;font-size:.9rem;font-weight:700;line-height:1.2}
+.sb-branch{color:rgba(255,255,255,.5);font-size:.72rem}
+
+/* Nav */
+.sb-nav{flex:1;padding:.5rem 0;overflow-y:auto}
+
+/* القسم الأب */
+.sb-parent{
+    width:100%;display:flex;align-items:center;
+    justify-content:space-between;
+    background:none;border:none;cursor:pointer;
+    padding:.6rem 1.25rem .6rem 1rem;
+    color:rgba(255,255,255,.65);font-size:.85rem;
+    font-family:inherit;border-radius:0;
+    transition:background .18s,color .18s;
+}
+.sb-parent:hover{background:var(--sb-hover);color:#fff}
+.sb-parent-left{display:flex;align-items:center;gap:.65rem}
+.sb-parent-left .bi{font-size:1rem;width:18px;text-align:center;flex-shrink:0}
+.sb-chevron{font-size:.72rem;transition:transform .25s;opacity:.6}
+
+/* Accordion */
+.sb-children{
+    max-height:0;overflow:hidden;
+    transition:max-height .28s ease;
+}
+.sb-group.open .sb-children{max-height:400px}
+.sb-group.open .sb-chevron{transform:rotate(180deg)}
+.sb-group.open .sb-parent{color:#fff;background:rgba(255,255,255,.06)}
+
+/* الأبناء */
+.sb-child{
+    display:flex;align-items:center;gap:.6rem;
+    padding:.5rem 1.25rem .5rem 2.6rem;
+    color:rgba(255,255,255,.6);text-decoration:none;
+    font-size:.83rem;transition:background .15s,color .15s;
+    border-right:3px solid transparent;
+}
+.sb-child .bi{font-size:.9rem;width:16px;flex-shrink:0}
+.sb-child:hover{background:var(--sb-hover);color:#fff}
+.sb-child.active{
+    background:var(--sb-active);color:#fff;
+    border-right-color:#60a5fa;
+}
+
+/* Footer */
+.sb-footer{
+    flex-shrink:0;
+    border-top:1px solid rgba(255,255,255,.1);
+    padding:.9rem 1.25rem;
+}
+.sb-user{display:flex;align-items:center;gap:.65rem;margin-bottom:.6rem}
+.sb-avatar{
+    width:32px;height:32px;border-radius:50%;
+    background:rgba(255,255,255,.2);color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    font-size:.78rem;font-weight:600;flex-shrink:0;
+}
+.sb-user-name{color:rgba(255,255,255,.85);font-size:.82rem;font-weight:600;line-height:1.2}
+.sb-user-role{color:rgba(255,255,255,.4);font-size:.7rem}
+.sb-footer-links{display:flex;gap:1rem}
+.sb-footer-links a{
+    color:rgba(255,255,255,.45);text-decoration:none;
+    font-size:.75rem;display:flex;align-items:center;gap:.3rem;
+    transition:color .15s;
+}
+.sb-footer-links a:hover{color:rgba(255,255,255,.85)}
+.sb-footer-links a.logout:hover{color:#f87171}
+
+/* ── Topbar ── */
+.topbar{
+    position:fixed;top:0;left:0;right:var(--sb-w);
+    height:var(--tb-h);
+    background:#fff;border-bottom:1px solid #e2e8f0;
+    display:flex;align-items:center;padding:0 1.5rem;
+    gap:1rem;z-index:1030;
+}
+.tb-toggle{
+    display:none;background:none;border:none;
+    border-radius:8px;padding:.4rem;cursor:pointer;
+    color:#64748b;font-size:1.3rem;
+}
+.tb-toggle:hover{background:#f1f5f9}
+.tb-title{font-size:.95rem;font-weight:600;color:#1e293b}
+.tb-branch{
+    background:#fef3c7;color:#92400e;
+    border-radius:8px;padding:.22rem .7rem;
+    font-size:.75rem;font-weight:600;
+    display:flex;align-items:center;gap:.3rem;
+}
+
+/* ── Main Content ── */
+.main-content{
+    margin-right:var(--sb-w);
+    padding-top:var(--tb-h);
+    min-height:100vh;
+}
+.content-body{padding:1.5rem}
+
+/* ── Overlay موبايل ── */
+.sb-overlay{
+    display:none;position:fixed;inset:0;
+    background:rgba(0,0,0,.45);z-index:1035;
+}
+.sb-overlay.show{display:block}
+
+/* ── Responsive ── */
+@media(max-width:991px){
+    .sidebar{transform:translateX(100%)}
+    .sidebar.open{transform:translateX(0)}
+    .main-content{margin-right:0}
+    .topbar{right:0}
+    .tb-toggle{display:flex;align-items:center;justify-content:center}
+}
+
+/* ── Cards & Stats ── */
+.stat-card{
+    background:#fff;border-radius:14px;
+    padding:1.1rem 1.25rem;border:1px solid #e2e8f0;
+    display:flex;align-items:center;gap:.9rem;
+    transition:all .2s;
+}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.06)}
+.stat-icon{
+    width:48px;height:48px;border-radius:12px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:1.4rem;flex-shrink:0;
+}
+.stat-value{font-size:1.5rem;font-weight:700;color:#1e293b;line-height:1}
+.stat-label{font-size:.75rem;color:#64748b;margin-top:.2rem}
+.table-card{background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden}
+.table-card-header{
+    padding:.9rem 1.25rem;border-bottom:1px solid #f1f5f9;
+    display:flex;align-items:center;justify-content:space-between;
+}
+.table-card-header .tc-title{font-size:.9rem;font-weight:600;color:#1e293b}
+.table{margin:0;font-size:.85rem}
+.table th{background:#f8fafc;color:#64748b;font-size:.77rem;font-weight:600;border:none;padding:.7rem 1rem}
+.table td{padding:.65rem 1rem;vertical-align:middle;border-top:1px solid #f1f5f9}
+.table tbody tr:hover{background:#f8fafc}
