@@ -1,7 +1,7 @@
 <?php
 /**
- * purchases/invoice_new.php — فاتورة شراء جديدة
- *retail1/modules/purchases/invoice_new.php
+ * purchases/invoice_edit.php — تعديل فاتورة شراء (مسودة فقط)
+ *retail1/modules/purchases/invoice_edit.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -9,7 +9,7 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('purchases.invoices', 'create');
+requirePermission('purchases.invoices', 'edit');
 $currentModule = 'purchases.invoices';
 
 $TS = $_SESSION['table_suffix'];
@@ -23,6 +23,39 @@ $TSZ = "product_sizes_{$TS}";
 $TPROD = "products_{$TS}";
 $TCL = "product_colors_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
+
+// ── تحميل الفاتورة المطلوب تعديلها ──────────────────────────────────
+$purchaseId = (int) ($_GET['id'] ?? 0);
+if (!$purchaseId) {
+    http_response_code(404);
+    exit('رقم الفاتورة غير محدَّد.');
+}
+$existingPur = $pdo->prepare("SELECT * FROM `{$TP}` WHERE id = ? LIMIT 1");
+$existingPur->execute([$purchaseId]);
+$existingPur = $existingPur->fetch(PDO::FETCH_ASSOC);
+if (!$existingPur) {
+    http_response_code(404);
+    exit('الفاتورة غير موجودة.');
+}
+// ⚠ منع صريح: التعديل مسموح للمسودات فقط (نفس قاعدة البلوبرينت العامة:
+// {section}_edit.php = نفس قيود new.php + رفض التعديل لو الحالة ≠ draft).
+// بدل صفحة خطأ منفصلة، تحويل مباشر لمودال التفاصيل بقائمة الفواتير —
+// قرار صريح بدل ما نبني صفحة خطأ لحالها.
+if ($existingPur['status'] !== 'draft') {
+    header('Location: index.php?view_id=' . $purchaseId);
+    exit;
+}
+
+// ── إعادة بناء نسب الخصم/الضريبة من القيم المحفوظة ──────────────────
+// جدول purchases يخزّن القيمة المحسوبة (discount_amount/tax_amount) لا
+// النسبة الأصلية (discPct/taxPct) — بنعيد اشتقاقها هون حتى نعبّي حقول
+// النسب بالواجهة بنفس القيم يلي المستخدم كتبها أصلاً وقت الإنشاء.
+$existingTotalAmt = (float) $existingPur['total_amount'];
+$existingDiscAmt = (float) $existingPur['discount_amount'];
+$existingTaxAmt = (float) $existingPur['tax_amount'];
+$existingDiscPct = $existingTotalAmt > 0 ? round($existingDiscAmt / $existingTotalAmt * 100, 4) : 0;
+$existingAfterDisc = $existingTotalAmt - $existingDiscAmt;
+$existingTaxPct = $existingAfterDisc > 0 ? round($existingTaxAmt / $existingAfterDisc * 100, 4) : 0;
 
 // ── أسعار الصرف: عملة الفرع الأساسية + نسبة كل عملة إليها ──────────
 // نُحمّل هذا هنا (قبل معالج AJAX) لأن search_product يحتاجه أيضاً —
@@ -59,20 +92,6 @@ foreach ($currencies as &$cu) {
     $currencyIdByCode[$cu['code']] = (int) $cu['id'];
 }
 unset($cu);
-
-// ── توليد رقم الفاتورة (ببادئة الفرع) ───────────────────────────────
-function genPurchaseNo(PDO $pdo, string $table, string $prefix): string
-{
-    $y = date('Y');
-    $like = "{$prefix}-PUR-{$y}-%";
-    $last = $pdo->prepare("SELECT purchase_number FROM `{$table}`
-        WHERE purchase_number LIKE ?
-        ORDER BY id DESC LIMIT 1");
-    $last->execute([$like]);
-    $last = $last->fetchColumn();
-    $seq = $last ? (int) substr($last, -5) + 1 : 1;
-    return "{$prefix}-PUR-{$y}-" . str_pad($seq, 5, '0', STR_PAD_LEFT);
-}
 
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
@@ -147,12 +166,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ── حفظ الفاتورة ──
         elseif ($act === 'save_invoice') {
-            $supplierId = (int) ($_POST['supplier_id'] ?? 0) ?: null;
-            $whId = (int) ($_POST['warehouse_id'] ?? 0);
+            // ⚠ حماية دفاعية: هالحقول الأربعة مقفلة بالواجهة (disabled) —
+            // بس عنصر disabled ما بينبعث أصلاً بأي POST حقيقي (لو تلاعب
+            // حدا وفعّله من devtools، القيمة المُرسَلة ممكن تكون مزوَّرة).
+            // نتجاهل أي قيمة قادمة من $_POST لهالحقول تحديداً، ونعتمد
+            // القيم الأصلية المحفوظة بـ$existingPur حصراً — بغض النظر شو
+            // انبعث فعلياً.
+            $supplierId = (int) $existingPur['supplier_id'] ?: null;
+            $whId = (int) $existingPur['warehouse_id'];
+            $invDate = $existingPur['purchase_date'];
+            $dueDate = $existingPur['due_date'] ?? null;
+
             $currency = $_POST['currency'] ?? 'USD';
             $exRate = max(0.0001, (float) ($_POST['exchange_rate'] ?? 1));
-            $invDate = $_POST['invoice_date'] ?? date('Y-m-d');
-            $dueDate = $_POST['due_date'] ?? null ?: null;
             $settleDiscPct = ($_POST['settlement_discount_pct'] ?? '') !== ''
                 ? max(0, min(100, (float) $_POST['settlement_discount_pct'])) : null;
             $payMethod = 'deferred'; // يُحدَّد لاحقاً عند الدفع
@@ -213,27 +239,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $baseCurrencyId = (int) $branchCurRow['id']; // عملة الفرع وقت تسجيل الفاتورة
             $createdBy = (int) $_SESSION['user_id'];
 
-            // استخدام الرقم المعروض أو توليد جديد كضمان
-            $purNo = trim($_POST['invoice_no'] ?? '');
-            if (!$purNo)
-                $purNo = genPurchaseNo($pdo, $TP, $branchPrefix);
-            // التحقق من الفرادة
-            $chk = $pdo->prepare("SELECT COUNT(*) FROM `{$TP}` WHERE purchase_number=?");
-            $chk->execute([$purNo]);
-            if ($chk->fetchColumn() > 0)
-                $purNo = genPurchaseNo($pdo, $TP, $branchPrefix);
+            // ⚠ رقم الفاتورة يضل ثابت دائماً بالتعديل — لا يُقرأ من الواجهة
+            // ولا يُعاد توليده، عكس صفحة الإنشاء تماماً.
+            $purNo = $existingPur['purchase_number'];
 
-            $pdo->prepare("INSERT INTO `{$TP}`
-                (purchase_number, supplier_id, created_by, purchase_date, due_date, settlement_discount_pct,
-                 total_amount, tax_amount, discount_amount, final_amount, final_amount_base_currency,
-                 paid_amount, balance_amount,
-                 invoice_currency_id, base_currency_id, warehouse_id, exchange_rate, payment_status,
-                 notes, status, user_id)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,'pending',?,?,?)")
+            // ⚠ حماية دفاعية: إعادة التحقق من حالة الفاتورة وقت الحفظ
+            // الفعلي (لا الاكتفاء بالفحص وقت تحميل الصفحة GET) — لو
+            // انأكدت الفاتورة بتبويب تاني بالفترة بين فتح الصفحة والحفظ،
+            // لازم نرفض هون كمان، لا نسمح بالكتابة فوق فاتورة مؤكدة.
+            $statusChk = $pdo->prepare("SELECT status FROM `{$TP}` WHERE id=? LIMIT 1");
+            $statusChk->execute([$purchaseId]);
+            if ($statusChk->fetchColumn() !== 'draft') {
+                throw new Exception('لا يمكن تعديل فاتورة بعد تأكيدها — حدّث الصفحة.');
+            }
+
+            $pdo->prepare("UPDATE `{$TP}` SET
+                    supplier_id=?, purchase_date=?, due_date=?, settlement_discount_pct=?,
+                    total_amount=?, tax_amount=?, discount_amount=?, final_amount=?, final_amount_base_currency=?,
+                    balance_amount=?, invoice_currency_id=?, base_currency_id=?, warehouse_id=?, exchange_rate=?,
+                    notes=?, updated_by=?, updated_at=NOW()
+                WHERE id=?")
                 ->execute([
-                    $purNo,
                     $supplierId,
-                    $createdBy,
                     $invDate,
                     $dueDate,
                     $settleDiscPct,
@@ -242,18 +269,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $discAmt,
                     $finalAmt,
                     $finalBase,
-                    $finalAmt,   // balance = كامل المبلغ حتى يتم الدفع
+                    $finalAmt,   // balance = كامل المبلغ (لا دفعات على مسودة أصلاً)
                     $invoiceCurrencyId,
                     $baseCurrencyId,
                     $whId,
                     $exRate,
                     $notes,
-                    $saveAs,
-                    $_SESSION['user_id']
+                    (int) $_SESSION['user_id'],
+                    $purchaseId
                 ]);
-            $purId = (int) $pdo->lastInsertId();
+            $purId = $purchaseId;
+            $createdBy = (int) $_SESSION['user_id'];
 
-            // حفظ البنود فقط — بدون أي تأثير على المخزون أو الحسابات
+            // ⚠ إعادة بناء البنود بالكامل: حذف القديمة كلها ثم إدراج
+            // الجديدة — أبسط وأضمن من محاولة مطابقة/تحديث سطر-بسطر لجدول
+            // متغيّر البنية (إضافة/حذف صفوف بالواجهة). آمن هون تحديداً
+            // لأنه مسودة فقط (صفر أثر مخزون/محاسبة بعد) — لا ينطبق على
+            // فاتورة مؤكدة (ممنوع أصلاً، الحماية أعلاه).
+            $pdo->prepare("DELETE FROM `{$TPI}` WHERE purchase_id=?")->execute([$purId]);
+
+            // حفظ البنود — بدون أي تأثير على المخزون أو الحسابات
             foreach ($rows as $r) {
                 $qty = (float) $r['qty']; // = عدد الكروبات
                 $packetQty = max(1, (float) ($r['packet_qty'] ?? 1)); // من product_sizes.packet_qty — للقراءة فقط
@@ -270,31 +305,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     if (!$variantId)
                         continue;
 
-                    // التحقق من وجود الـ variant فقط — بيانات العرض
-                    // (الاسم/المقاس/اللون/الباركود) صارت تُجلب دائماً عبر
-                    // join حي من product_variants/products عند القراءة،
-                    // مو مخزّنة هون، فما عاد داعي لجلبها بهالاستعلام.
                     $vChk = $pdo->prepare("SELECT id FROM `{$TV}` WHERE id=?");
                     $vChk->execute([$variantId]);
                     if (!$vChk->fetchColumn())
                         continue;
 
-                    // ⚠ إصلاح جوهري (يعكس قرار سابق غلط): quantity المخزَّنة
-                    // لكل مقاس بمفرده = qty (عدد الكروبات/الباكيتات المشتراة)
-                    // فقط — لا piece_count الكامل. المنطق الفيزيائي: كل باكيت
-                    // = قطعة وحدة واحدة من كل مقاس بالكروب، فشراء qty باكيت
-                    // يعطي qty قطعة من كل مقاس بمفرده (مو qty×packetQty قطعة
-                    // من كل مقاس — هيك كان بيضخّم المخزون بمعامل packetQty
-                    // كامل لكل مقاس على حدة). المجموع الكلي على مستوى الفاتورة
-                    // يضل صحيح تماماً بدون أي تغيير: عدد صفوف المقاسات
-                    // (packetQty صف) × qty × السعر = piece_count × السعر —
-                    // نفس القيمة المستخدمة أصلاً بحساب رأس الفاتورة.
+                    // ⚠ نفس منطق الحساب المُصلَح بـinvoice_new.php بالضبط —
+                    // quantity لكل مقاس بمفرده = qty (عدد الباكيتات)، لا
+                    // piece_count الكامل. راجع تعليقات invoice_new.php
+                    // للتفصيل الكامل لسبب هالقرار.
                     $itemQty = $qty;
-                    // ⚠ total_price وdiscount_amount يضلوا بعملة الفرع دائماً
-                    // (لا عمود "_base_currency" مقابل لهم بالجدول أصلاً —
-                    // مطابقين لرأس الفاتورة total_amount المحسوب بنفس
-                    // العملة). راجع تعليق الإصلاح المزدوج تحت لـunit_price
-                    // وunit_price_base_currency تحديداً.
                     $itemLineTot = $itemQty * $netPrice;
                     $itemDiscAmt = $itemQty * $discValuePerUnit;
 
@@ -307,20 +327,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             (int) $r['product_id'],
                             $variantId,
                             $itemQty,
-                            // ⚠ إصلاح مزدوج:
-                            // 1) unit_price_base_currency لازم يكون السعر
-                            //    الصافي الفعلي بعد الخصم (netPrice)، لا
-                            //    السعر الافتراضي قبل الخصم (defaultPr) —
-                            //    كان يناقض total_price المحسوب أصلاً من
-                            //    netPrice (11×2=22 ≠ total_price=20 بمثال
-                            //    حقيقي فيه خصم).
-                            // 2) unit_price لازم يعكس عملة الفاتورة فعلياً
-                            //    (تحويل حقيقي بضرب exRate)، لا نسخ نفس رقم
-                            //    عملة الفرع — هالتخزين توثيقي بحت (عمود
-                            //    مخصص لعملة المستند)، ولا يمس أي رقم بالشاشة
-                            //    أو برأس الفاتورة (يلي يضل بعملة الفرع
-                            //    دائماً، بلا تغيير — راجع القرار الصريح
-                            //    الموثّق أعلاه بخصوص عملة الهيدر).
+                            // نفس الإصلاح المزدوج: unit_price_base_currency
+                            // = netPrice، unit_price = netPrice×exRate.
                             round($netPrice * $exRate, 4),
                             $netPrice,
                             $itemLineTot,
@@ -330,23 +338,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         ]);
                 }
             }
-            // الفاتورة تُحفظ دائماً كمسودة — التأكيد من صفحة المشتريات
 
             echo json_encode([
                 'ok' => true,
                 'id' => $purId,
                 'no' => $purNo,
-                'msg' => $saveAs === 'confirmed' ? 'تم حفظ وتأكيد الفاتورة' : 'تم حفظ الفاتورة كمسودة'
+                'msg' => 'تم حفظ التعديلات على الفاتورة'
             ]);
         }
 
         // ── إضافة مورد جديد ──
-        // ⚠ نفس منطق suppliers.php بالضبط (فرع "مورد جديد" من _action=save
-        // هناك) — إنشاء حسابي الذمة والدفعة المقدمة تلقائياً تحت الحسابين
-        // الأب المضبوطين بإعدادات الربط المحاسبي إجباري لكل مورد جديد،
-        // بلا استثناء لمصدر الإنشاء (نفس القاعدة سواء أضيف من صفحة إدارة
-        // الموردين أو من هالمودال السريع هون). قبل هالإصلاح، مورد مضاف من
-        // هون كان يطلع بدون أي حساب مرتبط إطلاقاً — فجوة محاسبية حقيقية.
+        // ⚠ نفس منطق suppliers.php بالضبط — راجع التعليق المطابق بـ
+        // invoice_new.php لتفصيل سبب هالإصلاح (فجوة حسابات محاسبية).
         elseif ($act === 'add_supplier') {
             $name = trim($_POST['name'] ?? '');
             $contact = trim($_POST['contact_person'] ?? '');
@@ -442,6 +445,64 @@ $suppliers = $pdo->query("SELECT id,name,phone,contact_person,discount_percentag
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
 // ملاحظة: $currencies و$branchCur و$branchBaseRateVsAnchor و$currencyRateById
 // محسوبة مسبقاً بأعلى الملف (قبل معالج AJAX) — راجع التعليق هناك.
+
+// ── تحميل بنود الفاتورة الموجودة، وإعادة تجميعها لنفس شكل كائن
+// "line" المستخدم بالإنشاء (product+color+سعر افتراضي = خط واحد،
+// بمقاساته المدموجة) ──────────────────────────────────────────
+$existingItemsRaw = $pdo->prepare("SELECT pi.*,
+        pr.name AS product_name, pr.model_number,
+        psz.size AS size, psz.age_type, psz.packet_qty,
+        pcl.id AS color_id, pcl.name AS color_name, pcl.hex_code AS color_hex
+    FROM `{$TPI}` pi
+    LEFT JOIN `{$TPROD}` pr ON pr.id = pi.product_id
+    LEFT JOIN `{$TV}` pv ON pv.id = pi.variant_id
+    LEFT JOIN `{$TSZ}` psz ON psz.id = pv.size_id
+    LEFT JOIN `{$TCL}` pcl ON pcl.id = pv.color_id
+    WHERE pi.purchase_id = ?
+    ORDER BY pi.id");
+$existingItemsRaw->execute([$purchaseId]);
+$existingItemsRaw = $existingItemsRaw->fetchAll(PDO::FETCH_ASSOC);
+
+$existingGrpMap = [];
+$existingLineSeq = 0;
+foreach ($existingItemsRaw as $it) {
+    $netPrice = (float) $it['unit_price_base_currency'];
+    $discPctRow = (float) $it['discount_percentage'];
+    // نفس منطق إعادة بناء السعر الافتراضي المستخدم بمودال التفاصيل —
+    // موثوق أكتر من أي عمود آخر لأنه مبني على القيم الفعلية المحفوظة.
+    $defaultPr = $discPctRow > 0 ? round($netPrice / (1 - $discPctRow / 100), 4) : $netPrice;
+    $grpKey = $it['product_id'] . '_' . ($it['color_id'] ?: 0) . '_' . number_format($defaultPr, 4, '.', '');
+    if (!isset($existingGrpMap[$grpKey])) {
+        $existingLineSeq++;
+        $existingGrpMap[$grpKey] = [
+            'grp_key' => 'edit_' . $existingLineSeq . '_' . uniqid(),
+            'row_id' => 'row_edit_' . $existingLineSeq . '_' . uniqid(),
+            'product_id' => (int) $it['product_id'],
+            'product_name' => $it['product_name'] ?? '—',
+            'model_number' => $it['model_number'] ?? '',
+            'sizes' => [],
+            'age_type' => $it['age_type'] ?? '',
+            'color_name' => $it['color_name'] ?? '',
+            'color_hex' => $it['color_hex'] ?? '',
+            // ⚠ السعر الافتراضي هون تاريخي (وقت الشراء الأصلي)، لا يُعاد
+            // جلبه حياً من product_sizes.selling_price الحالي — لأنه لو
+            // تغيّر سعر المنتج منذ الشراء، تعديل فاتورة قديمة يجب أن
+            // يعكس القيم الأصلية يلي انحفظت فعلاً، لا سعر اليوم. (فرق
+            // متعمَّد عن سلوك invoice_new.php، حيث السعر دايماً حي لأنه
+            // إنشاء جديد من الأساس).
+            'default_price' => $defaultPr,
+            'packet_qty' => (int) ($it['packet_qty'] ?? 1),
+            'qty' => (float) $it['quantity'], // نفس القيمة على كل مقاسات الخط (موحَّدة)
+            'net_price' => $netPrice,
+            'discount_value' => round($defaultPr - $netPrice, 4),
+            'variants' => [],
+        ];
+    }
+    if ($it['size'] && !in_array($it['size'], $existingGrpMap[$grpKey]['sizes']))
+        $existingGrpMap[$grpKey]['sizes'][] = $it['size'];
+    $existingGrpMap[$grpKey]['variants'][] = ['variant_id' => (int) $it['variant_id']];
+}
+$existingLinesForJs = array_values($existingGrpMap);
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -449,7 +510,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>فاتورة شراء جديدة — <?= htmlspecialchars($branchName) ?></title>
+    <title>تعديل فاتورة شراء — <?= htmlspecialchars($existingPur['purchase_number']) ?></title>
     <link rel="icon" href="<?= BASE_PATH ?>/assets/images/logo.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -993,12 +1054,12 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-        <span class="tb-title"><i class="bi bi-plus-circle me-1 text-primary"></i>فاتورة شراء جديدة</span>
+        <span class="tb-title"><i class="bi bi-pencil-square me-1 text-primary"></i>تعديل فاتورة شراء</span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
         <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
             <a href="index.php" style="color:#64748b;text-decoration:none">فواتير الشراء</a>
             <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
-            <span class="text-primary">فاتورة جديدة</span>
+            <span class="text-primary"><?= htmlspecialchars($existingPur['purchase_number']) ?></span>
         </nav>
     </header>
 
@@ -1017,61 +1078,70 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         <div class="card-sec-body">
                             <div class="row g-3">
                                 <div class="col-md-4">
-                                    <label class="field-lbl">المورد</label>
+                                    <label class="field-lbl">المورد <i class="bi bi-lock-fill"
+                                            style="font-size:.68rem;color:#94a3b8" title="مقفل — لا يتغيّر بالتعديل"></i></label>
                                     <div class="d-flex gap-1">
-                                        <select id="iSupplier" class="form-select form-select-sm" style="flex:1"
-                                            onchange="onSupplierChange()">
+                                        <select id="iSupplier" class="form-select form-select-sm" style="flex:1;background:#f8fafc"
+                                            disabled>
                                             <option value="">— بدون مورد —</option>
                                             <?php foreach ($suppliers as $sp): ?>
                                                         <option value="<?= $sp['id'] ?>"
                                                             data-phone="<?= htmlspecialchars($sp['phone'] ?? '') ?>"
-                                                            data-discount="<?= (float) ($sp['discount_percentage'] ?? 0) ?>">
+                                                            data-discount="<?= (float) ($sp['discount_percentage'] ?? 0) ?>"
+                                                            <?= (int) $sp['id'] === (int) $existingPur['supplier_id'] ? 'selected' : '' ?>>
                                                             <?= htmlspecialchars($sp['name']) ?>
                                                         </option>
                                             <?php endforeach; ?>
                                         </select>
-                                        <button class="btn btn-sm"
-                                            style="border-radius:7px;border:1px solid #1e3a8a;color:#1e3a8a;padding:4px 8px"
-                                            onclick="openSupplierModal()" title="مورد جديد"><i
-                                                class="bi bi-plus"></i></button>
+                                        <button class="btn btn-sm" disabled
+                                            style="border-radius:7px;border:1px solid #e2e8f0;color:#cbd5e1;padding:4px 8px"
+                                            title="غير متاح — المورد مقفل بالتعديل"><i class="bi bi-plus"></i></button>
                                     </div>
+                                    <div class="field-hint">مقفل — لا يتغيّر بعد إنشاء الفاتورة</div>
                                     <div id="supplierPhone"
                                         style="display:none;font-size:.7rem;color:#64748b;margin-top:3px">
                                         <i class="bi bi-telephone me-1"></i><span id="spPhoneTxt"></span>
                                     </div>
                                 </div>
                                 <div class="col-md-4">
-                                    <label class="field-lbl">المستودع <span class="req">*</span></label>
-                                    <select id="iWarehouse" class="form-select form-select-sm">
+                                    <label class="field-lbl">المستودع <i class="bi bi-lock-fill"
+                                            style="font-size:.68rem;color:#94a3b8" title="مقفل — لا يتغيّر بالتعديل"></i></label>
+                                    <select id="iWarehouse" class="form-select form-select-sm" style="background:#f8fafc" disabled>
                                         <option value="">— اختر المستودع —</option>
                                         <?php foreach ($warehouses as $wh): ?>
-                                                    <option value="<?= $wh['id'] ?>" <?= $wh['id'] == 1 ? 'selected' : '' ?>>
+                                                    <option value="<?= $wh['id'] ?>"
+                                                        <?= (int) $wh['id'] === (int) $existingPur['warehouse_id'] ? 'selected' : '' ?>>
                                                         <?= htmlspecialchars($wh['name']) ?>
                                                     </option>
                                         <?php endforeach; ?>
                                     </select>
+                                    <div class="field-hint">مقفل — لا يتغيّر بعد إنشاء الفاتورة</div>
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="field-lbl">تاريخ الفاتورة <span class="req">*</span></label>
-                                    <input type="date" id="iDate" class="form-control form-control-sm"
-                                        value="<?= date('Y-m-d') ?>"
-                                        onchange="document.getElementById('iDueDate').value=this.value">
+                                    <label class="field-lbl">تاريخ الفاتورة <i class="bi bi-lock-fill"
+                                            style="font-size:.68rem;color:#94a3b8" title="مقفل — لا يتغيّر بالتعديل"></i></label>
+                                    <input type="date" id="iDate" class="form-control form-control-sm" style="background:#f8fafc"
+                                        value="<?= htmlspecialchars($existingPur['purchase_date']) ?>" disabled>
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="field-lbl">تاريخ الاستحقاق</label>
-                                    <input type="date" id="iDueDate" class="form-control form-control-sm"
-                                        value="<?= date('Y-m-d') ?>">
+                                    <label class="field-lbl">تاريخ الاستحقاق <i class="bi bi-lock-fill"
+                                            style="font-size:.68rem;color:#94a3b8" title="مقفل — لا يتغيّر بالتعديل"></i></label>
+                                    <input type="date" id="iDueDate" class="form-control form-control-sm" style="background:#f8fafc"
+                                        value="<?= htmlspecialchars($existingPur['due_date'] ?? $existingPur['purchase_date']) ?>"
+                                        disabled>
                                 </div>
                                 <div class="col-md-3">
                                     <label class="field-lbl">رقم الفاتورة الداخلي</label>
                                     <input type="text" id="iInvNo" class="form-control form-control-sm"
-                                        value="<?= genPurchaseNo($pdo, $TP, $branchPrefix) ?>" dir="ltr" readonly
+                                        value="<?= htmlspecialchars($existingPur['purchase_number']) ?>" dir="ltr"
+                                        readonly
                                         style="background:#f8fafc;font-weight:700;color:#1e3a8a;letter-spacing:1px">
-                                    <div class="field-hint">يُولَّد تلقائياً • بادئة الفرع + ٥ أرقام متسلسلة</div>
+                                    <div class="field-hint">ثابت — لا يتغيّر بالتعديل</div>
                                 </div>
                                 <div class="col-12">
                                     <label class="field-lbl">ملاحظات</label>
                                     <input type="text" id="iNotes" class="form-control form-control-sm"
+                                        value="<?= htmlspecialchars($existingPur['notes'] ?? '') ?>"
                                         placeholder="اختياري">
                                 </div>
                             </div>
@@ -1194,7 +1264,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                         <?php foreach ($currencies as $cu): ?>
                                                     <option value="<?= $cu['code'] ?>" data-rate="<?= $cu['rate_vs_branch'] ?>"
                                                         data-sym="<?= htmlspecialchars($cu['symbol']) ?>"
-                                                        <?= $cu['code'] === $branchCur['code'] ? 'selected' : '' ?>>
+                                                        <?= (int) $cu['id'] === (int) $existingPur['invoice_currency_id'] ? 'selected' : '' ?>>
                                                         <?= htmlspecialchars($cu['code']) ?>
                                                     </option>
                                         <?php endforeach; ?>
@@ -1203,7 +1273,8 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                 <div class="doc-pill-row">
                                     <span class="calc-label">سعر الصرف <small>(مقابل
                                             <?= htmlspecialchars($branchCur['symbol']) ?>)</small></span>
-                                    <input type="number" id="iExRate" min="0.0001" step="0.0001" value="1" dir="ltr"
+                                    <input type="number" id="iExRate" min="0.0001" step="0.0001"
+                                        value="<?= (float) $existingPur['exchange_rate'] ?: 1 ?>" dir="ltr"
                                         onchange="onExRateChange()"
                                         style="width:78px;padding:4px 6px;font-size:.75rem;font-weight:700;border:1.5px solid #e2e8f0;border-radius:8px;text-align:center;background:#fff">
                                 </div>
@@ -1231,8 +1302,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                 <div class="rate-row">
                                     <span class="calc-label">نسبة الخصم العام للمورد</span>
                                     <div class="rate-input-pill">
-                                        <input type="number" id="discPct" min="0" max="100" value="0" step="0.01"
-                                            dir="ltr" oninput="calcTotals()">
+                                        <input type="number" id="discPct" min="0" max="100"
+                                            value="<?= $existingDiscPct ?>" step="0.01" dir="ltr"
+                                            oninput="calcTotals()">
                                         <span class="pct">%</span>
                                     </div>
                                 </div>
@@ -1241,12 +1313,15 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                     <span class="calc-label" style="display:flex;align-items:center;gap:5px">
                                         <input type="checkbox" class="form-check-input" id="iHasSettleDisc"
                                             style="margin:0"
+                                            <?= $existingPur['settlement_discount_pct'] !== null ? 'checked' : '' ?>
                                             onchange="document.getElementById('iSettleDiscWrap').style.display=this.checked?'':'none';calcTotals()">
                                         <label for="iHasSettleDisc" style="cursor:pointer;margin:0">خصم تعجيل الدفع؟</label>
                                     </span>
-                                    <span id="iSettleDiscWrap" style="display:none">
+                                    <span id="iSettleDiscWrap"
+                                        style="<?= $existingPur['settlement_discount_pct'] !== null ? '' : 'display:none' ?>">
                                         <div class="rate-input-pill">
-                                            <input type="number" id="iSettleDiscPct" min="0" max="100" value="0"
+                                            <input type="number" id="iSettleDiscPct" min="0" max="100"
+                                                value="<?= (float) ($existingPur['settlement_discount_pct'] ?? 0) ?>"
                                                 step="0.5" dir="ltr" oninput="calcTotals()">
                                             <span class="pct">%</span>
                                         </div>
@@ -1266,7 +1341,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                     <span class="calc-label">نسبة ضريبة المشتريات العامة</span>
                                     <div class="rate-input-pill">
                                         <input type="number" id="taxPct" min="0" max="100"
-                                            value="<?= $defaultTaxPct ?>" step="0.01" dir="ltr" oninput="calcTotals()">
+                                            value="<?= $existingTaxPct ?>" step="0.01" dir="ltr" oninput="calcTotals()">
                                         <span class="pct">%</span>
                                     </div>
                                 </div>
@@ -1288,7 +1363,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                 <button class="btn btn-sm fw-600"
                                     style="border-radius:9px;background:#1e3a8a;color:#fff;padding:8px"
                                     onclick="saveInvoice('draft')">
-                                    <i class="bi bi-floppy me-1"></i>حفظ الفاتورة
+                                    <i class="bi bi-floppy me-1"></i>حفظ التعديلات
                                 </button>
                                 <a href="index.php" class="btn btn-sm"
                                     style="border-radius:9px;border:1px solid #e2e8f0;color:#64748b;padding:8px;text-decoration:none;text-align:center">
@@ -1456,6 +1531,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         var _camStream = null;
         var _camInterval = null;
         var lines = [];
+        // بنود الفاتورة الأصلية (من purchase_items)، معاد بناؤها بنفس شكل
+        // كائن "line" — راجع القسم PHP فوق (بعد تحميل $existingPur).
+        const EXISTING_LINES = <?= json_encode($existingLinesForJs, JSON_UNESCAPED_UNICODE) ?>;
 
         // ── عملة الفاتورة ──
         let symCur = '$', codeCur = 'USD', exRate = 1;
@@ -1953,10 +2031,20 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         }
 
         function removeLine(gk) {
+            // ⚠ إصلاح: كنا نعيد بناء الـID من نمط ثابت ('lgrp_'+gk) —
+            // صحيح بس للأسطر المضافة عبر addLine()، بس أسطر الفاتورة
+            // المحمّلة أصلاً من قاعدة البيانات (loadExistingLines) عندها
+            // row_id بصيغة مختلفة (row_edit_...، من PHP). النتيجة: الحذف
+            // كان يشتغل حسابياً (lines array صحيح) بس الصف البصري يضل
+            // عالق لأنه getElementById ما بيلاقي عنصر بهيك ID. الحل: نجيب
+            // row_id الحقيقي من كائن الخط نفسه قبل ما نحذفه من lines —
+            // يشتغل صح بغض النظر شو كانت صيغته.
+            const line = lines.find(l => l.grp_key === gk);
             lines = lines.filter(l => l.grp_key !== gk);
-            const rowId = 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_');
-            const row = document.getElementById(rowId);
-            if (row) row.remove();
+            if (line) {
+                const row = document.getElementById(line.row_id);
+                if (row) row.remove();
+            }
             if (!lines.length) document.getElementById('emptyRow').style.display = '';
             calcTotals();
             updateLinesCount();
@@ -2212,92 +2300,84 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         }
 
         // ── تحديث المنتجات ──
+        // ⚠ قرار صريح: بلا sessionStorage — زر "تحديث" يرجع دائماً للنسخة
+        // المحفوظة بقاعدة البيانات (أي تعديل غير محفوظ وقت الضغط يضيع
+        // عمداً، تبسيطاً وتوضيحاً للسلوك). لو المستخدم بنص تعديل، خليه
+        // يحفظ أول قبل ما يضغط تحديث.
         function refreshProducts() {
-            const btn = document.getElementById('btnRefresh');
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>جارٍ التحديث...';
-            btn.disabled = true;
-            // إعادة تحميل الصفحة مع الحفاظ على بيانات الفاتورة في sessionStorage
-            const state = {
-                supplier: document.getElementById('iSupplier').value,
-                warehouse: document.getElementById('iWarehouse').value,
-                currency: document.getElementById('iCurrency').value,
-                exRate: document.getElementById('iExRate').value,
-                date: document.getElementById('iDate').value,
-                dueDate: document.getElementById('iDueDate').value,
-                notes: document.getElementById('iNotes').value,
-                discPct: document.getElementById('discPct').value,
-                taxPct: document.getElementById('taxPct').value,
-                lines: lines,
-            };
-            sessionStorage.setItem('inv_draft', JSON.stringify(state));
             location.reload();
         }
 
-        // استعادة الحالة بعد التحديث
-        (function restoreDraft() {
-            const saved = sessionStorage.getItem('inv_draft');
-            if (!saved) return;
-            sessionStorage.removeItem('inv_draft');
-            try {
-                const s = JSON.parse(saved);
-                if (s.supplier) document.getElementById('iSupplier').value = s.supplier;
-                if (s.warehouse) document.getElementById('iWarehouse').value = s.warehouse;
-                if (s.currency) document.getElementById('iCurrency').value = s.currency;
-                if (s.exRate) document.getElementById('iExRate').value = s.exRate;
-                if (s.date) document.getElementById('iDate').value = s.date;
-                if (s.dueDate) document.getElementById('iDueDate').value = s.dueDate;
-                if (s.notes) document.getElementById('iNotes').value = s.notes;
-                if (s.discPct) document.getElementById('discPct').value = s.discPct;
-                if (s.taxPct) document.getElementById('taxPct').value = s.taxPct;
-                onCurrencyChange();
-                // إعادة بناء البنود
-                if (s.lines && s.lines.length) {
-                    s.lines.forEach(l => {
-                        lines.push(l);
-                        document.getElementById('emptyRow').style.display = 'none';
-                        // بناء الصف يدوياً
-                        const tbody = document.getElementById('linesBody');
-                        const tr = document.createElement('tr');
-                        tr.id = l.row_id;
-                        const GRP_COLORS = [['#eff6ff', '#1e3a8a', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'], ['#fff7ed', '#7c2d12', '#fed7aa'], ['#f5f3ff', '#4c1d95', '#ddd6fe']];
-                        const pricesForProd = [...new Set(s.lines.filter(x => x.product_id === l.product_id).map(x => x.selling_price))];
-                        const grpIdx = pricesForProd.indexOf(l.selling_price);
-                        const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
-                        tr.style.setProperty('--grp-c', clr);
-                        const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';
-                        tr.innerHTML = `
-                    <td class="text-center"><span class="row-num">${lines.length}</span></td>
-                    <td>${l.product_name}</td>
-                    <td class="text-muted" dir="ltr">${l.model_number}</td>
-                    <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>
-                        <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
-                    <td class="text-center">
-                        <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
-                            title="من إعدادات المنتج — للقراءة فقط">
-                    </td>
-                    <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
-                    <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
-                        onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
-                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-                    <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
-                        value="${l.default_price || ''}" dir="ltr" readonly
-                        title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-                    <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-                        value="${l.discount_value || 0}" dir="ltr" readonly
-                        title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
-                    <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
-                        value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
-                        onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
-                    <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
-                    <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
-                        tbody.appendChild(tr);
-                        recalcLine(l, tr);
-                    });
-                    calcTotals();
-                    updateLinesCount();
-                    toast('تم استعادة بيانات الفاتورة بعد التحديث ✅');
-                }
-            } catch (e) { console.error(e); }
+        // ── تحميل بنود الفاتورة الأصلية عند فتح صفحة التعديل ─────────
+        // البيانات جايّة من PHP (EXISTING_LINES)، مبنية من purchase_items
+        // المحفوظة فعلياً — نفس شكل كائن "line" المستخدم بالإنشاء تماماً،
+        // فنعيد استخدام نفس منطق بناء الصف بدل تكراره.
+        (function loadExistingLines() {
+            // ⚠ لازم أول شي — يزامن متغيّرات exRate/symCur/codeCur الفعلية
+            // مع عملة الفاتورة المحفوظة (الحقل بالـHTML معبّى من PHP، بس
+            // المتغيّرات نفسها تبدأ بقيم افتراضية لعملة الفرع دائماً).
+            onCurrencyChange();
+
+            // ⚠ عرض هاتف المورد المحدَّد مسبقاً — بدون استدعاء
+            // onSupplierChange() الكاملة عمداً، لأنها بتصفّر discPct
+            // بقيمة افتراضية من إعدادات المورد الحالية، وهيك بتمسح نسبة
+            // الخصم التاريخية المُعاد بناؤها من الفاتورة الأصلية (القيمة
+            // يلي المستخدم كتبها فعلياً وقت الإنشاء، مو الإعداد الحالي
+            // للمورد).
+            const supSel = document.getElementById('iSupplier');
+            const supOpt = supSel.options[supSel.selectedIndex];
+            if (supSel.value && supOpt?.dataset.phone) {
+                document.getElementById('spPhoneTxt').textContent = supOpt.dataset.phone;
+                document.getElementById('supplierPhone').style.display = 'block';
+            }
+
+            if (!EXISTING_LINES.length) return;
+            document.getElementById('emptyRow').style.display = 'none';
+            const tbody = document.getElementById('linesBody');
+            const GRP_COLORS = [['#eff6ff', '#1e3a8a', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'], ['#fff7ed', '#7c2d12', '#fed7aa'], ['#f5f3ff', '#4c1d95', '#ddd6fe']];
+            EXISTING_LINES.forEach(l => {
+                lines.push(l);
+                const tr = document.createElement('tr');
+                tr.id = l.row_id;
+                // ⚠ تلوين الكروب حسب السعر الافتراضي (المرجعي) — نفس معيار
+                // مودال التفاصيل بـindex.php، لا السعر الصافي (ممكن يتصادف
+                // بين كروبات مختلفة فعلياً — راجع الإصلاح هناك للتفصيل).
+                const pricesForProd = [...new Set(EXISTING_LINES.filter(x => x.product_id === l.product_id).map(x => x.default_price))];
+                const grpIdx = pricesForProd.indexOf(l.default_price);
+                const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
+                tr.style.setProperty('--grp-c', clr);
+                const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';
+                const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>`;
+                tr.innerHTML = `
+            <td class="text-center"><span class="row-num">${lines.length}</span></td>
+            <td>${l.product_name}</td>
+            <td class="text-muted" dir="ltr">${l.model_number}</td>
+            <td>${grpBadge}
+                <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
+            <td class="text-center">
+                <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
+                    title="من إعدادات المنتج — للقراءة فقط">
+            </td>
+            <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
+            <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
+                onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
+            <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
+            <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+                value="${l.default_price || ''}" dir="ltr" readonly
+                title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
+            <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
+                value="${l.discount_value || 0}" dir="ltr" readonly
+                title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+            <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+                value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
+                onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+            <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
+            <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
+                tbody.appendChild(tr);
+                recalcLine(l, tr);
+            });
+            calcTotals();
+            updateLinesCount();
         })();
 
         // إغلاق نتائج البحث بالنقر خارجها

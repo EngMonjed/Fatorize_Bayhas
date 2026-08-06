@@ -225,9 +225,17 @@ try {
                 //    بعمود cost_price أصلاً) — لا بعملة الفاتورة الخام،
                 //    لأنه دفتر الحركات الموحَّد (تقارير/movements.php)
                 //    مفروض كل أرقامه بعملة واحدة موحَّدة بلا استثناء.
+                // ⚠ إصلاح إضافي (بعد قرار invoice_new.php/invoice_edit.php:
+                // "جدول البنود = عملة الفرع فقط"): total_price بجدول
+                // purchase_items أصلاً بعملة الفرع دايماً (لا عملة الفاتورة
+                // كما كان مفترَضاً هون سابقاً) — القسمة على $rate كانت
+                // تحويل مزدوج غلط، بتفسد current_cost فعلياً لأي فاتورة
+                // بعملة غير عملة الفرع (اكتُشف بمراجعة فاتورة تجريبية
+                // بعملة TRY). unit_price_base_currency بالفولباك كمان
+                // أصلاً بعملة الفرع مباشرة، بلا أي قسمة.
                 $unitBase = $qty > 0
-                    ? (((float) $item['total_price'] / $rate) / $qty)
-                    : (float) ($item['unit_price_base_currency'] ?? ($item['unit_price'] / $rate));
+                    ? ((float) $item['total_price'] / $qty)
+                    : (float) ($item['unit_price_base_currency'] ?? $item['unit_price']);
 
                 // جلب الكمية والتكلفة الحالية قبل هالعملية
                 $stB = $pdo->prepare("SELECT quantity, current_cost FROM `{$TWI}`
@@ -344,6 +352,16 @@ try {
                 ]);
             $jeId = (int) $pdo->lastInsertId();
 
+            // ⚠ القيمة الحقيقية بعملة الفاتورة — مُشتقة، لا مقروءة من
+            // final_amount مباشرة. final_amount صار (بعد قرار invoice_new.
+            // php: "عملة الهيدر توثيقية بس") نسخة طبق الأصل من
+            // final_amount_base_currency، فما عاد يمثّل قيمة حقيقية بعملة
+            // الفاتورة. exchange_rate مجمَّد على المستند نفسه (بتاريخه)،
+            // فالاشتقاق هون دقيق ١٠٠٪ بدون أي تخزين مكرَّر لنفس المعلومة —
+            // القرار المحاسبي الصريح: لا نخزّن قيمة مشتقة رياضياً كحقيقة
+            // مستقلة، نحسبها وقت الحاجة.
+            $finalOrig = round($finalBase * $rate, 4);
+
             // مدين: المخزون
             $pdo->prepare("INSERT INTO `{$TJI}`
                 (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
@@ -352,7 +370,7 @@ try {
                     $jeId,
                     $accInventory['id'],
                     $finalBase,
-                    (float) $pur['final_amount'],
+                    $finalOrig,
                     $finalBase,
                     "مخزون {$pur['purchase_number']}",
                     $curId($curCode),
@@ -369,7 +387,7 @@ try {
                     $jeId,
                     $accSupplier['id'],
                     $finalBase,
-                    (float) $pur['final_amount'],
+                    $finalOrig,
                     $finalBase,
                     "ذمة {$supName}",
                     $curId($curCode),
@@ -693,19 +711,22 @@ try {
                 : ($totalPaidIncAdvance > 0 ? 'partial' : 'pending');
 
             // ⚠ إصلاح حرج: أعمدة paid_amount/balance_amount بجدول purchases_{TS}
-            // بعملة الفاتورة (نفس عملة final_amount/total_amount)، بينما
-            // $totalPaidIncAdvance صار بعملة الفرع الأساسية بعد تصحيح معادلة
-            // $paidAmt بالرسالة السابقة. طرح مبلغ بعملة الأساس من final_amount
-            // (المخزّن بعملة الفاتورة) مباشرة كان بينتج رقم بلا معنى (مطروح
-            // مبلغين بعملتين مختلفتين) — بالضبط سبب "المتبقي على المورد" الغلط
-            // يلي ظهر بمودال التفاصيل. لازم نحوّل لعملة الفاتورة أولاً بضرب
-            // $rate (= كم وحدة عملة فاتورة تساوي 1 وحدة عملة أساس).
+            // بعملة الفاتورة (نفس ما بيتعرض بـindex.php جنب currency_symbol) —
+            // بينما $totalPaidIncAdvance بعملة الفرع الأساسية. لازم نحوّل
+            // لعملة الفاتورة بضرب $rate قبل الطرح.
+            // ⚠ إصلاح إضافي: الطرح لازم يصير من $finalOrig (القيمة الحقيقية
+            // المُشتقة بعملة الفاتورة، محسوبة فوق) — لا من عمود final_amount
+            // المقروء مباشرة من الجدول، لأنه هلق بعملة الفرع دائماً (بعد
+            // قرار invoice_new.php)، فقراءته هون كانت بتطرح رقمين بعملتين
+            // مختلفتين فعلياً (بالضبط سبب "المتبقي على المورد" الغلط
+            // يلي ظهر سابقاً بمودال التفاصيل — نفس فئة المشكلة، مكان مختلف).
             $totalPaidInvCur = round($totalPaidIncAdvance * $rate, 4);
+            $balanceInvCur = round($finalOrig - $totalPaidInvCur, 4);
 
             $pdo->prepare("UPDATE `{$TP}` SET
                 status='confirmed',
                 paid_amount=?,
-                balance_amount=final_amount-?,
+                balance_amount=?,
                 payment_status=?,
                 journal_entry_id=?,
                 notes=CONCAT(COALESCE(notes,''),?),
@@ -713,7 +734,7 @@ try {
                 WHERE id=?")
                 ->execute([
                     $totalPaidInvCur,
-                    $totalPaidInvCur,
+                    $balanceInvCur,
                     $finalPaidStatus,
                     $jeId,
                     $notes ? ' | ' . $notes : '',

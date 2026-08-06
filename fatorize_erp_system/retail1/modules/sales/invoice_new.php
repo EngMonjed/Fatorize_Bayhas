@@ -36,7 +36,6 @@ if ($branchId) {
     $bst->execute([$branchId]);
     $baseCurrencyId = (int) ($bst->fetchColumn() ?: 0);
 }
-
 $currencies = $pdo->query("SELECT id, code, symbol, exchange_rate FROM `currencies`
     ORDER BY (id = {$baseCurrencyId}) DESC, code")->fetchAll();
 
@@ -736,7 +735,7 @@ $invNo = genInvoiceNo($pdo, $TI);
                                             <th>عدد الكروبات</th>
                                             <th>سعر الوحدة <span id="curLbl" style="color:#16a34a"></span></th>
                                             <th>خصم %</th>
-                                            <th>سعر/<?= htmlspecialchars($baseCurrency['symbol']) ?> <small style="color:#16a34a">(تلقائي)</small></th>
+                                            <th>سعر/<?= htmlspecialchars($baseCurrency['symbol']) ?></th>
                                             <th>الإجمالي</th>
                                             <th></th>
                                         </tr>
@@ -788,8 +787,7 @@ $invNo = genInvoiceNo($pdo, $TI);
                                     <span id="sumTax" class="n">+0.00</span>
                                 </div>
                                 <div class="tot-row final">
-                                    <span>الإجمالي <small style="font-weight:400;color:#94a3b8">(عملة
-                                            الفرع)</small></span>
+                                    <span>الإجمالي <small style="font-weight:400;color:#94a3b8"><?= htmlspecialchars($baseCurrency['symbol']) ?></small></span>
                                     <span id="sumTotal" class="n">0.00</span>
                                 </div>
                                 <div class="tot-row" style="margin-top:6px">
