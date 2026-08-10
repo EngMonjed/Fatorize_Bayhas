@@ -152,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     LEFT JOIN `{$TCL}` c ON c.id = v.color_id
                     WHERE (p.name LIKE ? OR p.model_number LIKE ?)
                         AND v.is_active=1 AND p.is_active=1
-                    ORDER BY p.name, s.selling_price, s.age_type, s.sort_order
+                    ORDER BY p.name, s.cost_price, s.age_type, s.sort_order
                     LIMIT 200");
                 $st2->execute(["%{$q}%", "%{$q}%"]);
                 $results = $st2->fetchAll();
@@ -292,7 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             foreach ($rows as $r) {
                 $qty = (float) $r['qty']; // = عدد الكروبات
                 $packetQty = max(1, (float) ($r['packet_qty'] ?? 1)); // من product_sizes.packet_qty — للقراءة فقط
-                $defaultPr = (float) $r['default_price']; // سعر البيع الافتراضي (بعملة الفرع) — من product_sizes.selling_price
+                $defaultPr = (float) $r['default_price']; // سعر التكلفة الافتراضي (بعملة الفرع) — من product_sizes.cost_price
                 $netPrice = isset($r['net_price']) && $r['net_price'] !== ''
                     ? (float) $r['net_price']
                     : $defaultPr;
@@ -485,7 +485,7 @@ foreach ($existingItemsRaw as $it) {
             'color_name' => $it['color_name'] ?? '',
             'color_hex' => $it['color_hex'] ?? '',
             // ⚠ السعر الافتراضي هون تاريخي (وقت الشراء الأصلي)، لا يُعاد
-            // جلبه حياً من product_sizes.selling_price الحالي — لأنه لو
+            // جلبه حياً من product_sizes.cost_price الحالي — لأنه لو
             // تغيّر سعر المنتج منذ الشراء، تعديل فاتورة قديمة يجب أن
             // يعكس القيم الأصلية يلي انحفظت فعلاً، لا سعر اليوم. (فرق
             // متعمَّد عن سلوك invoice_new.php، حيث السعر دايماً حي لأنه
@@ -1218,9 +1218,9 @@ $existingLinesForJs = array_values($existingGrpMap);
                                             <th>اللون</th>
                                             <th class="text-center">عدد الكروبات</th>
                                             <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر البيع الافتراضي</th>
+                                            <th class="text-center">سعر التكلفة الافتراضي</th>
                                             <th class="text-center">قيمة الخصم الإفرادي</th>
-                                            <th class="text-center">سعر البيع بعد الخصم</th>
+                                            <th class="text-center">سعر التكلفة بعد الخصم</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
@@ -1627,7 +1627,7 @@ $existingLinesForJs = array_values($existingGrpMap);
             _selItems = items;
             _selModal = _selModal || new bootstrap.Modal(document.getElementById('selectModal'));
 
-            // تجميع بالمنتج ثم بالكروب (selling_price)
+            // تجميع بالمنتج ثم بالكروب (cost_price)
             const GRP_COLORS = [
                 ['#eff6ff', '#1e3a8a', '#bfdbfe'],
                 ['#f0fdf4', '#065f46', '#bbf7d0'],
@@ -1639,33 +1639,32 @@ $existingLinesForJs = array_values($existingGrpMap);
             items.forEach(it => {
                 const pid = it.product_id;
                 if (!grouped[pid]) grouped[pid] = { name: it.product_name, model: it.model_number, grps: {} };
-                // مفتاح الكروب: selling_price + age_type معاً
-                const gk = (it.selling_price || '0') + '_' + (it.age_type || 'سنة');
-                if (!grouped[pid].grps[gk]) grouped[pid].grps[gk] = { price: it.selling_price, age_type: it.age_type || 'سنة', variants: [] };
+                // مفتاح الكروب: cost_price + age_type معاً
+                const gk = (it.cost_price || '0') + '_' + (it.age_type || 'سنة');
+                if (!grouped[pid].grps[gk]) grouped[pid].grps[gk] = { price: it.cost_price, age_type: it.age_type || 'سنة', variants: [] };
                 grouped[pid].grps[gk].variants.push(it);
             });
 
             // بناء الجدول — كروب × لون = سطر واحد
             // نجمع أولاً: لكل (product × grp × color) → سطر
-            // نبني مفتاح فريد: product_id + selling_price + color_id
+            // نبني مفتاح فريد: product_id + cost_price + color_id
             const rows = {};
             items.forEach(it => {
                 // مفتاح فريد: منتج × سعر × نوع العمر × لون
-                const key = `${it.product_id}_${it.selling_price}_${it.age_type || 'سنة'}_${it.color_id || 0}`;
+                const key = `${it.product_id}_${it.cost_price}_${it.age_type || 'سنة'}_${it.color_id || 0}`;
                 if (!rows[key]) {
                     rows[key] = {
                         key,
                         product_id: it.product_id,
                         product_name: it.product_name,
                         model_number: it.model_number,
-                        selling_price: it.selling_price,
+                        cost_price: it.cost_price,
                         age_type: it.age_type || 'سنة',
                         color_id: it.color_id,
                         color_name: it.color_name,
                         color_hex: it.color_hex,
                         variants: [],
                         sizes: [],
-                        cost_price: it.cost_price,
                         price_base_currency_code: it.price_base_currency_code,
                     };
                 }
@@ -1676,7 +1675,7 @@ $existingLinesForJs = array_values($existingGrpMap);
             // ترتيب: بالمنتج ثم بالسعر ثم باللون
             const sortedRows = Object.values(rows).sort((a, b) => {
                 if (a.product_id !== b.product_id) return a.product_id - b.product_id;
-                if (a.selling_price !== b.selling_price) return parseFloat(a.selling_price) - parseFloat(b.selling_price);
+                if (a.cost_price !== b.cost_price) return parseFloat(a.cost_price) - parseFloat(b.cost_price);
                 if ((a.age_type || '') !== (b.age_type || '')) return (a.age_type || '').localeCompare(b.age_type || '');
                 return (a.color_name || '').localeCompare(b.color_name || '');
             });
@@ -1686,7 +1685,7 @@ $existingLinesForJs = array_values($existingGrpMap);
             sortedRows.forEach(r => {
                 if (!prodGrpColor[r.product_id]) prodGrpColor[r.product_id] = {};
                 const pk = r.product_id;
-                const gk = `${r.selling_price}_${r.age_type || 'سنة'}`;
+                const gk = `${r.cost_price}_${r.age_type || 'سنة'}`;
                 if (prodGrpColor[pk][gk] === undefined) {
                     prodGrpColor[pk][gk] = Object.keys(prodGrpColor[pk]).length;
                 }
@@ -1705,7 +1704,7 @@ $existingLinesForJs = array_values($existingGrpMap);
 
             let lastProd = null;
             sortedRows.forEach(r => {
-                const grpIdx = prodGrpColor[r.product_id][`${r.selling_price}_${r.age_type || 'سنة'}`];
+                const grpIdx = prodGrpColor[r.product_id][`${r.cost_price}_${r.age_type || 'سنة'}`];
                 const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
                 const grpLabel = `<span class="grp-badge" style="background:${bg};color:${clr};border-color:${br}">
             كروب ${grpIdx + 1}
@@ -1714,12 +1713,12 @@ $existingLinesForJs = array_values($existingGrpMap);
                     ? `<span class="clr-dot" style="background:${r.color_hex};margin-left:4px"></span>` : '';
                 const sizesStr = r.sizes.join(' · ');
 
-                // السعر المرجعي بعملة الفرع الأساسية — من product_sizes.selling_price
-                // (وليس cost_price — قرار مؤكد سابقاً: فاتورة الشراء تعرض سعر
-                // البيع الافتراضي، لا سعر التكلفة). يُستخدم داخلياً فقط لحساب
+                // السعر المرجعي بعملة الفرع الأساسية — من product_sizes.cost_price
+                // (وليس selling_price — قرار مؤكد: فاتورة الشراء تعرض سعر
+                // التكلفة الافتراضي، لا سعر البيع). يُستخدم داخلياً فقط لحساب
                 // سعر الوحدة المقترح أدناه؛ لم يعد يُعرض كعمود مستقل بالمودال
                 // (حُذف "السعر المسجّل" و"سعر الصرف" بناءً على طلب إزالتهما).
-                const rRawPrice = parseFloat(r.selling_price || 0);
+                const rRawPrice = parseFloat(r.cost_price || 0);
 
                 // سعر الصرف المقترح = سعر صرف عملة الفاتورة الحالية نسبة لعملة
                 // الفرع مباشرة (exRate) — بدون أي قسمة إضافية، لأن rRawPrice
@@ -1833,14 +1832,14 @@ $existingLinesForJs = array_values($existingGrpMap);
                     // (المرجع الثابت) قبل تمريره لـ addLine، بدل تركه يُعاد تفسيره
                     // كأنه بعملة الفرع أصلاً (كان هذا يسبب تحويلاً مضاعفاً خاطئاً).
                     const costBaseDirect = exRate > 0 ? pr / exRate : pr;
-                    const lineItem = { ...v, cost_base_direct: costBaseDirect, selling_price: rowDef.selling_price };
+                    const lineItem = { ...v, cost_base_direct: costBaseDirect, cost_price: rowDef.cost_price };
                     if (vi === 0) addLine(lineItem);
                     else mergeVariant(lineItem);
                     added++;
                 });
                 // تعديل الكمية بعد الدمج
                 if (qty > 1) {
-                    const gk = makeGrpKey({ ...rowDef.variants[0], selling_price: rowDef.selling_price });
+                    const gk = makeGrpKey({ ...rowDef.variants[0], cost_price: rowDef.cost_price });
                     const line = lines.find(l => l.grp_key === gk);
                     if (line) {
                         line.qty = qty;
@@ -1856,9 +1855,9 @@ $existingLinesForJs = array_values($existingGrpMap);
         }
 
         // ── إضافة سطر (كروب×لون) ──
-        // grp_key = product_id + selling_price + color_id
+        // grp_key = product_id + cost_price + color_id
         function makeGrpKey(item) {
-            return `${item.product_id}_${item.selling_price || item.default_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`;
+            return `${item.product_id}_${item.cost_price || item.default_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`;
         }
 
         function addLine(item) {
@@ -1888,11 +1887,11 @@ $existingLinesForJs = array_values($existingGrpMap);
             } else {
                 // مسار احتياطي غير مُستخدم حالياً (المطابقة المباشرة بالباركود
                 // صارت تمر بالمودال دائماً — راجع doSearch()). لو استُخدم مستقبلاً:
-                // selling_price مخزّن أصلاً بعملة الفرع (base_currency_id)، فلا
+                // cost_price مخزّن أصلاً بعملة الفرع (base_currency_id)، فلا
                 // حاجة لأي تحويل هنا — القيمة الخام هي costBase مباشرة.
-                // ⚠ عمداً بدون fallback لـ cost_price — سعر البيع الافتراضي
-                // بفاتورة الشراء يجي من selling_price حصراً (قرار مؤكد).
-                costBase = parseFloat(item.selling_price || 0);
+                // ⚠ عمداً بدون fallback لـ selling_price — سعر التكلفة الافتراضي
+                // بفاتورة الشراء يجي من cost_price حصراً (قرار مؤكد).
+                costBase = parseFloat(item.cost_price || 0);
             }
             const line = {
                 grp_key: gk,
@@ -1901,7 +1900,7 @@ $existingLinesForJs = array_values($existingGrpMap);
                 product_id: item.product_id,
                 product_name: item.product_name,
                 model_number: item.model_number || '',
-                selling_price: parseFloat(item.selling_price || 0),
+                cost_price: parseFloat(item.cost_price || 0),
                 age_type: item.age_type || '',
                 color_id: item.color_id || 0,
                 color_name: item.color_name || '',
@@ -1909,9 +1908,9 @@ $existingLinesForJs = array_values($existingGrpMap);
                 sizes: [item.size || ''],
                 packet_qty: parseFloat(item.packet_qty) || 1, // ⚠ عدد القطع بالباكيت — من product_sizes.packet_qty، للقراءة فقط
                 qty: 1,                                        // عدد الكروبات
-                default_price: costBase,                       // سعر البيع الافتراضي (بعملة الفرع) — من product_sizes.selling_price
+                default_price: costBase,                       // سعر التكلفة الافتراضي (بعملة الفرع) — من product_sizes.cost_price
                 discount_value: 0,                             // قيمة الخصم الإفرادي (مبلغ، لا نسبة) — يُحفظ بعمود discount_amount
-                net_price: costBase,                           // سعر البيع بعد الخصم الإفرادي — مرتبط ثنائياً بقيمة الخصم
+                net_price: costBase,                           // سعر التكلفة بعد الخصم الإفرادي — مرتبط ثنائياً بقيمة الخصم
                 piece_count: 0,                                // عدد المنتجات = qty × packet_qty — هو المخزَّن بعمود quantity لاحقاً
                 total: 0,
             };
@@ -1924,9 +1923,9 @@ $existingLinesForJs = array_values($existingGrpMap);
                 ['#fff7ed', '#7c2d12', '#fed7aa'],
                 ['#f5f3ff', '#4c1d95', '#ddd6fe'],
             ];
-            // تحديد لون الكروب بناءً على selling_price
-            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id).map(l => l.selling_price))];
-            const grpIdx = pricesForProd.indexOf(line.selling_price);
+            // تحديد لون الكروب بناءً على cost_price
+            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id).map(l => l.cost_price))];
+            const grpIdx = pricesForProd.indexOf(line.cost_price);
             const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
             const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">
         كروب ${grpIdx + 1}
@@ -1959,7 +1958,7 @@ $existingLinesForJs = array_values($existingGrpMap);
             title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
         <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
             value="0" dir="ltr" readonly
-            title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+            title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
         <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
             value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
             onchange="updateLine('${gk}','net_price',this.value)"></td>
@@ -1996,9 +1995,9 @@ $existingLinesForJs = array_values($existingGrpMap);
             // ⚠ قرار نهائي: الشراء بالقطعة — الكمية تُعتمد حرفياً بلا أي
             // تحقق/تقريب (انلغى قرار "مضاعف صحيح" السابق).
             if (field === 'qty') line.qty = Math.max(0.001, parseFloat(val) || 0);
-            // ⚠ سعر البيع الافتراضي وقيمة الخصم صارا حقلين مقفلين (readonly)
+            // ⚠ سعر التكلفة الافتراضي وقيمة الخصم صارا حقلين مقفلين (readonly)
             // — ما بوصلهم onchange من الواجهة إطلاقاً. الحقل الوحيد يلي
-            // بيغيّر الخصم هو سعر البيع بعد الخصم نفسه (يُكتب مباشرة).
+            // بيغيّر الخصم هو سعر التكلفة بعد الخصم نفسه (يُكتب مباشرة).
             if (field === 'net_price') {
                 line.net_price = Math.max(0, parseFloat(val) || 0);
             }
@@ -2009,9 +2008,9 @@ $existingLinesForJs = array_values($existingGrpMap);
 
         function recalcLine(line, row) {
             // ⚠ الاتجاه الوحيد للحساب الآن: قيمة الخصم مقفلة ومحسوبة دائماً
-            // = الافتراضي − سعر البيع بعد الخصم. سعر البيع بعد الخصم هو
+            // = الافتراضي − سعر التكلفة بعد الخصم. سعر التكلفة بعد الخصم هو
             // الحقل التحريري الوحيد بين الاثنين (نفس معادلة الربط الأصلية:
-            // سعر البيع بعد الخصم = سعر البيع الافتراضي − قيمة الخصم —
+            // سعر التكلفة بعد الخصم = سعر التكلفة الافتراضي − قيمة الخصم —
             // بس محلولة بالاتجاه المعاكس لأنه صار هو المُدخَل، لا الناتج).
             line.discount_value = Math.max(0, line.default_price - (line.net_price || 0));
 
@@ -2060,7 +2059,7 @@ $existingLinesForJs = array_values($existingGrpMap);
             // ١) عدد البنود = إجمالي الكروبات (مجموع qty على كل الأسطر)
             const totalLines = lines.reduce((s, l) => s + (l.qty || 0), 0);
 
-            // ٤) المبلغ الصافي بدون الخصم الإفرادي = سعر البيع الافتراضي × عدد المنتجات (مجموع على كل الأسطر)
+            // ٤) المبلغ الصافي بدون الخصم الإفرادي = سعر التكلفة الافتراضي × عدد المنتجات (مجموع على كل الأسطر)
             const gross = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
             // ٥) مجموع قيم الخصوم الإفرادية (قيمة الخصم للوحدة × عدد المنتجات، مجموع على كل الأسطر)
             const lineDiscTotal = lines.reduce((s, l) => s + ((l.default_price || 0) - (l.net_price || 0)) * (l.piece_count || 0), 0);
@@ -2367,7 +2366,7 @@ $existingLinesForJs = array_values($existingGrpMap);
                 title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
             <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
                 value="${l.discount_value || 0}" dir="ltr" readonly
-                title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+                title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
             <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
                 value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
                 onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>

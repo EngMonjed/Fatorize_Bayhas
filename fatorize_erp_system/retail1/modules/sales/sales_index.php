@@ -1963,7 +1963,7 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
 
 <!-- ══ كشف حساب سريع مختصر (بعملة الفرع) ══ -->
 <div class="statement">
-  <h4>كشف حساب العميل — لمحة سريعة (بعملة الفرع)</h4>
+  
   <div class="statement-grid">
     <div class="item"><span>المستحق قبل الفاتورة</span><span>${balBefore != null ? fmtBase(balBefore) : '—'}</span></div>
     <div class="item"><span>آخر دفعة</span><span style="color:#16a34a">${lastPayment > 0 ? fmtBase(lastPayment) : '—'}</span></div>

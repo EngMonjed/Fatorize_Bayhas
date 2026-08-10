@@ -34,7 +34,7 @@ $TV   = "product_variants_{$TS}";
 $TAC  = "account_charts_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
-// حسابات الصندوق/البنك — لاسترداد المرتجع نقداً (لو payment_handling=paid_refund_cash)
+// حسابات الصندوق/البنك — لاسترداد المرتجع نقداً (لو target_account_type=cash)
 // نفس استبعاد حسابات الدفعات المقدمة الخاصة بالموردين المعتمد بـ index.php
 $cashAccounts = $pdo->query("SELECT ac.id,ac.code,ac.name,ac.balance,c.code AS cur_code,c.symbol AS cur_sym
     FROM `{$TAC}` ac
@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 JOIN `{$TSP}` s ON s.id = p.supplier_id
                 LEFT JOIN currencies c ON c.id = p.invoice_currency_id
                 LEFT JOIN currencies bc ON bc.id = p.base_currency_id
-                WHERE p.status = 'received'
+                WHERE p.status = 'confirmed'
                   AND (p.purchase_number LIKE ? OR s.name LIKE ? OR p.id = ?)
                 ORDER BY p.purchase_date DESC LIMIT 15");
             $st->execute([$like, $like, $q !== '' && ctype_digit($q) ? (int) $q : 0]);
@@ -124,6 +124,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $it['unit_price'] = $it['quantity'] > 0
                     ? round((float) $it['total_price'] / (float) $it['quantity'], 4)
                     : (float) $it['gross_unit_price'];
+                // ⚠ سعر افتراضي مُعاد بناؤه (قبل الخصم) — لمفتاح التجميع
+                // بالواجهة حصراً، لا للحساب. gross_unit_price (عمود
+                // purchase_items.unit_price) مُسمّى بشكل مضلِّل: هو فعلياً
+                // net_price×exchange_rate (بعملة الفاتورة)، مو السعر
+                // الافتراضي الحقيقي قبل الخصم — فلا يصلح كمصدر لإعادة
+                // البناء. نفس معادلة إعادة البناء المعتمدة بمودالي التفاصيل
+                // والتأكيد بـindex.php بالضبط.
+                $discPct = (float) $it['discount_percentage'];
+                $it['default_price'] = $discPct > 0
+                    ? round($it['unit_price'] / (1 - $discPct / 100), 4)
+                    : $it['unit_price'];
             }
             echo json_encode(['ok' => true, 'items' => $items]);
             exit;
@@ -136,7 +147,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $purId    = (int) ($_POST['purchase_id'] ?? 0);
             $reason   = trim($_POST['return_reason'] ?? '');
             $payHandling = $_POST['payment_handling'] ?? 'not_paid';
-            $refundAccId = (int) ($_POST['refund_account_id'] ?? 0) ?: null;
+            // ⚠ حقل نوعية التسوية والحساب المستهدف مرتبطين ببعض: not_paid
+            // = بلا حساب مستهدف إطلاقاً (يُصفَّر بالسيرفر بغض النظر عمّا
+            // وصل من الواجهة — حماية سيادية). partial/paid_full = حساب
+            // مستهدف إجباري (صندوق/ذمة/دفعة مقدمة).
+            $targetType = in_array($payHandling, ['partial', 'paid_full'], true)
+                ? ($_POST['target_account_type'] ?? '') : null;
+            if (in_array($payHandling, ['partial', 'paid_full'], true) && !$targetType) {
+                echo json_encode(['ok' => false, 'msg' => 'اختر الحساب المستهدف (صندوق/بنك، ذمة المورد، أو دفعة مقدمة)']); exit;
+            }
+            $refundAccId = $targetType === 'cash' ? ((int) ($_POST['refund_account_id'] ?? 0) ?: null) : null;
+            if ($targetType === 'cash' && !$refundAccId) {
+                echo json_encode(['ok' => false, 'msg' => 'اختر حساب الصندوق/البنك']); exit;
+            }
             $notes    = trim($_POST['notes'] ?? '');
             $lines    = json_decode($_POST['lines'] ?? '[]', true) ?: [];
 
@@ -221,12 +244,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             purchase_number=?, warehouse_id=?, return_date=CURDATE(),
                             total_amount=?, discount_amount=?, tax_amount=?, return_amount=?,
                             return_currency_id=?, base_currency_id=?,
-                            exchange_rate=?, payment_handling=?, refund_account_id=?, return_reason=?, notes=?
+                            exchange_rate=?, payment_handling=?, target_account_type=?, refund_account_id=?, return_reason=?, notes=?
                         WHERE id=? AND status='draft'")
                         ->execute([
                             $purId, $pur['supplier_id'], null, $pur['purchase_number'], $pur['warehouse_id'],
                             $totalAmt, $discAmt, $taxAmt, $returnAmt, $pur['invoice_currency_id'], $pur['base_currency_id'],
-                            $pur['exchange_rate'], $payHandling, $refundAccId, $reason, $notes, $returnId
+                            $pur['exchange_rate'], $payHandling, $targetType, $refundAccId, $reason, $notes, $returnId
                         ]);
                     $pdo->prepare("DELETE FROM `{$TRI}` WHERE return_id=?")->execute([$returnId]);
                 } else {
@@ -235,12 +258,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             (return_number, purchase_id, purchase_number, supplier_id, warehouse_id,
                              return_date, total_amount, discount_amount, tax_amount, return_amount,
                              return_currency_id, base_currency_id,
-                             exchange_rate, payment_handling, refund_account_id, return_reason, status, notes, user_id)
-                            VALUES (?,?,?,?,?, CURDATE(),?,?,?,?,?,?, ?,?,?,?, 'draft', ?, ?)")
+                             exchange_rate, payment_handling, target_account_type, refund_account_id, return_reason, status, notes, user_id)
+                            VALUES (?,?,?,?,?, CURDATE(),?,?,?,?,?,?, ?,?,?,?,?, 'draft', ?, ?)")
                         ->execute([
                             $retNo, $purId, $pur['purchase_number'], $pur['supplier_id'], $pur['warehouse_id'],
                             $totalAmt, $discAmt, $taxAmt, $returnAmt, $pur['invoice_currency_id'], $pur['base_currency_id'],
-                            $pur['exchange_rate'], $payHandling, $refundAccId, $reason, $notes, $_SESSION['user_id']
+                            $pur['exchange_rate'], $payHandling, $targetType, $refundAccId, $reason, $notes, $_SESSION['user_id']
                         ]);
                     $returnId = (int) $pdo->lastInsertId();
                 }
@@ -361,12 +384,12 @@ $retStats = [
     'total'   => count($returns),
     'draft'   => count(array_filter($returns, fn($r) => $r['status'] === 'draft')),
     'posted'  => count(array_filter($returns, fn($r) => $r['status'] === 'posted')),
-    // ⚠ تحويل كل مرتجع لعملة الفرع الأساسية عبر سعر صرفه الخاص قبل
-    // الجمع — المرتجعات ممكن تكون بعملات مختلفة (TRY, SAR...)، وجمعها
-    // خام بدون تحويل كان يعطي رقم بلا معنى محاسبياً (نفس درس فاتورة
-    // الشراء بخصوص خلط العملات).
+    // ⚠ return_amount أصلاً بعملة الفرع (مشتق من purchase_items.total_price
+    // المخزَّن بعملة الفرع — نفس قرار invoice_new.php) — لا حاجة لأي قسمة
+    // على exchange_rate هون، كانت تحويل مزدوج غلط (نفس فئة باگ $unitBase
+    // يلي صلّحناه بـconfirm_purchase_invoice.php).
     'amount'  => array_sum(array_map(
-        fn($r) => $r['status'] !== 'cancelled' ? (float) $r['return_amount'] / (float) ($r['exchange_rate'] ?: 1) : 0,
+        fn($r) => $r['status'] !== 'cancelled' ? (float) $r['return_amount'] : 0,
         $returns
     )),
 ];
@@ -676,11 +699,14 @@ $retStats = [
                             <?php endif; ?>
                             <?php foreach ($returns as $r):
                                 $st2 = $STATUS_MAP[$r['status']] ?? $STATUS_MAP['draft'];
-                                $sym = $r['currency_symbol'] ?? '$';
                                 $payLabels = [
-                                    'not_paid' => 'لم تُسوَّ', 'partial' => 'تسوية جزئية',
-                                    'paid_refund_cash' => 'استرداد نقدي', 'paid_credit_supplier' => 'خصم من رصيد المورد'
+                                    'not_paid' => 'لم تُسوَّ', 'partial' => 'تسوية جزئية', 'paid_full' => 'تسوية كاملة'
                                 ];
+                                $targetLabels = ['cash' => 'صندوق/بنك', 'supplier' => 'ذمة المورد', 'advance' => 'دفعة مقدمة'];
+                                $payDisplay = $payLabels[$r['payment_handling']] ?? '—';
+                                if (!empty($r['target_account_type']) && isset($targetLabels[$r['target_account_type']])) {
+                                    $payDisplay .= ' — ' . $targetLabels[$r['target_account_type']];
+                                }
                                 ?>
                                         <tr>
                                             <td class="n fw-600" style="direction:ltr;color:#1e3a8a">
@@ -693,9 +719,11 @@ $retStats = [
                                             <td class="text-muted" style="font-size:.8rem">
                                                 <?= htmlspecialchars($r['purchase_number'] ?? '—') ?>
                                             </td>
+                                            <!-- ⚠ return_amount أصلاً بعملة الفرع (راجع تعليق retStats
+                                            أعلاه) — لا currency_symbol (عملة الفاتورة). -->
                                             <td class="n fw-600"><?= number_format((float) $r['return_amount'], 2) ?>
-                                                <?= $sym ?></td>
-                                            <td style="font-size:.78rem"><?= $payLabels[$r['payment_handling']] ?? '—' ?></td>
+                                                <?= htmlspecialchars($baseCurSym) ?></td>
+                                            <td style="font-size:.78rem"><?= htmlspecialchars($payDisplay) ?></td>
                                             <td><span class="badge <?= $st2['cls'] ?>"
                                                     style="font-size:.68rem"><?= $st2['label'] ?></span></td>
                                             <td>
@@ -788,13 +816,12 @@ $retStats = [
                                     style="border-radius:8px" placeholder="بضاعة تالفة، خطأ بالطلب...">
                             </div>
                             <div class="col-md-4">
-                                <label class="form-label small fw-600">طريقة التسوية</label>
+                                <label class="form-label small fw-600">نوعية التسوية المالية</label>
                                 <select id="rPayHandling" class="form-select form-select-sm" style="border-radius:8px"
                                     onchange="onRPayHandlingChange()">
                                     <option value="not_paid">لم تُسوَّ بعد</option>
                                     <option value="partial">تسوية جزئية</option>
-                                    <option value="paid_refund_cash">استرداد نقدي فوري</option>
-                                    <option value="paid_credit_supplier">خصم من رصيد المورد</option>
+                                    <option value="paid_full">تسوية كاملة</option>
                                 </select>
                             </div>
                             <div class="col-md-4">
@@ -802,9 +829,24 @@ $retStats = [
                                 <input type="text" id="rNotes" class="form-control form-control-sm"
                                     style="border-radius:8px">
                             </div>
+                            <!-- ⚠ يظهر فقط لو نوعية التسوية "جزئية" أو "كاملة" — لا_paid يبقى
+                            بلا حساب مستهدف إطلاقاً (المطالبة تضل قائمة بذمة المورد افتراضياً
+                            لغاية ما تُسوّى لاحقاً). -->
+                            <div class="col-md-4" id="rTargetTypeWrap" style="display:none">
+                                <label class="form-label small fw-600">
+                                    <i class="bi bi-bullseye me-1"></i>الحساب المستهدف
+                                </label>
+                                <select id="rTargetType" class="form-select form-select-sm" style="border-radius:8px"
+                                    onchange="onRTargetTypeChange()">
+                                    <option value="">— اختر —</option>
+                                    <option value="cash">صندوق / بنك</option>
+                                    <option value="supplier">ذمة المورد</option>
+                                    <option value="advance">دفعة مقدمة للمورد</option>
+                                </select>
+                            </div>
                             <div class="col-md-4" id="rRefundAccWrap" style="display:none">
                                 <label class="form-label small fw-600">
-                                    <i class="bi bi-safe me-1"></i>حساب استرداد المبلغ (صندوق/بنك)
+                                    <i class="bi bi-safe me-1"></i>حساب الصندوق/البنك
                                 </label>
                                 <select id="rRefundAccount" class="form-select form-select-sm" style="border-radius:8px">
                                     <option value="">— اختر حساب الاسترداد —</option>
@@ -882,6 +924,10 @@ $retStats = [
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const retModal = new bootstrap.Modal(document.getElementById('retModal'));
+        // رمز عملة الفرع الأساسية — كل مبالغ المرتجع (مبلغ فرعي/خصم/ضريبة/
+        // صافي/سعر الوحدة بجدول البنود) بعملة الفرع دائماً، لأنها مشتقة من
+        // purchase_items.total_price المخزَّن بعملة الفرع (قرار invoice_new.php).
+        const BASE_CUR_SYM = <?= json_encode($baseCurSym) ?>;
         let rItems = [];
         let _rSelectedCurrency = 'USD';
 
@@ -909,6 +955,8 @@ $retStats = [
             document.getElementById('stepItems').style.display = 'none';
             document.getElementById('btnSaveReturn').disabled = true;
             document.getElementById('rPayHandling').value = 'not_paid';
+            document.getElementById('rTargetTypeWrap').style.display = 'none';
+            document.getElementById('rTargetType').value = '';
             document.getElementById('rRefundAccWrap').style.display = 'none';
             document.getElementById('retModalTitle').innerHTML = '<i class="bi bi-arrow-return-right me-1 text-primary"></i>مرتجع شراء جديد';
             retModal.show();
@@ -967,17 +1015,18 @@ $retStats = [
                 ? `1 ${p.base_currency_code} = ${Number(p.exchange_rate).toFixed(4)} ${p.currency_code}` : '—';
             document.getElementById('rPayStatusLbl').textContent = PAY_LABELS[p.payment_status] || p.payment_status || '—';
             document.getElementById('rInvNetLbl').textContent = p.final_amount
-                ? Number(p.final_amount).toFixed(2) + ' ' + (p.currency_symbol || '') : '—';
+                ? Number(p.final_amount).toFixed(2) + ' ' + BASE_CUR_SYM : '—';
 
-            // ⚠ الاسترداد النقدي منطقي بس لو فيه فعلاً مبلغ مسدَّد على
-            // الفاتورة الأصلية (مافيش شي نرجعه كاش لو ما انسددت أصلاً)
-            const refundOpt = document.querySelector('#rPayHandling option[value="paid_refund_cash"]');
+            // ⚠ الاسترداد النقدي (خيار "صندوق/بنك" داخل الحساب المستهدف)
+            // منطقي بس لو فيه فعلاً مبلغ مسدَّد على الفاتورة الأصلية —
+            // مافيش شي نرجعه كاش لو ما انسددت أصلاً.
+            const cashOpt = document.querySelector('#rTargetType option[value="cash"]');
             const hadPayment = p.payment_status === 'paid' || p.payment_status === 'partial';
-            refundOpt.disabled = !hadPayment;
-            refundOpt.textContent = hadPayment ? 'استرداد نقدي فوري' : 'استرداد نقدي فوري (الفاتورة غير مدفوعة أصلاً)';
-            if (!hadPayment && document.getElementById('rPayHandling').value === 'paid_refund_cash') {
-                document.getElementById('rPayHandling').value = 'not_paid';
-                onRPayHandlingChange();
+            cashOpt.disabled = !hadPayment;
+            cashOpt.textContent = hadPayment ? 'صندوق / بنك' : 'صندوق / بنك (الفاتورة غير مدفوعة أصلاً)';
+            if (!hadPayment && document.getElementById('rTargetType').value === 'cash') {
+                document.getElementById('rTargetType').value = '';
+                onRTargetTypeChange();
             }
 
             post({ _action: 'get_purchase_items', purchase_id: p.id }).then(d => {
@@ -987,13 +1036,28 @@ $retStats = [
             });
         }
 
-        // إظهار/إخفاء حقل حساب الاسترداد حسب طريقة التسوية، مع فلترته
-        // تلقائياً حسب عملة الفاتورة الأصلية (نفس آلية index.php)
+        // ⚠ حقل "الحساب المستهدف" يظهر بس لو نوعية التسوية "جزئية" أو
+        // "كاملة" — not_paid يبقى بدون حساب مستهدف (المطالبة تضل قائمة
+        // بذمة المورد افتراضياً لغاية ما تُسوّى لاحقاً — راجع تعليق
+        // confirm_purchase_return.php لتفصيل السلوك الافتراضي).
         function onRPayHandlingChange() {
+            const val = document.getElementById('rPayHandling').value;
+            const show = val === 'partial' || val === 'paid_full';
+            document.getElementById('rTargetTypeWrap').style.display = show ? '' : 'none';
+            if (!show) {
+                document.getElementById('rTargetType').value = '';
+                onRTargetTypeChange();
+            }
+        }
+
+        // إظهار/إخفاء حقل حساب الصندوق/البنك حسب نوع الحساب المستهدف
+        // المختار، مع فلترته تلقائياً حسب عملة الفاتورة الأصلية (نفس
+        // آلية index.php) — يظهر فقط لو الحساب المستهدف = "صندوق/بنك".
+        function onRTargetTypeChange() {
             const wrap = document.getElementById('rRefundAccWrap');
-            const isRefund = document.getElementById('rPayHandling').value === 'paid_refund_cash';
-            wrap.style.display = isRefund ? '' : 'none';
-            if (isRefund) {
+            const isCash = document.getElementById('rTargetType').value === 'cash';
+            wrap.style.display = isCash ? '' : 'none';
+            if (isCash) {
                 const sel = document.getElementById('rRefundAccount');
                 let stillValid = false;
                 Array.from(sel.options).forEach(opt => {
@@ -1016,7 +1080,11 @@ $retStats = [
         function buildGroups() {
             const map = {};
             rItems.forEach((it, idx) => {
-                const key = (it.product_id || it.product_name) + '_' + it.unit_price;
+                // ⚠ مفتاح التجميع = السعر الافتراضي (قبل الخصم)، لا الصافي
+                // بعد الخصم — نفس إصلاح index.php بالضبط: كروبين مختلفين
+                // (سعر افتراضي وخصم مختلفين) ممكن يطلع صافيهم نفس الرقم
+                // بالصدفة، فيتجمّعوا غلط لو اعتمدنا الصافي كمفتاح.
+                const key = (it.product_id || it.product_name) + '_' + (it.default_price ?? it.unit_price);
                 if (!map[key]) map[key] = {
                     name: it.product_name || ('بند #' + it.purchase_item_id),
                     model: it.model_number || '', sizes: [], colors: [], ageType: it.age_type || '',
@@ -1067,8 +1135,8 @@ $retStats = [
                         <input type="number" class="form-control form-control-sm" id="gqty${i}" min="0"
                         max="${g.available}" step="1" value="0" ${g.available <= 0 ? 'disabled' : ''}
                         oninput="onGroupQtyChange(${i})" style="border-radius:6px;border-color:#fecaca;text-align:center;font-size:.78rem"></td>
-                    <td class="n text-center">${Number(g.unit_price).toFixed(2)}</td>
-                    <td class="n text-end fw-600" id="gLineTotal${i}">0.00</td>
+                    <td class="n text-center">${Number(g.unit_price).toFixed(2)} ${BASE_CUR_SYM}</td>
+                    <td class="n text-end fw-600" id="gLineTotal${i}">0.00 ${BASE_CUR_SYM}</td>
                 </tr>`).join('');
             updateTotal();
         }
@@ -1078,7 +1146,7 @@ $retStats = [
             const max = rGroups[i].available;
             if (qty > max) { qty = max; document.getElementById(`gqty${i}`).value = max; }
             const lineTotal = qty * rGroups[i].unit_price;
-            document.getElementById(`gLineTotal${i}`).textContent = lineTotal.toFixed(2);
+            document.getElementById(`gLineTotal${i}`).textContent = lineTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
             updateTotal();
         }
 
@@ -1108,12 +1176,11 @@ $retStats = [
                 taxAmt = (subtotal - discAmt) * taxRatio;
             }
             const net = subtotal - discAmt + taxAmt;
-            const sym = p?.currency_symbol || '';
 
-            document.getElementById('rSubtotalLbl').textContent = subtotal.toFixed(2) + ' ' + sym;
-            document.getElementById('rDiscLbl').textContent = '-' + discAmt.toFixed(2) + ' ' + sym;
-            document.getElementById('rTaxLbl').textContent = '+' + taxAmt.toFixed(2) + ' ' + sym;
-            document.getElementById('rTotalLine').textContent = net.toFixed(2) + ' ' + sym;
+            document.getElementById('rSubtotalLbl').textContent = subtotal.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('rDiscLbl').textContent = '-' + discAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('rTaxLbl').textContent = '+' + taxAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('rTotalLine').textContent = net.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('btnSaveReturn').disabled = !anySelected;
         }
 
@@ -1146,6 +1213,7 @@ $retStats = [
                 purchase_id: document.getElementById('rPurchaseId').value,
                 return_reason: document.getElementById('rReason').value,
                 payment_handling: document.getElementById('rPayHandling').value,
+                target_account_type: document.getElementById('rTargetType').value,
                 refund_account_id: document.getElementById('rRefundAccount').value,
                 notes: document.getElementById('rNotes').value,
                 lines: JSON.stringify(lines)
@@ -1187,8 +1255,10 @@ $retStats = [
                     ? `1 ${d.return.base_currency_code} = ${Number(d.return.exchange_rate).toFixed(4)} ${d.return.currency_code}` : '—';
                 document.getElementById('rPayStatusLbl').textContent = PAY_LABELS2[d.return.payment_status] || d.return.payment_status || '—';
                 document.getElementById('rInvNetLbl').textContent = d.return.final_amount
-                    ? Number(d.return.final_amount).toFixed(2) + ' ' + (d.return.currency_symbol || '') : '—';
+                    ? Number(d.return.final_amount).toFixed(2) + ' ' + BASE_CUR_SYM : '—';
                 onRPayHandlingChange();
+                if (d.return.target_account_type) document.getElementById('rTargetType').value = d.return.target_account_type;
+                onRTargetTypeChange();
                 if (d.return.refund_account_id) document.getElementById('rRefundAccount').value = d.return.refund_account_id;
                 document.getElementById('stepFindPurchase').style.display = 'none';
                 document.getElementById('stepItems').style.display = '';

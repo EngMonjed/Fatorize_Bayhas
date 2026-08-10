@@ -150,6 +150,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $jes->execute([$id]);
             $pur['journal_entries'] = $jes->fetchAll();
 
+            // ⚠ رصيد المورد (بعملة الفرع) — الحالي، و"قبل هالفاتورة"
+            // تحديداً بعكس أثرها الخاص (القيد الرئيسي زاد الالتزام
+            // بمقدار final_amount_base_currency عبر balance-=، وأي دفعة
+            // زادت balance عبر balance+=) — نفس مبدأ كشف الحساب المختصر
+            // بفواتير المبيعات. تقريب "لقطة" دقيق طالما ما في معاملات
+            // تانية بينهم وبين لحظة الطباعة (الحالة الشائعة: طباعة فوراً
+            // بعد التأكيد).
+            $accSupBal = null;
+            if (!empty($pur['supplier_id'])) {
+                $stSA = $pdo->prepare("SELECT ac.base_balance FROM `{$TSP}` s
+                    JOIN `{$TAC}` ac ON ac.id=s.account_id
+                    WHERE s.id=? AND s.account_id IS NOT NULL LIMIT 1");
+                $stSA->execute([$pur['supplier_id']]);
+                $accSupBal = $stSA->fetch(PDO::FETCH_ASSOC);
+            }
+            $pur['supplier_balance_after'] = $accSupBal ? (float) $accSupBal['base_balance'] : null;
+            $pur['supplier_balance_before'] = null;
+            if ($pur['supplier_balance_after'] !== null && $pur['status'] === 'confirmed') {
+                $rateForBal = (float) ($pur['exchange_rate'] ?: 1);
+                $finalBaseForBal = (float) ($pur['final_amount_base_currency'] ?? $pur['final_amount']);
+                // ⚠ paid_amount مخزَّن بعملة الفاتورة (إصلاح سابق) — نحوّله
+                // لعملة الفرع بالقسمة على exchange_rate قبل عكس أثره.
+                $paidBaseForBal = $rateForBal > 0 ? (float) $pur['paid_amount'] / $rateForBal : (float) $pur['paid_amount'];
+                $pur['supplier_balance_before'] = $pur['supplier_balance_after'] + $finalBaseForBal - $paidBaseForBal;
+            }
+
             echo json_encode(['ok' => true, 'data' => $pur]);
         }
 
@@ -952,14 +978,14 @@ $PAY_MAP = [
                         </div>
 
                         <!-- ── تاريخ الاستلام + مستودع ── -->
-                        <div class="col-md-4" style="display:none">
+                        <div class="col-md-4">
                             <label class="form-label small fw-600 text-secondary mb-1">
                                 <i class="bi bi-calendar-check me-1 text-success"></i>تاريخ الاستلام
                             </label>
                             <input type="date" id="cReceiveDate" class="form-control form-control-sm"
                                 value="<?= date('Y-m-d') ?>">
                         </div>
-                        <div class="col-md-4" style="display:none">
+                        <div class="col-md-4">
                             <label class="form-label small fw-600 text-secondary mb-1">
                                 <i class="bi bi-building me-1 text-primary"></i>مستودع الاستلام
                             </label>
@@ -973,40 +999,13 @@ $PAY_MAP = [
 
                         <!-- ── دفع جزئي ── -->
                         <div class="col-12">
+                            <label class="form-label small fw-600 text-secondary mb-1">
+                                <i class="bi bi-cash me-1 text-success"></i>دفع جزئي عند الاستلام
+                                <span style="font-size:.68rem;color:#94a3b8">(اختياري)</span>
+                            </label>
                             <div class="row g-2">
-                                <div class="fw-700 mb-2"
-                                    style="font-size:.72rem;font-weight:700;color:#065f46;margin-bottom:4px">
-                                    <i class="bi bi-calculator me-1"></i>المدفوعات
-                                </div>
-
-                                <!-- حساب الدفع -->
-                                <div class="col-md-4">
-                                    <label class="form-label small fw-600 text-secondary mb-1">
-                                        <i class="bi bi-safe me-1"></i>حساب الدفع (صندوق / بنك / دفعة مقدمة للمورد)
-                                    </label>
-                                    <select id="cCashAccount" class="form-select form-select-sm"
-                                        onchange="onCashAccountChange()">
-                                        <option value="">— اختر حساب الدفع —</option>
-                                        <?php foreach ($cashAccounts as $ca): ?>
-                                            <option value="<?= $ca['id'] ?>"
-                                                data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>"
-                                                data-balance="<?= (float) $ca['balance'] ?>"
-                                                data-sym="<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>"
-                                                data-type="regular">
-                                                <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                                (
-                                                <?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                            </option>
-                                        <?php endforeach; ?>
-                                        <!-- خيار حساب الدفعة المقدمة الخاص بمورد هالفاتورة ينضاف ديناميكياً بالجافاسكربت -->
-                                    </select>
-                                    <div id="cCashAccBalanceHint" style="font-size:.72rem;margin-top:4px"></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label small fw-600 text-secondary mb-1">
-                                        <i class="bi bi-currency-exchange me-1"></i>العملة
-                                    </label>
-                                    <div class="input-group input-group-m">
+                                <div class="col-md-5">
+                                    <div class="input-group input-group-sm">
                                         <input type="number" id="cPaidAmt" class="form-control fw-600"
                                             placeholder="0.00" min="0" step="0.01" oninput="onPaidChange()">
                                         <!-- ⚠ قرار تصميمي متعمَّد: عملة دفع الفاتورة (لا الشحن) محصورة
@@ -1023,10 +1022,7 @@ $PAY_MAP = [
                                 — نفس اتفاقية exchange_rate المخزَّن على الفاتورة نفسها بالضبط.
                                 مقترح تلقائياً، وقابل للتعديل اليدوي بالكامل، مع زر تحديث يجيب آخر
                                 سعر من جدول currencies العام وقت الحاجة. -->
-                                <div class="col-md-4" id="cPaidRateWrap" style="display:none">
-                                    <label class="form-label small fw-600 text-secondary mb-1">
-                                        <i class="bi bi-currency-exchange me-1"></i>سعر الصرف
-                                    </label>
+                                <div class="col-md-7" id="cPaidRateWrap" style="display:none">
                                     <div class="input-group input-group-sm">
                                         <span class="input-group-text" style="font-size:.73rem" id="cPaidRateLabel">1 ?
                                             =</span>
@@ -1040,11 +1036,11 @@ $PAY_MAP = [
                                             <i class="bi bi-arrow-repeat" id="paidRateIcon"></i>
                                         </button>
                                     </div>
-                                    <div id="cPaidRateHint" style="font-size:.7rem;color:#64748b;margin-top:3px">
-                                    </div>
-                                    <!-- المبلغ المحوَّل لعملة الفاتورة -->
-                                    <div style="background:#f0fdf4;border-radius:7px;padding:5px 10px;font-size:.78rem"
-                                        id="cPaidConvertWrap">
+                                    <div id="cPaidRateHint" style="font-size:.7rem;color:#64748b;margin-top:3px"></div>
+                                </div>
+                                <!-- المبلغ المحوَّل لعملة الفاتورة -->
+                                <div class="col-12" id="cPaidConvertWrap" style="display:none">
+                                    <div style="background:#f0fdf4;border-radius:7px;padding:5px 10px;font-size:.78rem">
                                         <i class="bi bi-arrow-left-right me-1 text-success"></i>
                                         المبلغ بعملة الفاتورة:
                                         <strong id="cPaidConverted" style="color:#16a34a">—</strong>
@@ -1052,10 +1048,31 @@ $PAY_MAP = [
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <!-- صورة الفاتورة -->
-                    <div class="row g-2" style="padding:10px">
-                        <div class="col-6">
+
+                        <!-- حساب الدفع -->
+                        <div class="col-md-6">
+                            <label class="form-label small fw-600 text-secondary mb-1">
+                                <i class="bi bi-safe me-1"></i>حساب الدفع (صندوق / بنك / دفعة مقدمة للمورد)
+                            </label>
+                            <select id="cCashAccount" class="form-select form-select-sm"
+                                onchange="onCashAccountChange()">
+                                <option value="">— اختر حساب الدفع —</option>
+                                <?php foreach ($cashAccounts as $ca): ?>
+                                    <option value="<?= $ca['id'] ?>"
+                                        data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>"
+                                        data-balance="<?= (float) $ca['balance'] ?>"
+                                        data-sym="<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>" data-type="regular">
+                                        <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                        (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                                <!-- خيار حساب الدفعة المقدمة الخاص بمورد هالفاتورة ينضاف ديناميكياً بالجافاسكربت -->
+                            </select>
+                            <div id="cCashAccBalanceHint" style="font-size:.72rem;margin-top:4px"></div>
+                        </div>
+
+                        <!-- صورة الفاتورة -->
+                        <div class="col-md-6">
                             <label class="form-label small fw-600 text-secondary mb-1">
                                 <i class="bi bi-image me-1 text-info"></i>صورة فاتورة المورد
                             </label>
@@ -1069,40 +1086,41 @@ $PAY_MAP = [
                                 </button>
                             </div>
                         </div>
-                        <div class="col-6">
+
+                        <!-- ملاحظات -->
+                        <div class="col-12">
                             <label class="form-label small fw-600 text-secondary mb-1">
                                 <i class="bi bi-chat-left-text me-1"></i>ملاحظات الاستلام
                             </label>
-                            <textarea id="cNotes" class="form-control form-control-sm" rows="1"
+                            <textarea id="cNotes" class="form-control form-control-sm" rows="2"
                                 placeholder="حالة البضاعة، ملاحظات خاصة..."></textarea>
                         </div>
-                    </div>
 
-                    <!-- ملاحظات -->
-
-
-                    <!-- ملخص مالي نهائي -->
-                    <div class="col-12">
-                        <div
-                            style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;padding:10px 14px;font-size:.82rem">
-                            <div class="fw-700 mb-2" style="color:#065f46;font-size:.8rem">
-                                <i class="bi bi-calculator me-1"></i>ملخص المبالغ حسب العملة
-                            </div>
-                            <div id="cTotSummary">
-                                <!-- يتم بناؤه ديناميكياً في updateTotal() -->
+                        <!-- ملخص مالي نهائي -->
+                        <div class="col-12">
+                            <div
+                                style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;padding:10px 14px;font-size:.82rem">
+                                <div class="fw-700 mb-2" style="color:#065f46;font-size:.8rem">
+                                    <i class="bi bi-calculator me-1"></i>ملخص المبالغ حسب العملة
+                                </div>
+                                <div id="cTotSummary">
+                                    <!-- يتم بناؤه ديناميكياً في updateTotal() -->
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- تسوية فروقات التقريب الصغيرة -->
-                    <div class="col-12">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="cExactSettle">
-                            <label class="form-check-label" for="cExactSettle" style="font-size:.78rem;cursor:pointer">
-                                <i class="bi bi-check2-circle me-1 text-success"></i>
-                                اعتبار الفاتورة مسدَّدة بالكامل (تسوية فروقات التقريب الصغيرة تلقائياً، حتى ٠.٠١$)
-                            </label>
+                        <!-- تسوية فروقات التقريب الصغيرة -->
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="cExactSettle">
+                                <label class="form-check-label" for="cExactSettle"
+                                    style="font-size:.78rem;cursor:pointer">
+                                    <i class="bi bi-check2-circle me-1 text-success"></i>
+                                    اعتبار الفاتورة مسدَّدة بالكامل (تسوية فروقات التقريب الصغيرة تلقائياً، حتى ٠.٠١$)
+                                </label>
+                            </div>
                         </div>
+
                     </div>
                 </div>
                 <div class="modal-footer border-0 px-4 pb-4 gap-2">
@@ -1129,7 +1147,7 @@ $PAY_MAP = [
         const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
         const STATUS_MAP = <?= json_encode($STATUS_MAP) ?>;
         const PAY_MAP = <?= json_encode($PAY_MAP) ?>;
-        // رمز عملة الفرع الأساسية — كل مبالغ "سعر البيع بعد الخصم"/"الإجمالي"
+        // رمز عملة الفرع الأساسية — كل مبالغ "سعر التكلفة بعد الخصم"/"الإجمالي"
         // بجدولي التفاصيل والتأكيد بعملة الفرع دائماً (مطابق لقرار invoice_new.php).
         const BASE_CUR_SYM = <?= json_encode($baseCurrencySymbol) ?>;
         function post(data) {
@@ -1183,12 +1201,12 @@ $PAY_MAP = [
                 // الكروب — بدون اللون بالمفتاح، حتى تنجمع كل ألوان نفس
                 // الكروب بصف واحد. ⚠ التجميع بعملة الفرع (unit_price_base_
                 // currency) لا unit_price (عملة الفاتورة) — لأنه net_price
-                // (سعر البيع بعد الخصم) دائماً بعملة الفرع بحسب التصميم
+                // (سعر التكلفة بعد الخصم) دائماً بعملة الفرع بحسب التصميم
                 // المعتمد بـinvoice_new.php.
                 //
                 // ⚠ مفتاح التجميع = السعر الافتراضي (قبل الخصم)، لا السعر
                 // الصافي بعد الخصم — لأنه "الكروب" مُعرَّف فعلياً بالسعر
-                // المرجعي (product_sizes.selling_price)، والخصم الإفرادي
+                // المرجعي (product_sizes.cost_price)، والخصم الإفرادي
                 // تعديل على مستوى السطر فوقه، ممكن يخلي كروبين مختلفين
                 // (سعر افتراضي مختلف، خصم مختلف) يطلع صافيهم نفس الرقم
                 // بالصدفة (مثال حقيقي: 8.8−0.3=8.5 و9.9−1.4=8.5 — نفس
@@ -1291,7 +1309,7 @@ $PAY_MAP = [
                 <th class="text-center">الألوان</th>
                 <th class="text-center">عدد الكروبات</th>
                 <th class="text-center" style="color:#7c3aed">عدد المنتجات</th>
-                <th class="text-center">سعر البيع بعد الخصم (${BASE_CUR_SYM})</th>
+                <th class="text-center">سعر التكلفة بعد الخصم (${BASE_CUR_SYM})</th>
                 <th class="text-end">الإجمالي (${BASE_CUR_SYM})</th>
             </tr></thead>
             <tbody>${itemsHtml || '<tr><td colspan="7" class="text-center text-muted py-3">لا توجد بنود</td></tr>'}</tbody>
@@ -1860,162 +1878,225 @@ $PAY_MAP = [
             'city' => $branchInfo['city'] ?? '',
             'email' => $branchInfo['email'] ?? '',
             'tax_number' => $branchInfo['tax_number'] ?? '',
+            'tenant_slogan' => $branchInfo['tenant_slogan'] ?? '',
+            'commercial_registration_number' => $branchInfo['commercial_registration_number'] ?? '',
         ]) ?>;
 
         function printPurchaseInvoice() {
             const p = _cPurchaseData;
-            if (!p) {toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return;}
-            const sym = p.currency_symbol || '$';
-            const fmt = n => sym + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
-            // تجميع البنود بـ (product × unit_price) — الكروب — مع تجميع
-            // كل الألوان والمقاسات ضمن نفس الكروب بعمود واحد لكل منهما
-            const groups = {};
+            if (!p) { toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return; }
+            // ⚠ عملة الفرع دائماً — نفس قرار invoice_new.php: كل الأسعار
+            // والمبالغ (سعر الوحدة، الإجماليات، كشف الحساب) حقيقتها
+            // الوحيدة بعملة الفرع. عملة الفاتورة (sym) توثيقية بس، ما
+            // بتُستخدم هون إطلاقاً — نفس الإصلاح المطبَّق بمودالي
+            // التفاصيل والتأكيد سابقاً.
+            const fmt = n => BASE_CUR_SYM + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
+
+            // ⚠ تجميع بمفتاح السعر الافتراضي (قبل الخصم) المُعاد بناؤه —
+            // لا الصافي مباشرة (نفس إصلاح تصادم الكروبات بمودال التفاصيل).
+            const grpMap = {};
             (p.items || []).forEach(it => {
-                const key = (it.product_id || it.product_name || it.id) + '|' + it.unit_price;
-                if (!groups[key]) groups[key] = {
+                const priceBase = parseFloat(it.unit_price_base_currency ?? it.unit_price);
+                const discPct = parseFloat(it.discount_percentage) || 0;
+                const defaultPriceBase = discPct > 0 ? priceBase / (1 - discPct / 100) : priceBase;
+                const key = (it.product_id || it.product_name) + '_' + defaultPriceBase.toFixed(4);
+                if (!grpMap[key]) grpMap[key] = {
                     name: it.product_name || '—', model: it.model_number || '',
-                    colors: [], sizes: [], ageType: it.age_type || '',
-                    qty: 0, unit: parseFloat(it.unit_price), total: 0, _colorQty: {}
+                    sizes: [], colors: [], ageType: it.age_type || '',
+                    default_price: defaultPriceBase, net_price: priceBase,
+                    qty: 0, _colorQty: {}
                 };
-                // ⚠ إصلاح جوهري: نجمع مرة وحدة لكل لون فريد ثم نجمع
-                // الألوان مع بعض — نفس الشرح المفصَّل بمودال التفاصيل.
-                const colorKey3 = it.color || '_none';
-                groups[key]._colorQty[colorKey3] = parseFloat(it.quantity);
-                groups[key].qty = Object.values(groups[key]._colorQty).reduce((s, v) => s + v, 0);
-                groups[key].total += parseFloat(it.total_price);
-                if (it.color && !groups[key].colors.includes(it.color)) groups[key].colors.push(it.color);
-                if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
+                const g = grpMap[key];
+                const colorKey = it.color || '_none';
+                g._colorQty[colorKey] = parseFloat(it.quantity);
+                g.qty = Object.values(g._colorQty).reduce((s, v) => s + v, 0);
+                if (it.color && !g.colors.includes(it.color)) g.colors.push(it.color);
+                if (it.size && !g.sizes.includes(it.size)) g.sizes.push(it.size);
             });
-            let rows = '', i = 1;
-            Object.values(groups).forEach(g => {
-                rows += `<tr>
+            // ⚠ عدد القطع بالباكيت = عدد المقاسات المميّزة بالكروب (نفس
+            // اشتقاق مودال التفاصيل — العمود غير مخزَّن مباشرة بـ
+            // purchase_items). الكمية الكلية = عدد الكروبات × الباكيت،
+            // والمبلغ الإجمالي = الكمية الكلية × سعر الوحدة بعد الخصم.
+            const groups = Object.values(grpMap).map(g => {
+                const packetQty = g.sizes.length || 1;
+                const totalQty = g.qty * packetQty;
+                return { ...g, packet_qty: packetQty, total_qty: totalQty, line_total: totalQty * g.net_price };
+            });
+
+            let itemRows = '', i = 1, grandTotalQty = 0;
+            groups.forEach(g => {
+                grandTotalQty += g.total_qty;
+                itemRows += `<tr>
                 <td>${i++}</td>
                 <td>${g.name}</td>
-                <td>${formatSizeRange(g)}</td>
-                <td style="color:#2563eb">${g.colors.join(' · ') || '—'}</td>
-                <td>${g.model}</td>
+                <td dir="ltr">${g.model || '—'}</td>
+                <td dir="ltr">${formatSizeRange(g)}</td>
+                <td style="color:#16a34a">${g.colors.join(' · ') || '—'}</td>
+                <td>${fmt(g.default_price)}</td>
+                <td>${fmt(g.net_price)}</td>
                 <td>${g.qty}</td>
-                <td>${fmt(g.unit)}</td>
-                <td>${fmt(g.total)}</td>
+                <td>${g.total_qty}</td>
+                <td class="n-total">${fmt(g.line_total)}</td>
             </tr>`;
             });
-            const LOGO_URL_fatorize = '<?= BASE_PATH ?>/assets/images/fatorize.png';
-            const LOGO_URL_tenant = '<?= BASE_PATH ?>/assets/images/bayhas_logo.png';
-            // ⚠ نافذة الطباعة مستند DOM منفصل بالكامل (window.open فاضي +
-            // document.write) — ما بترث :root{--section-color} من الصفحة
-            // الأصلية تلقائياً. لازم نقرأ القيمة الفعلية المحسوبة ونحقنها
-            // صراحة، وإلا اللون بيختفي بالطباعة (var غير معرَّف = فارغ).
-            const sectionColorVal = getComputedStyle(document.documentElement).getPropertyValue('--section-color').trim() || '#dc2626';
+
+            // ⚠ المبالغ — من الحقول المخزَّنة فعلياً بعملة الفرع (قرار
+            // invoice_new.php)، بلا أي تحويل عملة إضافي هون.
+            const grossProducts = groups.reduce((s, g) => s + g.total_qty * g.default_price, 0);
+            const sumItemDiscounts = groups.reduce((s, g) => s + g.total_qty * (g.default_price - g.net_price), 0);
+            const afterItemDiscount = parseFloat(p.total_amount) || 0;
+            const generalDiscPct = afterItemDiscount > 0 ? (parseFloat(p.discount_amount || 0) / afterItemDiscount * 100) : 0;
+            const afterGeneralDisc = afterItemDiscount - parseFloat(p.discount_amount || 0);
+            const taxPct = afterGeneralDisc > 0 ? (parseFloat(p.tax_amount || 0) / afterGeneralDisc * 100) : 0;
+
+            const docTitle = 'فاتورة شراء منتجات';
+            const docColor = '#dc2626'; // أحمر = شراء منتجات (أخضر=بيع — نفس اتفاقية sales_index.php)
+
+            // ⚠ كشف حساب سريع مختصر — بعملة الفرع، من رصيد حساب ذمة
+            // المورد (الخاص لو موجود، وإلا العام) قبل/بعد هالفاتورة —
+            // راجع شرح الحساب بمعالج get_purchase بالسيرفر. آخر دفعة
+            // مخزَّنة بعملة الفاتورة (paid_amount)، نحوّلها هون لعملة
+            // الفرع بالقسمة على exchange_rate (نفس اتفاقية التحويل
+            // المعتمدة بكل الملف).
+            const balBefore = p.supplier_balance_before;
+            const balAfter = p.supplier_balance_after;
+            const invRate = parseFloat(p.exchange_rate) || 1;
+            const lastPaymentBase = (parseFloat(p.paid_amount) || 0) / invRate;
+
+            const TENANT_LOGO_URL = '<?= BASE_PATH ?>/assets/images/tenant_logo.png';
+            const FATORIZE_LOGO_URL = '<?= BASE_PATH ?>/assets/images/fatorize.png';
             const html = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8">
 <title>فاتورة شراء ${p.purchase_number}</title>
 <style>
-:root{--section-color:${sectionColorVal}}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Arial',sans-serif;font-size:9px;color:#111;padding:16px;max-width:800px;margin:0 auto}
-.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid var(--section-color)}
-.header-logo{width:80px;height:auto;object-fit:contain}
-.header-center{text-align:center;flex:1;padding:0 14px}
-.header-title{font-size:18px;font-weight:800;color:var(--section-color);margin-bottom:3px}
-.header-sub{font-size:8px;color:#64748b}
-.header-branch{text-align:right;font-size:8px;min-width:150px}
-.header-branch .br-name{font-size:11px;font-weight:800;color:var(--section-color)}
-.inv-meta{display:flex;gap:8px;margin-bottom:10px}
-.inv-meta-box{flex:1;border:1px solid #e2e8f0;border-radius:6px;padding:6px 10px;background:#f8fafc}
-.inv-meta-box h4{font-size:7.5px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;padding-bottom:2px;border-bottom:1px solid #e2e8f0}
-.meta-row{display:flex;justify-content:space-between;font-size:8px;margin-bottom:2px}
-.meta-row span:first-child{color:#64748b}
-.meta-row span:last-child{font-weight:600}
-table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:8px}
-thead th{background:var(--section-color);color:#fff;padding:5px 6px;text-align:right;font-weight:600}
-tbody td{padding:4px 6px;border-bottom:1px solid #f1f5f9}
+*{margin:0;padding:0}
+body{font-family:'Arial',sans-serif;font-size:12px;color:#111;padding:20px;margin:0 auto}
+/* ── الترويسة: ٣ أقسام ── */
+.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:3px;padding-bottom:10px;border-bottom:2px solid ${docColor}}
+.hdr-tenant{text-align:center;min-width:190px}
+.hdr-tenant img{max-height:190px;max-width:190px;object-fit:contain}
+.hdr-tenant .slogan{font-size:18px;font-weight:bold;color:${docColor};margin-top:15px}
+.hdr-title{text-align:center;flex:1;padding-top:35px}
+.hdr-title .doc-type{background:${docColor};color:#fff;font-weight:700;font-size:22px;padding:6px 22px;border-radius:12px}
+.hdr-branch{min-width:100px;font-size:10px;line-height:1.7}
+.hdr-branch .br-name{font-size:12px;font-weight:800;color:${docColor};margin-bottom:2px}
+/* ── معلومات المورد ── */
+.inv-meta{border:1px solid #e2e8f0;border-radius:6px;padding:5px 5px;margin-bottom:10px;background:#f8fafc}
+.inv-meta h4{font-size:7px;font-weight:700;color:${docColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #e2e8f0}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px 14px}
+.meta-item span:first-child{color:#64748b;font-size:7.5px;display:block}
+.meta-item span:last-child{font-weight:600;font-size:8.5px}
+/* ── جدول البنود ── */
+table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:7.5px;border:1.5px solid #1e293b}
+thead th{background:${docColor};color:#fff;padding:5px 4px;text-align:center;font-weight:600;border:1px solid #1e293b}
+tbody td{padding:4px;border:1px solid #94a3b8;text-align:center}
+tbody td:nth-child(2){text-align:right}
 tbody tr:nth-child(even) td{background:#f8fafc}
-tfoot td{background:#f1f5f9;font-weight:700;padding:4px 6px}
-.totals-wrap{display:flex;justify-content:flex-end;margin-top:6px}
-.totals{width:55%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
-.tot-row{display:flex;justify-content:space-between;padding:4px 10px;font-size:8px;border-bottom:1px solid #f1f5f9}
-.tot-row.final{background:var(--section-color);color:#fff;font-weight:700;font-size:10px;border:none}
-.footer{text-align:center;margin-top:14px;font-size:7.5px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:6px}
-@media print{@page{margin:10mm}button{display:none}}
+.n-total{font-weight:700}
+tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center;border:1px solid #94a3b8}
+/* ── قسم المبالغ ── */
+.totals-wrap{display:flex;justify-content:flex-end;margin-top:8px}
+.totals{width:60%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
+.tot-row{display:flex;justify-content:space-between;padding:4px 12px;font-size:8px;border-bottom:1px solid #f1f5f9}
+.tot-row.sub{color:#64748b}
+.tot-row.final{background:${docColor};color:#fff;font-weight:700;font-size:10px;border:none}
+/* ── الفوتر: كشف حساب مختصر ── */
+.statement{margin-top:14px;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:#f8fafc}
+.statement h4{font-size:7px;font-weight:700;color:${docColor};margin-bottom:6px}
+.statement-grid{display:flex;justify-content:space-between;text-align:center}
+.statement-grid .item span:first-child{color:#64748b;font-size:7.5px;display:block;margin-bottom:2px}
+.statement-grid .item span:last-child{font-weight:700;font-size:9px}
+.footer-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0}
+.footer-bottom .txt{font-size:7px;color:#94a3b8}
+.footer-bottom img{height:22px}
+@media print{@page{margin:8mm}button{display:none}}
 </style>
 </head>
 <body>
 
-<!-- الرأسية -->
+<!-- ══ الترويسة ══ -->
 <div class="header">
-  <img src="${LOGO_URL_fatorize}" class="header-logo" alt="Logo"
-       onerror="this.style.display='none'">
-  <img src="${LOGO_URL_tenant}" class="header-logo" alt="Logo"
-       onerror="this.style.display='none'">
-  <div class="header-center">
-    <div class="header-title">فاتورة شراء</div>
-    <div class="header-sub">Purchase Invoice</div>
+  <div class="hdr-tenant">
+    <img src="${TENANT_LOGO_URL}" alt="Logo" onerror="this.style.display='none'">
+    ${BRANCH.tenant_slogan ? `<div class="slogan">${BRANCH.tenant_slogan}</div>` : ''}
   </div>
-  <div class="header-branch">
+  <div class="hdr-title">
+    <span class="doc-type">${docTitle}</span>
+  </div>
+  <div class="hdr-branch">
     <div class="br-name">${BRANCH.name}</div>
-    ${BRANCH.city ? `<div>${BRANCH.city}${BRANCH.address ? ' - ' + BRANCH.address : ''}</div>` : ''}
+    ${BRANCH.address ? `<div>${BRANCH.address}</div>` : ''}
     ${BRANCH.phone ? `<div>هاتف: ${BRANCH.phone}</div>` : ''}
-    ${BRANCH.email ? `<div>${BRANCH.email}</div>` : ''}
     ${BRANCH.tax_number ? `<div>الرقم الضريبي: ${BRANCH.tax_number}</div>` : ''}
+    ${BRANCH.commercial_registration_number ? `<div>السجل التجاري: ${BRANCH.commercial_registration_number}</div>` : ''}
   </div>
 </div>
 
-<!-- معلومات الفاتورة والمورد -->
+<!-- ══ معلومات المورد والشحن ══ -->
 <div class="inv-meta">
-  <!-- معلومات الفاتورة -->
-  <div class="inv-meta-box">
-    <h4>معلومات الفاتورة</h4>
-    <div class="meta-row"><span>رقم الفاتورة:</span><span>${p.purchase_number}</span></div>
-    <div class="meta-row"><span>تاريخ الفاتورة:</span><span>${p.purchase_date || '—'}</span></div>
-    <div class="meta-row"><span>تاريخ الاستحقاق:</span><span>${p.due_date || '—'}</span></div>
-    <div class="meta-row"><span>حالة الفاتورة:</span><span>${(STATUS_MAP[p.status] || STATUS_MAP['draft']).label}</span></div>
-    <div class="meta-row"><span>حالة الدفع:</span><span>${(PAY_MAP[p.payment_status] || PAY_MAP['pending']).label}</span></div>
-    <div class="meta-row"><span>العملة:</span><span>${p.currency_code || 'USD'}</span></div>
-    <div class="meta-row"><span>طريقة الدفع:</span><span>${p.payment_method || '—'}</span></div>
-  </div>
-  <!-- معلومات المورد -->
-  <div class="inv-meta-box">
-    <h4>معلومات المورد</h4>
-    <div class="meta-row"><span>اسم المورد:</span><span>${p.supplier_name || '—'}</span></div>
-    ${p.supplier_phone ? `<div class="meta-row"><span>هاتف:</span><span dir="ltr">${p.supplier_phone}</span></div>` : ''}
-    ${p.supplier_email ? `<div class="meta-row"><span>بريد:</span><span dir="ltr">${p.supplier_email}</span></div>` : ''}
-    ${p.supplier_address ? `<div class="meta-row"><span>العنوان:</span><span>${p.supplier_address}</span></div>` : ''}
-    ${p.supplier_tax ? `<div class="meta-row"><span>الرقم الضريبي:</span><span>${p.supplier_tax}</span></div>` : ''}
+  <h4>معلومات المورد والشحن</h4>
+  <div class="meta-grid">
+    <div class="meta-item"><span>اسم المورد</span><span>${p.supplier_name || '—'}</span></div>
+    <div class="meta-item"><span>رقم الهاتف</span><span dir="ltr">${p.supplier_phone || '—'}</span></div>
+    <div class="meta-item"><span>رقم الفاتورة</span><span dir="ltr">${p.purchase_number}</span></div>
+    <div class="meta-item"><span>تاريخ الفاتورة</span><span>${p.purchase_date || '—'}</span></div>
+    <div class="meta-item"><span>العنوان</span><span>${p.supplier_address || '—'}</span></div>
+    <div class="meta-item"><span>الرقم الضريبي</span><span dir="ltr">${p.supplier_tax || '—'}</span></div>
+    <div class="meta-item"><span>المستودع</span><span>${p.warehouse_name || '—'}</span></div>
+    <div class="meta-item"><span>العملة</span><span>${p.currency_code || 'USD'}</span></div>
   </div>
 </div>
 
-<!-- تفاصيل المنتجات -->
+<!-- ══ بنود الفاتورة ══ -->
+<div class="inv-meta">
+<h4>بنود الفاتورة</h4>
 <table>
   <thead><tr>
-    <th>#</th><th>بيان القطعة</th><th>القياس</th>
-    <th>اللون</th><th>رقم الموديل</th>
-    <th>عدد الكروبات</th><th>سعر الوحدة</th><th>المجموع</th>
+    <th>#</th><th>بيان المنتج</th><th>رقم الموديل</th><th>النمرة/القياس</th><th>اللون</th>
+    <th>سعر الوحدة (بدون خصم)</th><th>سعر الوحدة بعد الخصم</th><th>عدد الكروبات</th>
+    <th>الكمية الكلية</th><th>المبلغ الإجمالي</th>
   </tr></thead>
-  <tbody>${rows}</tbody>
+  <tbody>${itemRows}</tbody>
   <tfoot><tr>
-    <td colspan="5" style="text-align:center">إجمالي الكميات</td>
-    <td>${Object.values(groups).reduce((s, g) => s + g.qty, 0)}</td>
-    <td></td>
+    <td colspan="8">إجمالي الكميات</td>
+    <td>${grandTotalQty}</td>
     <td>${fmt(p.final_amount)}</td>
   </tr></tfoot>
 </table>
+</div>
 
-<!-- المبالغ -->
+<!-- ══ المبالغ (عملة الفرع) ══ -->
 <div class="totals-wrap">
   <div class="totals">
-    <div class="tot-row"><span>المبلغ الصافي للمنتجات:</span><span>${fmt(p.total_amount)}</span></div>
-    <div class="tot-row"><span>نسبة الخصم:</span><span>${((parseFloat(p.discount_amount || 0) / parseFloat(p.total_amount || 1)) * 100).toFixed(5)}%</span></div>
-    <div class="tot-row"><span>قيمة الخصم:</span><span>- ${fmt(p.discount_amount)}</span></div>
-    <div class="tot-row"><span>الضريبة:</span><span>${fmt(p.tax_amount)}</span></div>
+    <div class="tot-row sub"><span>المبلغ الصافي للمنتجات (بدون أي خصم):</span><span>${fmt(grossProducts)}</span></div>
+    <div class="tot-row sub"><span>مجموع خصومات المنتجات الإفرادية:</span><span>- ${fmt(sumItemDiscounts)}</span></div>
+    <div class="tot-row"><span>الإجمالي بعد الخصم الإفرادي:</span><span>${fmt(afterItemDiscount)}</span></div>
+    <div class="tot-row sub"><span>نسبة الخصم العام:</span><span>${generalDiscPct.toFixed(2)}%</span></div>
+    <div class="tot-row"><span>الإجمالي بعد الخصم العام:</span><span>${fmt(afterGeneralDisc)}</span></div>
+    <div class="tot-row sub"><span>نسبة الضريبة:</span><span>${taxPct.toFixed(2)}%</span></div>
+    <div class="tot-row sub"><span>قيمة الضريبة:</span><span>${fmt(p.tax_amount)}</span></div>
     <div class="tot-row final"><span>المبلغ الإجمالي النهائي:</span><span>${fmt(p.final_amount)}</span></div>
   </div>
 </div>
 
-${p.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:10px"><b>ملاحظات:</b> ${p.notes}</div>` : ''}
+${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:8px"><b>ملاحظات:</b> ${p.notes}</div>` : ''}
 
-<div class="footer">نظام فاتورايز المحاسبي — ${BRANCH.name}</div>
+<!-- ══ كشف حساب سريع مختصر (بعملة الفرع) ══ -->
+<div class="statement">
+  <h4>كشف حساب المورد — لمحة سريعة (بعملة الفرع)</h4>
+  <div class="statement-grid">
+    <div class="item"><span>المستحق قبل الفاتورة</span><span>${balBefore != null ? fmt(balBefore) : '—'}</span></div>
+    <div class="item"><span>آخر دفعة</span><span style="color:#16a34a">${lastPaymentBase > 0 ? fmt(lastPaymentBase) : '—'}</span></div>
+    <div class="item"><span>الرصيد النهائي</span><span style="color:${(balAfter || 0) < 0 ? '#dc2626' : '#16a34a'}">${balAfter != null ? fmt(balAfter) : '—'}</span></div>
+  </div>
+</div>
+<div class="footer-bottom">
+  <span class="txt">نظام فاتورايز المحاسبي الإداري — Fatorize ERP System</span>
+  <img src="${FATORIZE_LOGO_URL}" alt="Fatorize" onerror="this.style.display='none'">
+</div>
+
 <script>window.onload=()=>window.print()<\/script>
 </body></html>`;
             const w = window.open('', '_blank', 'width=900,height=700');

@@ -262,12 +262,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         // أي باركود ناقص فوراً (٩ خانات، متحقَّق من تفرّده فعلياً) ──
         elseif ($act === 'get_product_barcodes') {
             $id = (int) ($_POST['product_id'] ?? 0);
-            if (!$id) throw new Exception('منتج غير محدَّد');
+            if (!$id)
+                throw new Exception('منتج غير محدَّد');
 
             $p = $pdo->prepare("SELECT name, model_number FROM `{$TP}` WHERE id=?");
             $p->execute([$id]);
             $prod = $p->fetch(PDO::FETCH_ASSOC);
-            if (!$prod) throw new Exception('المنتج غير موجود');
+            if (!$prod)
+                throw new Exception('المنتج غير موجود');
 
             $vSt = $pdo->prepare("SELECT v.id AS variant_id, v.barcode, psz.size, pcl.name AS color_name, pcl.hex_code
                 FROM `{$TV}` v
@@ -336,7 +338,7 @@ $prod_stmt = $pdo->prepare("
     LEFT JOIN `{$TC}` c ON c.id=p.category_id
     LEFT JOIN `{$TC}` pc ON pc.id=c.parent_id
     LEFT JOIN `{$TV}` v ON v.product_id=p.id AND v.is_active=1
-    LEFT JOIN `{$TWI}` wi ON wi.product_id=p.id
+    LEFT JOIN `{$TWI}` wi ON wi.variant_id=v.id
     {$where}
     GROUP BY p.id
     ORDER BY c.parent_id, p.name
@@ -770,10 +772,25 @@ $catColors = [
             color: #475569;
             font-family: monospace
         }
-        .mtbl th[onclick] { cursor: pointer; user-select: none; }
-        .mtbl th[onclick]:hover { background: #f1f5f9; }
-        .mtbl th.sort-asc::after { content: ' ▲'; font-size: .65em; }
-        .mtbl th.sort-desc::after { content: ' ▼'; font-size: .65em; }
+
+        .mtbl th[onclick] {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .mtbl th[onclick]:hover {
+            background: #f1f5f9;
+        }
+
+        .mtbl th.sort-asc::after {
+            content: ' ▲';
+            font-size: .65em;
+        }
+
+        .mtbl th.sort-desc::after {
+            content: ' ▼';
+            font-size: .65em;
+        }
     </style>
 </head>
 
@@ -822,8 +839,7 @@ $catColors = [
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link fw-600" href="reports.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
+                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-bar-chart-line me-1"></i>التقارير
                     </a>
                 </li>
@@ -1060,9 +1076,11 @@ $catColors = [
                                         <?php if ($grpCount > 0): ?>
                                             <div class="fw-600" style="color:#1e293b">
                                                 <?php if ($grpCount === 1 || abs($maxSell - $minSell) < 0.0001): ?>
-                                                    <?= number_format($minSell, 2) ?> <?= htmlspecialchars($branchCurRow['symbol']) ?>
+                                                    <?= number_format($minSell, 2) ?>
+                                                    <?= htmlspecialchars($branchCurRow['symbol']) ?>
                                                 <?php else: ?>
-                                                    <?= number_format($minSell, 2) ?> – <?= number_format($maxSell, 2) ?> <?= htmlspecialchars($branchCurRow['symbol']) ?>
+                                                    <?= number_format($minSell, 2) ?> – <?= number_format($maxSell, 2) ?>
+                                                    <?= htmlspecialchars($branchCurRow['symbol']) ?>
                                                 <?php endif; ?>
                                             </div>
                                             <?php if ($grpCount > 1): ?>
@@ -1361,7 +1379,9 @@ $catColors = [
             <div class="modal-content" style="border-radius:16px;border:none">
                 <div class="modal-header py-3 px-4 border-0"
                     style="background:linear-gradient(135deg,#6d28d9,#7c3aed);border-radius:16px 16px 0 0">
-                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-upc-scan me-1"></i>طباعة باركود — <span id="bcProdName"></span></h6>
+                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-upc-scan me-1"></i>طباعة باركود —
+                        <span id="bcProdName"></span>
+                    </h6>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body px-4 pt-3 pb-3" id="bcBody">
@@ -1369,7 +1389,8 @@ $catColors = [
                 </div>
                 <div class="modal-footer border-0 px-4 pb-3">
                     <div class="form-check ms-auto me-auto">
-                        <input class="form-check-input" type="checkbox" id="bcSelectAll" checked onchange="bcToggleAll()">
+                        <input class="form-check-input" type="checkbox" id="bcSelectAll" checked
+                            onchange="bcToggleAll()">
                         <label class="form-check-label small" for="bcSelectAll">تحديد الكل</label>
                     </div>
                     <button class="btn btn-sm btn-light" data-bs-dismiss="modal">إلغاء</button>
@@ -1389,21 +1410,81 @@ $catColors = [
     <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <style>
         @media print {
-            body * { visibility: hidden; }
-            #bcPrintArea, #bcPrintArea * { visibility: visible; }
-            #bcPrintArea { display: block !important; position: absolute; top: 0; right: 0; left: 0; }
+            body * {
+                visibility: hidden;
+            }
+
+            #bcPrintArea,
+            #bcPrintArea * {
+                visibility: visible;
+            }
+
+            #bcPrintArea {
+                display: block !important;
+                position: absolute;
+                top: 0;
+                right: 0;
+                left: 0;
+            }
         }
+
         .bc-label {
-            display: inline-block; width: 340px; padding: 6px 14px 8px; margin: 5px;
-            border: 1px solid #000; text-align: center; page-break-inside: avoid;
-            font-family: 'Cairo', sans-serif; background: #fff; box-sizing: border-box;
+            display: inline-block;
+            width: 340px;
+            padding: 6px 14px 8px;
+            margin: 5px;
+            border: 1px solid #000;
+            text-align: center;
+            page-break-inside: avoid;
+            font-family: 'Cairo', sans-serif;
+            background: #fff;
+            box-sizing: border-box;
         }
-        .bc-label .bc-logo { height: 20px; max-width: 100%; object-fit: contain; margin-bottom: 3px; }
-        .bc-label .bc-line1 { font-size: .78rem; font-weight: 700; margin-bottom: 2px; color: #000; line-height: 1.2; }
-        .bc-label .bc-line2 { font-size: .7rem; margin-bottom: 1px; color: #1a1a1a; line-height: 1.2; }
-        .bc-label .bc-line3 { font-size: .7rem; margin-bottom: 3px; color: #1a1a1a; line-height: 1.2; }
-        .bc-label svg { width: 100%; max-width: 280px; height: 34px; display: block; margin: 0 auto; }
-        .bc-label .bc-code { font-size: .74rem; font-family: 'Courier New', monospace; letter-spacing: 1.5px; margin-top: 1px; color: #000; }
+
+        .bc-label .bc-logo {
+            height: 20px;
+            max-width: 100%;
+            object-fit: contain;
+            margin-bottom: 3px;
+        }
+
+        .bc-label .bc-line1 {
+            font-size: .78rem;
+            font-weight: 700;
+            margin-bottom: 2px;
+            color: #000;
+            line-height: 1.2;
+        }
+
+        .bc-label .bc-line2 {
+            font-size: .7rem;
+            margin-bottom: 1px;
+            color: #1a1a1a;
+            line-height: 1.2;
+        }
+
+        .bc-label .bc-line3 {
+            font-size: .7rem;
+            margin-bottom: 3px;
+            color: #1a1a1a;
+            line-height: 1.2;
+        }
+
+        .bc-label svg {
+            width: 100%;
+            max-width: 280px;
+            height: 34px;
+            display: block;
+            margin: 0 auto;
+        }
+
+        .bc-label .bc-code {
+            font-size: .74rem;
+            font-family: 'Courier New', monospace;
+            letter-spacing: 1.5px;
+            margin-top: 1px;
+            color: #000;
+        }
     </style>
     <script>
         // ── فرز جدول عند النقر على رأس عمود (نمط موحّد بكل صفحات القسم) ──
@@ -1463,7 +1544,7 @@ $catColors = [
         function post(data) {
             const fd = new FormData();
             Object.entries(data).forEach(([k, v]) => fd.append(k, v ?? ''));
-            return fetch(location.href, { method: 'POST', body: fd }).then(r => r.json());
+            return fetch(location.href, {method: 'POST', body: fd}).then(r => r.json());
         }
         function toast(msg, type = 'success') {
             const t = document.createElement('div');
@@ -1492,11 +1573,11 @@ $catColors = [
             if (isFinal) {
                 // اختر مستودع نهائية
                 for (let o of whSel.options) {
-                    if (o.text.includes('النهائية')) { o.selected = true; break; }
+                    if (o.text.includes('النهائية')) {o.selected = true; break;}
                 }
             } else if (isCons) {
                 for (let o of whSel.options) {
-                    if (o.text.includes('الاستهلاكية')) { o.selected = true; break; }
+                    if (o.text.includes('الاستهلاكية')) {o.selected = true; break;}
                 }
             }
         }
@@ -1528,8 +1609,8 @@ $catColors = [
         // ── فتح تعديل ──
         function openEdit(id) {
             document.getElementById('mTitle').textContent = 'تعديل المنتج';
-            post({ _action: 'get_product', id }).then(d => {
-                if (!d.ok) { toast(d.msg, 'danger'); return; }
+            post({_action: 'get_product', id}).then(d => {
+                if (!d.ok) {toast(d.msg, 'danger'); return;}
                 const p = d.data;
                 document.getElementById('mId').value = p.id;
                 document.getElementById('mCat').value = p.category_id || '';
@@ -1551,10 +1632,10 @@ $catColors = [
 
         // ── المقاسات ──
         function addSize() {
-            mSizes.push({ size: '', selling_price: 0, full_packet_price: '', _id: Date.now() });
+            mSizes.push({size: '', selling_price: 0, full_packet_price: '', _id: Date.now()});
             renderSizes();
         }
-        function removeSize(idx) { mSizes.splice(idx, 1); renderSizes(); renderVariants(); }
+        function removeSize(idx) {mSizes.splice(idx, 1); renderSizes(); renderVariants();}
         function renderSizes() {
             const c = document.getElementById('sizesContainer');
             if (!mSizes.length) {
@@ -1580,10 +1661,10 @@ $catColors = [
         // ── المتغيرات ──
         function addVariant() {
             const sizeId = mSizes[0] ? mSizes[0].id || mSizes[0]._id : 0;
-            mVariants.push({ color: '', size_id: sizeId, barcode: '', _id: Date.now() });
+            mVariants.push({color: '', size_id: sizeId, barcode: '', _id: Date.now()});
             renderVariants();
         }
-        function removeVariant(idx) { mVariants.splice(idx, 1); renderVariants(); }
+        function removeVariant(idx) {mVariants.splice(idx, 1); renderVariants();}
         function renderVariants() {
             const c = document.getElementById('variantsContainer');
             if (!mVariants.length) {
@@ -1616,7 +1697,7 @@ $catColors = [
             const id = document.getElementById('mId').value;
             const name = document.getElementById('mName').value.trim();
             const model = document.getElementById('mModel').value.trim();
-            if (!name || !model) { toast('الاسم ورقم الموديل مطلوبان', 'danger'); return; }
+            if (!name || !model) {toast('الاسم ورقم الموديل مطلوبان', 'danger'); return;}
 
             document.getElementById('mSaveTxt').style.opacity = '0';
             document.getElementById('mSpin').style.display = 'inline-block';
@@ -1660,8 +1741,8 @@ $catColors = [
             document.getElementById('bcSelectAll').checked = true;
             _barcodeModal.show();
 
-            post({ _action: 'get_product_barcodes', product_id: productId }).then(d => {
-                if (!d.ok) { document.getElementById('bcBody').innerHTML = `<div class="alert alert-danger">${d.msg}</div>`; return; }
+            post({_action: 'get_product_barcodes', product_id: productId}).then(d => {
+                if (!d.ok) {document.getElementById('bcBody').innerHTML = `<div class="alert alert-danger">${d.msg}</div>`; return;}
                 _bcVariants = d.variants;
                 _bcProduct = d.product;
                 document.getElementById('bcProdName').textContent = `${d.product.name} — ${d.product.model_number}`;
@@ -1694,7 +1775,7 @@ $catColors = [
 
         function bcPrintSelected() {
             const selectedIdx = Array.from(document.querySelectorAll('.bc-chk:checked')).map(c => parseInt(c.dataset.idx));
-            if (!selectedIdx.length) { toast('اختر وحدة واحدة على الأقل', 'danger'); return; }
+            if (!selectedIdx.length) {toast('اختر وحدة واحدة على الأقل', 'danger'); return;}
 
             // ⚠ تجميع حسب الباركود المشترك — كل (كروب × لون) بارکود واحد،
             // فبدل ما نطبع ملصق مكرّر لكل مقاس لحاله، نطبع ملصق واحد
@@ -1703,7 +1784,7 @@ $catColors = [
             selectedIdx.forEach(i => {
                 const v = _bcVariants[i];
                 if (!byBarcode[v.barcode]) {
-                    byBarcode[v.barcode] = { barcode: v.barcode, color_name: v.color_name, sizes: [] };
+                    byBarcode[v.barcode] = {barcode: v.barcode, color_name: v.color_name, sizes: []};
                 }
                 if (v.size) byBarcode[v.barcode].sizes.push(v.size);
             });
@@ -1727,7 +1808,7 @@ $catColors = [
             }).join('');
 
             groups.forEach((g, i) => {
-                JsBarcode(`#bcSvg_${i}`, g.barcode, { format: 'CODE128', width: 1.6, height: 38, fontSize: 0, margin: 2, displayValue: false });
+                JsBarcode(`#bcSvg_${i}`, g.barcode, {format: 'CODE128', width: 1.6, height: 38, fontSize: 0, margin: 2, displayValue: false});
             });
 
             setTimeout(() => window.print(), 150);
@@ -1748,7 +1829,7 @@ $catColors = [
             const fd = new FormData();
             fd.append('_action', 'get_product_detail');
             fd.append('id', id);
-            fetch(location.href, { method: 'POST', body: fd })
+            fetch(location.href, {method: 'POST', body: fd})
                 .then(r => r.json())
                 .then(d => {
                     if (!d.ok) {
@@ -1783,7 +1864,7 @@ $catColors = [
                         const [bg, clr, br] = GRP_COLORS[i % 4];
                         const szTags = g.sizes.map(s => `<span class="sz-mini">${s}</span>`).join('');
                         const recId = g.base_currency_id ? parseInt(g.base_currency_id) : currentBaseId;
-                        const recCur = currenciesMap[recId] || { code: '', symbol: currentBaseSym };
+                        const recCur = currenciesMap[recId] || {code: '', symbol: currentBaseSym};
                         const sellVal = parseFloat(g.selling_price || 0);
                         const costVal = g.cost_price !== null ? parseFloat(g.cost_price) : null;
                         let liveHtml = '';
@@ -1802,10 +1883,10 @@ $catColors = [
                         <div style="margin-right:auto;text-align:left">
                             <div style="font-size:.8rem;font-weight:700;color:#1e293b">
                                 ${sellVal.toFixed(2)} ${recCur.symbol}
-                                <span class="text-muted" style="font-size:.62rem;font-weight:400">(${recCur.code || '—'} — كما سُجّل)</span>
+                                
                             </div>
                             ${liveHtml}
-                            ${costVal !== null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px">تكلفة: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
+                            ${costVal !== null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px"> سعر الشراء/التكلفة: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-1">${szTags}</div>
@@ -1868,8 +1949,8 @@ $catColors = [
 
         function toggleProduct(id) {
             if (!confirm('تغيير حالة المنتج؟')) return;
-            post({ _action: 'toggle_product', id }).then(d => {
-                if (d.ok) { toast('تم تغيير الحالة'); setTimeout(() => location.reload(), 1000); }
+            post({_action: 'toggle_product', id}).then(d => {
+                if (d.ok) {toast('تم تغيير الحالة'); setTimeout(() => location.reload(), 1000);}
                 else toast(d.msg, 'danger');
             });
         }
@@ -1879,8 +1960,8 @@ $catColors = [
             document.getElementById('vTitle').textContent = name;
             document.getElementById('vBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border"></span></div>';
             variantModal.show();
-            post({ _action: 'get_product', id }).then(d => {
-                if (!d.ok) { document.getElementById('vBody').innerHTML = `<div class="text-danger">${d.msg}</div>`; return; }
+            post({_action: 'get_product', id}).then(d => {
+                if (!d.ok) {document.getElementById('vBody').innerHTML = `<div class="text-danger">${d.msg}</div>`; return;}
                 const p = d.data;
                 if (!p.variants || !p.variants.length) {
                     document.getElementById('vBody').innerHTML = '<div class="text-muted text-center py-3">لا توجد متغيرات مضافة بعد</div>';

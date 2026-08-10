@@ -1,22 +1,3 @@
--- --------------------------------------------------------
--- Host:                         127.0.0.1
--- Server version:               8.4.3 - MySQL Community Server - GPL
--- Server OS:                    Win64
--- HeidiSQL Version:             12.8.0.6908
--- --------------------------------------------------------
-
-/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
-/*!40101 SET NAMES utf8 */;
-/*!50503 SET NAMES utf8mb4 */;
-/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
-/*!40103 SET TIME_ZONE='+00:00' */;
-/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
-/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
-/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-
-
-
--- Dumping structure for table bayhas_local.account_charts_ret
 CREATE TABLE IF NOT EXISTS `account_charts_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
   `code` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -215,11 +196,10 @@ CREATE TABLE IF NOT EXISTS `consumable_categories_ret` (
 
 -- Dumping data for table bayhas_local.consumable_categories_ret: ~5 rows (approximately)
 INSERT INTO `consumable_categories_ret` (`id`, `name`, `icon`, `color`, `bg_color`, `is_active`, `sort_order`, `created_by`, `created_at`) VALUES
-	(1, 'مرافق', 'bi-lightning-charge', '#0891b2', '#e0f7fa', 1, 10, NULL, '2026-07-18 00:47:54'),
+	(1, 'مواد غذائية', 'bi-lightning-charge', '#0891b2', '#e0f7fa', 1, 10, NULL, '2026-07-18 00:47:54'),
 	(2, 'قرطاسية', 'bi-pencil', '#7c3aed', '#f3e8ff', 1, 20, NULL, '2026-07-18 00:47:54'),
-	(3, 'مأكولات', 'bi-cup-hot', '#d97706', '#fef3c7', 1, 30, NULL, '2026-07-18 00:47:54'),
-	(4, 'صيانة', 'bi-tools', '#dc2626', '#fee2e2', 1, 40, NULL, '2026-07-18 00:47:54'),
-	(5, 'أخرى', 'bi-three-dots', '#64748b', '#f1f5f9', 1, 999, NULL, '2026-07-18 00:47:54');
+	(3, 'مكتبيات', 'bi-cup-hot', '#d97706', '#fef3c7', 1, 30, NULL, '2026-07-18 00:47:54'),
+	(4, 'صيانة', 'bi-tools', '#dc2626', '#fee2e2', 1, 40, NULL, '2026-07-18 00:47:54');
 
 -- Dumping structure for table bayhas_local.consumable_departments_ret
 CREATE TABLE IF NOT EXISTS `consumable_departments_ret` (
@@ -231,10 +211,7 @@ CREATE TABLE IF NOT EXISTS `consumable_departments_ret` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_name` (`name`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أقسام الجهات المستلمة للمستهلكات';
-
--- Dumping data for table bayhas_local.consumable_departments_ret: ~1 rows (approximately)
-INSERT INTO `consumable_departments_ret` (`id`, `name`, `is_active`, `created_by`, `created_at`) VALUES
-	(2, 'مستودع أبو رمضان', 1, 1, '2026-07-20 06:19:24');
+;
 
 -- Dumping structure for table bayhas_local.consumable_issues_ret
 CREATE TABLE IF NOT EXISTS `consumable_issues_ret` (
@@ -259,9 +236,6 @@ CREATE TABLE IF NOT EXISTS `consumable_issues_ret` (
   CONSTRAINT `fk_ci_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أوامر الصرف الداخلي للمستهلكات';
 
--- Dumping data for table bayhas_local.consumable_issues_ret: ~1 rows (approximately)
-INSERT INTO `consumable_issues_ret` (`id`, `issue_no`, `warehouse_id`, `department`, `department_id`, `issue_date`, `status`, `journal_entry_id`, `is_posted`, `notes`, `created_by`, `created_at`) VALUES
-	(12, 'ISS-2026-0001', 3, NULL, 2, '2026-08-04', 'confirmed', NULL, 1, '', 1, '2026-08-04 11:13:37');
 
 -- Dumping structure for table bayhas_local.consumable_issue_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_issue_items_ret` (
@@ -287,11 +261,6 @@ CREATE TABLE IF NOT EXISTS `consumable_issue_items_ret` (
   CONSTRAINT `fk_cii_packaging_ret` FOREIGN KEY (`packaging_id`) REFERENCES `consumable_item_packagings_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل أوامر الصرف الداخلي';
 
--- Dumping data for table bayhas_local.consumable_issue_items_ret: ~3 rows (approximately)
-INSERT INTO `consumable_issue_items_ret` (`id`, `issue_id`, `item_id`, `packaging_id`, `packaging_qty`, `quantity`, `returned_qty`, `unit_cost_base`, `total_cost_base`, `movement_id`, `notes`) VALUES
-	(16, 12, 11, 16, 0.5000, 500.000, 0.000, 0.0001, 0.0500, 59, ''),
-	(17, 12, 12, 17, 0.5000, 250.000, 0.000, 0.0074, 1.8500, 60, ''),
-	(18, 12, 13, 19, 0.5000, 100.000, 0.000, 0.0091, 0.9100, 61, '');
 
 -- Dumping structure for table bayhas_local.consumable_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_items_ret` (
@@ -319,15 +288,6 @@ CREATE TABLE IF NOT EXISTS `consumable_items_ret` (
   CONSTRAINT `fk_consumable_items_unit_ret` FOREIGN KEY (`unit_id`) REFERENCES `consumable_units_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستهلكات';
 
--- Dumping data for table bayhas_local.consumable_items_ret: ~6 rows (approximately)
-INSERT INTO `consumable_items_ret` (`id`, `name`, `category`, `category_id`, `unit`, `unit_id`, `estimated_cost`, `last_purchase_price_base`, `last_purchase_date`, `currency_id`, `notes`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES
-	(11, 'سكر', 'other', 3, 'قطعة', 3, 0.00100000, 0.0001, '2026-08-04', 1, '', 1, 1, '2026-07-18 12:20:22', '2026-08-04 11:12:23'),
-	(12, 'شاي', 'other', 3, 'قطعة', 3, 0.00100000, 0.0074, '2026-08-04', 1, '', 1, 1, '2026-07-18 12:20:38', '2026-08-04 11:12:23'),
-	(13, 'قهوة', 'other', 3, 'قطعة', 3, 0.00100000, 0.0091, '2026-08-04', 1, '', 1, 1, '2026-07-18 12:20:51', '2026-08-04 11:12:23'),
-	(14, 'ورق A4', 'other', 2, 'قطعة', 26, 0.00100000, NULL, NULL, 1, '', 1, 1, '2026-07-18 12:21:14', '2026-07-18 13:05:26'),
-	(15, 'قلم', 'other', 2, 'قطعة', 1, 0.10000000, NULL, NULL, 1, '', 1, 1, '2026-07-18 12:21:30', '2026-07-18 13:07:20'),
-	(16, 'زهورات', 'other', 3, 'قطعة', 3, 0.00100000, 0.0010, '2026-07-22', 1, '', 1, 1, '2026-07-18 13:06:57', '2026-07-22 11:02:10');
-
 -- Dumping structure for table bayhas_local.consumable_item_packagings_ret
 CREATE TABLE IF NOT EXISTS `consumable_item_packagings_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -342,17 +302,6 @@ CREATE TABLE IF NOT EXISTS `consumable_item_packagings_ret` (
   CONSTRAINT `fk_ci_packagings_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=22 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='عبوات المستهلكات (عوامل التحويل)';
 
--- Dumping data for table bayhas_local.consumable_item_packagings_ret: ~9 rows (approximately)
-INSERT INTO `consumable_item_packagings_ret` (`id`, `item_id`, `name`, `qty_per_package`, `is_active`, `created_by`, `created_at`) VALUES
-	(13, 15, 'كرتونة', 16.0000, 1, 1, '2026-07-18 09:21:43'),
-	(14, 14, 'غرام', 1.0000, 1, 1, '2026-07-18 09:26:22'),
-	(15, 14, 'ماعون', 500.0000, 1, 1, '2026-07-18 09:26:30'),
-	(16, 11, 'كيلو', 1000.0000, 1, 1, '2026-07-18 09:26:46'),
-	(17, 12, 'علبة شاي', 500.0000, 1, 1, '2026-07-18 09:26:59'),
-	(18, 12, 'علبة شاي كبيرة', 1000.0000, 1, 1, '2026-07-18 09:27:09'),
-	(19, 13, 'وقية', 200.0000, 1, 1, '2026-07-18 09:27:27'),
-	(20, 13, 'ربع كيلو', 250.0000, 1, 1, '2026-07-18 09:27:33'),
-	(21, 13, 'علبة نص كيلو', 500.0000, 1, 1, '2026-07-18 09:27:42');
 
 -- Dumping structure for table bayhas_local.consumable_movements_ret
 CREATE TABLE IF NOT EXISTS `consumable_movements_ret` (
@@ -389,14 +338,6 @@ CREATE TABLE IF NOT EXISTS `consumable_movements_ret` (
   CONSTRAINT `fk_cm_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=62 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='حركات مخزون المستهلكات — مستقلة عن الفواتير';
 
--- Dumping data for table bayhas_local.consumable_movements_ret: ~5 rows (approximately)
-INSERT INTO `consumable_movements_ret` (`id`, `movement_no`, `item_id`, `warehouse_id`, `movement_type`, `direction`, `quantity`, `unit_cost_base`, `total_cost_base`, `qty_before`, `qty_after`, `reference_type`, `reference_id`, `to_warehouse_id`, `journal_entry_id`, `is_posted`, `movement_date`, `notes`, `created_by`, `created_at`) VALUES
-	(56, 'MOV-2026-00001', 11, 3, 'receive', 'in', 1000.000, 0.0001, 0.1000, 0.000, 1000.000, 'purchase', 16, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:12:19'),
-	(57, 'MOV-2026-00002', 12, 3, 'receive', 'in', 500.000, 0.0074, 3.7000, 0.000, 500.000, 'purchase', 16, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:12:19'),
-	(58, 'MOV-2026-00003', 13, 3, 'receive', 'in', 200.000, 0.0091, 1.8200, 0.000, 200.000, 'purchase', 16, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:12:19'),
-	(59, 'MOV-2026-00004', 11, 3, 'issue', 'out', 500.000, 0.0001, 0.0500, 1000.000, 500.000, 'issue', 12, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:13:41'),
-	(60, 'MOV-2026-00005', 12, 3, 'issue', 'out', 250.000, 0.0074, 1.8500, 500.000, 250.000, 'issue', 12, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:13:41'),
-	(61, 'MOV-2026-00006', 13, 3, 'issue', 'out', 100.000, 0.0091, 0.9100, 200.000, 100.000, 'issue', 12, NULL, NULL, 1, '2026-08-04', NULL, 1, '2026-08-04 11:13:41');
 
 -- Dumping structure for table bayhas_local.consumable_purchases_ret
 CREATE TABLE IF NOT EXISTS `consumable_purchases_ret` (
@@ -442,10 +383,6 @@ CREATE TABLE IF NOT EXISTS `consumable_purchases_ret` (
   CONSTRAINT `fk_cp_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='فواتير شراء المستهلكات — رأس الفاتورة';
 
--- Dumping data for table bayhas_local.consumable_purchases_ret: ~1 rows (approximately)
-INSERT INTO `consumable_purchases_ret` (`id`, `invoice_no`, `supplier_ref`, `supplier_id`, `warehouse_id`, `invoice_date`, `due_date`, `currency`, `exchange_rate`, `subtotal_orig`, `subtotal_base`, `discount_pct`, `discount_base`, `discount_orig`, `tax_pct`, `tax_base`, `tax_orig`, `total_base`, `total_orig`, `paid_base`, `paid_orig`, `balance_base`, `balance_orig`, `status`, `payment_method`, `journal_entry_id`, `is_posted`, `notes`, `created_by`, `updated_by`, `created_at`, `updated_at`) VALUES
-	(16, 'PUR-2026-0001', '', 6, 3, '2026-08-04', NULL, 'USD', 1.000000, 5.6200, 5.6200, 0.00, 0.0000, 0.0000, 0.00, 0.0000, 0.0000, 5.6200, 5.6200, 0.0000, 0.0000, 5.6200, 5.6200, 'confirmed', 'deferred', NULL, 0, '', 1, 1, '2026-08-04 11:12:19', '2026-08-04 11:12:23');
-
 -- Dumping structure for table bayhas_local.consumable_purchase_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_purchase_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -471,12 +408,6 @@ CREATE TABLE IF NOT EXISTS `consumable_purchase_items_ret` (
   CONSTRAINT `fk_cpi_packaging_ret` FOREIGN KEY (`packaging_id`) REFERENCES `consumable_item_packagings_ret` (`id`),
   CONSTRAINT `fk_cpi_purchase` FOREIGN KEY (`purchase_id`) REFERENCES `consumable_purchases_ret` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=38 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل فواتير شراء المستهلكات';
-
--- Dumping data for table bayhas_local.consumable_purchase_items_ret: ~3 rows (approximately)
-INSERT INTO `consumable_purchase_items_ret` (`id`, `purchase_id`, `item_id`, `packaging_id`, `packaging_qty`, `quantity`, `unit_price_orig`, `unit_price_base`, `total_orig`, `discount_pct`, `total_base`, `movement_id`, `notes`) VALUES
-	(35, 16, 11, 16, 1.0000, 1000.000, 0.0001, 0.0001, 0.1000, 0.00, 0.1000, 56, NULL),
-	(36, 16, 12, 17, 1.0000, 500.000, 0.0074, 0.0074, 3.7000, 0.00, 3.7000, 57, NULL),
-	(37, 16, 13, 19, 1.0000, 200.000, 0.0091, 0.0091, 1.8200, 0.00, 1.8200, 58, NULL);
 
 -- Dumping structure for table bayhas_local.consumable_returns_ret
 CREATE TABLE IF NOT EXISTS `consumable_returns_ret` (
@@ -534,12 +465,6 @@ CREATE TABLE IF NOT EXISTS `consumable_stock_ret` (
   CONSTRAINT `fk_cs_item` FOREIGN KEY (`item_id`) REFERENCES `consumable_items_ret` (`id`),
   CONSTRAINT `fk_cs_warehouse` FOREIGN KEY (`warehouse_id`) REFERENCES `warehouses_ret` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=60 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أرصدة المستهلكات لكل مستودع';
-
--- Dumping data for table bayhas_local.consumable_stock_ret: ~3 rows (approximately)
-INSERT INTO `consumable_stock_ret` (`id`, `item_id`, `warehouse_id`, `quantity`, `min_quantity`, `avg_cost_base`, `last_movement`, `updated_at`) VALUES
-	(57, 11, 3, 500.000, 0.000, 0.0001, '2026-08-04 11:13:41', '2026-08-04 11:13:41'),
-	(58, 12, 3, 250.000, 0.000, 0.0074, '2026-08-04 11:13:41', '2026-08-04 11:13:41'),
-	(59, 13, 3, 100.000, 0.000, 0.0091, '2026-08-04 11:13:41', '2026-08-04 11:13:41');
 
 -- Dumping structure for table bayhas_local.consumable_transfers_ret
 CREATE TABLE IF NOT EXISTS `consumable_transfers_ret` (
@@ -625,8 +550,7 @@ INSERT INTO `currencies` (`id`, `code`, `name`, `symbol`, `exchange_rate`, `is_b
 	(1, 'USD', 'دولار أمريكي', '$', 1.0000, 1, 'active', NULL),
 	(2, 'TRY', 'ليرة تركية', '₺', 47.4300, 0, 'active', '2026-07-30 06:44:30'),
 	(3, 'EUR', 'يورو', '€', 0.8760, 0, 'active', '2026-07-30 06:44:30'),
-	(4, 'SYP', 'ليرة سورية', 'ل.س', 121.9600, 0, 'active', '2026-07-30 06:44:30'),
-	(5, 'SAR', 'ريال سعودي', 'ل.س', 3.7500, 0, 'active', '2026-08-04 18:38:36');
+	(4, 'SYP', 'ليرة سورية', 'ل.س', 121.9600, 0, 'active', '2026-07-30 06:44:30');
 
 -- Dumping structure for table bayhas_local.customers_ret
 CREATE TABLE IF NOT EXISTS `customers_ret` (
@@ -653,18 +577,6 @@ CREATE TABLE IF NOT EXISTS `customers_ret` (
   KEY `idx_status` (`status`),
   KEY `idx_account_id` (`account_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Dumping data for table bayhas_local.customers_ret: ~9 rows (approximately)
-INSERT INTO `customers_ret` (`id`, `name`, `contact_person`, `type`, `phone`, `email`, `address`, `tax_number`, `status`, `shipping_company`, `shipping_code`, `credit_limit`, `discount_percentage`, `notes`, `account_id`, `prepaid_account_id`, `created_at`, `updated_at`, `branch_relation`) VALUES
-	(1, 'ملبوسات الحسن', 'منجد الحسن', 'company', '0992158951', 'monjed.alhasan.tr@gmail.com', 'سوريا حلب عفرين', '', 'active', '', '', 0.00, 0.00, '', 1061, 1063, '2026-06-20 09:17:24', '2026-08-03 17:13:10', 'external'),
-	(2, 'السنافر', 'نور صباغ', 'company', '', '', 'حلب', '', 'active', '', '', 0.00, 0.00, NULL, 1043, 1044, '2026-08-03 09:07:12', '2026-08-03 09:13:02', 'external'),
-	(3, 'cvxcvxv', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1047, 1048, '2026-08-03 16:33:34', NULL, 'external'),
-	(4, 'retetetr', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1049, 1050, '2026-08-03 16:33:38', NULL, 'external'),
-	(5, 'dgdg', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1051, 1052, '2026-08-03 16:33:42', NULL, 'external'),
-	(6, '324dvx', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1053, 1054, '2026-08-03 16:33:47', '2026-08-03 17:10:30', 'external'),
-	(7, 'werdcv', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1055, 1056, '2026-08-03 16:33:52', NULL, 'external'),
-	(8, '332cxvcxv', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1057, 1058, '2026-08-03 16:33:56', NULL, 'external'),
-	(9, 'cxcx234', '', 'individual', '', '', '', '', 'active', '', '', 0.00, 0.00, '', 1059, 1060, '2026-08-03 16:34:00', NULL, 'external');
 
 -- Dumping structure for table bayhas_local.exchange_rates_ret
 CREATE TABLE IF NOT EXISTS `exchange_rates_ret` (
@@ -705,11 +617,6 @@ CREATE TABLE IF NOT EXISTS `expenses_ret` (
   KEY `idx_expense_date` (`expense_date`),
   KEY `idx_expense_acct` (`expense_account_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Dumping data for table bayhas_local.expenses_ret: ~2 rows (approximately)
-INSERT INTO `expenses_ret` (`id`, `expense_account_id`, `cash_account_id`, `amount_original`, `currency`, `exchange_rate`, `amount_base`, `description`, `expense_date`, `journal_entry_id`, `status`, `cancelled_at`, `cancelled_by`, `user_id`, `created_at`, `updated_at`) VALUES
-	(4, 511, 1001, 250.0000, 'USD', 1.000000, 250.0000, 'فاتورة مي لشهر 6', '2026-07-30', 175, 'cancelled', '2026-07-30 15:20:58', 1, 1, '2026-07-30 15:20:26', '2026-07-30 15:20:58'),
-	(5, 512, 1001, 200.0000, 'USD', 1.000000, 200.0000, 'فاتورة كهربا لشهر 6', '2026-07-01', 177, 'active', NULL, NULL, 1, '2026-07-30 15:21:23', NULL);
 
 -- Dumping structure for table bayhas_local.fixed_fees_ret
 CREATE TABLE IF NOT EXISTS `fixed_fees_ret` (
@@ -815,13 +722,6 @@ CREATE TABLE IF NOT EXISTS `hr_employees_ret` (
   CONSTRAINT `hr_employees_ret_chk_1` CHECK (json_valid(`work_schedule`))
 ) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table bayhas_local.hr_employees_ret: ~4 rows (approximately)
-INSERT INTO `hr_employees_ret` (`id`, `full_name`, `position`, `department`, `phone`, `email`, `hire_date`, `salary_type`, `basic_salary`, `currency_id`, `bank_account`, `notes`, `monday_from`, `monday_to`, `tuesday_from`, `tuesday_to`, `wednesday_from`, `wednesday_to`, `thursday_from`, `thursday_to`, `friday_from`, `friday_to`, `saturday_from`, `saturday_to`, `sunday_from`, `sunday_to`, `work_schedule`, `overtime_multiplier`, `status`, `created_by`, `created_at`, `updated_at`) VALUES
-	(10, 'منجد', 'مدير التسويق الإلكتروني', 'sales', '', '', '2026-01-02', 'weekly', 1150000.00, 4, '', '', 8, 19, 8, 19, 8, 19, 8, 18, NULL, NULL, 8, 19, 8, 19, NULL, 1.5, 'active', 1, '2026-06-08 10:51:30', NULL),
-	(11, 'محمود المسلم', 'مبيعات', 'sales', '', '', '2026-03-01', 'monthly', 700.00, 1, '', '', 9, 18, 9, 18, 9, 18, 9, 18, NULL, NULL, 9, 18, 9, 18, NULL, 1.5, 'active', 1, '2026-06-08 12:42:04', NULL),
-	(12, 'أبو يوسف', 'محاسب', 'accounting', '', '', '2026-05-04', 'weekly', 2000000.00, 4, '', '', 8, 18, 8, 18, 8, 18, 8, 18, NULL, NULL, 8, 18, 8, 18, NULL, 1.5, 'active', 1, '2026-06-09 09:18:50', '2026-06-09 09:21:42'),
-	(13, 'أبو يوسف سعودي', 'محاسب', 'accounting', '', '', '2026-06-01', 'weekly', 150.00, 5, '', '', 8, 18, 8, 18, 8, 18, 8, 18, NULL, NULL, 8, 18, 8, 18, NULL, 2.5, 'active', 1, '2026-06-24 14:00:28', '2026-06-24 14:02:09');
-
 -- Dumping structure for table bayhas_local.hr_loans_ret
 CREATE TABLE IF NOT EXISTS `hr_loans_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -875,10 +775,6 @@ CREATE TABLE IF NOT EXISTS `hr_payroll_ret` (
   KEY `idx_month` (`payroll_month`),
   KEY `idx_status` (`payment_status`)
 ) ENGINE=InnoDB AUTO_INCREMENT=73 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Dumping data for table bayhas_local.hr_payroll_ret: ~1 rows (approximately)
-INSERT INTO `hr_payroll_ret` (`id`, `employee_id`, `payroll_month`, `week_number`, `period_from`, `period_to`, `basic_salary`, `working_days`, `working_hours`, `overtime_hours`, `overtime_amount`, `bonus_total`, `loan_deduction`, `other_deductions`, `net_salary`, `currency_id`, `payment_status`, `payment_date`, `payment_method`, `notes`, `created_by`, `created_at`, `journal_entry_id`, `cash_account_id`, `exchange_rate`) VALUES
-	(72, 13, '2026-06-01', 1, '2026-06-01', '2026-06-07', 50.00, 2, 16.00, 0.00, 0.00, 0.00, 0.00, 0.00, 50.00, 5, 'paid', '2026-06-25', 'cash', '', 1, '2026-06-25 05:49:50', 30, 1015, 1.000000);
 
 -- Dumping structure for table bayhas_local.hr_promotions_ret
 CREATE TABLE IF NOT EXISTS `hr_promotions_ret` (
@@ -977,11 +873,6 @@ CREATE TABLE IF NOT EXISTS `inventory_movements_ret` (
   KEY `idx_warehouse_id` (`warehouse_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table bayhas_local.inventory_movements_ret: ~0 rows (approximately)
-INSERT INTO `inventory_movements_ret` (`id`, `movement_number`, `movement_type`, `warehouse_id`, `items_count`, `total_quantity`, `total_value_base`, `reference_type`, `reference_id`, `reference_number`, `notes`, `created_by`, `created_at`) VALUES
-	(1, 'MOV-IN-20260808-00001', 'in', 1, 12, 12.00, 91.00, 'purchase', 1, 'ALP-PUR-2026-00001', NULL, 1, '2026-08-08 02:28:06'),
-	(2, 'MOV-IN-20260809-00002', 'in', 1, 24, 24.00, 194.00, 'purchase', 2, 'ALP-PUR-2026-00002', NULL, 1, '2026-08-09 11:33:07');
-
 -- Dumping structure for table bayhas_local.inventory_movement_details_ret
 CREATE TABLE IF NOT EXISTS `inventory_movement_details_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -1002,9 +893,6 @@ CREATE TABLE IF NOT EXISTS `inventory_movement_details_ret` (
   CONSTRAINT `fk_imd_movement` FOREIGN KEY (`movement_id`) REFERENCES `inventory_movements_ret` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=37 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table bayhas_local.inventory_movement_details_ret: ~12 rows (approximately)
-INSERT INTO `inventory_movement_details_ret` (`id`, `movement_id`, `variant_id`, `product_id`, `quantity`, `unit_price`, `cost_price`, `total_value`, `balance_before`, `balance_after`, `notes`, `created_at`) VALUES
-
 
 -- Dumping structure for table bayhas_local.invoice_account_settings_ret
 CREATE TABLE IF NOT EXISTS `invoice_account_settings_ret` (
@@ -1020,44 +908,6 @@ CREATE TABLE IF NOT EXISTS `invoice_account_settings_ret` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `setting_key` (`setting_key`)
 ) ENGINE=InnoDB AUTO_INCREMENT=161 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Dumping data for table bayhas_local.invoice_account_settings_ret: ~34 rows (approximately)
-INSERT INTO `invoice_account_settings_ret` (`id`, `setting_key`, `account_id`, `account_code`, `account_name`, `description`, `created_by`, `created_at`, `updated_at`) VALUES
-	(1, 'sales_revenue', 40, '4.1', 'إيرادات المبيعات', 'إيرادات فواتير البيع', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(2, 'customer_receivable', 102, '1.1.3', 'ذمم العملاء', 'ذمم العملاء', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(3, 'cogs', 500, '5.1.1', 'تكلفة البضاعة المباعة', 'تكلفة البضاعة المباعة', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(4, 'finished_inventory', 104, '1.1.5', 'المخزون', 'مخزون المنتجات النهائية', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(5, 'supplier_payable', 200, '2.1.1', 'ذمم الموردين', 'ذمم موردي المنتجات', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(6, 'consumable_expense', 510, '5.2.1', 'مصاريف المستهلكات', 'مصاريف المستهلكات', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(7, 'consumable_inventory', 105, '1.1.6', 'مخزون المستهلكات', 'مخزون المستهلكات', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(8, 'consumable_supplier', 200, '2.1.1', 'ذمم الموردين', 'ذمم موردي المستهلكات', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(9, 'salary_expense', 520, '5.3.1', 'رواتب وأجور', 'مصاريف الرواتب', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(10, 'salary_payable', 201, '2.1.2', 'مستحقات الموظفين', 'مستحقات الموظفين', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(11, 'employee_advance', 103, '1.1.4', 'سلف الموظفين', 'سلف الموظفين', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(12, 'cash_usd', 1001, '1.1.1.001', 'صندوق دولار أمريكي', 'الصندوق الرئيسي USD', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(13, 'cash_syp', 1002, '1.1.1.002', 'صندوق ليرة سورية', 'صندوق SYP', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(14, 'cash_try', 1003, '1.1.1.003', 'صندوق ليرة تركية', 'صندوق TRY', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(15, 'cash_eur', 1023, '1.1.1.005', 'صندوق اليورو', 'صندوق EUR', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(16, 'bank_usd', 1011, '1.1.2.001', 'بنك دولار أمريكي', 'البنك الرئيسي USD', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(17, 'bank_syp', 1012, '1.1.2.002', 'بنك ليرة سورية', 'بنك SYP', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(18, 'bank_try', 1013, '1.1.2.003', 'بنك ليرة تركية', 'بنك TRY', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(19, 'bank_eur', 1014, '1.1.2.004', 'بنك يورو', 'بنك EUR', NULL, '2026-06-24 12:50:38', '2026-07-30 03:21:34'),
-	(20, 'forex_gain_loss', 532, '5.4.3', 'فروقات أسعار صرف', 'فروقات أسعار الصرف', NULL, '2026-06-24 12:50:38', NULL),
-	(21, 'cash_sar', 1015, '1.1.1.004', 'صندوق ريال سعودي', 'صندوق SAR', NULL, '2026-06-24 13:59:40', '2026-07-30 03:21:34'),
-	(22, 'bank_sar', 1016, '1.1.2.005', 'بنك ريال سعودي', 'بنك SAR', NULL, '2026-06-24 13:59:40', '2026-07-30 03:21:34'),
-	(34, 'shipping_payable', 200, '2.1.1', 'ذمم الموردين', 'shipping_payable', 1, '2026-06-28 10:02:05', '2026-07-30 03:21:34'),
-	(35, 'shipping_advance', 1017, '1.1.7', 'دفعات مقدمة للموردين', 'shipping_advance', 1, '2026-06-28 10:02:05', '2026-07-30 03:21:34'),
-	(36, 'shipping_expense', 514, '5.2.5', 'شحن ونقل', 'shipping_expense', 1, '2026-06-28 10:02:05', '2026-07-30 03:21:34'),
-	(54, 'tax_input_recoverable', 1020, '1.1.8', 'ضريبة مشتريات قابلة للاسترداد', 'tax_input_recoverable', 1, '2026-07-19 12:39:50', '2026-07-30 03:21:34'),
-	(70, 'purchase_discount', 1021, '4.2.1', 'خصم مشتريات تجاري مكتسب', 'خصم مشتريات تجاري مكتسب', 1, '2026-07-23 13:32:49', NULL),
-	(71, 'settlement_discount_income', 1022, '4.2.2', 'إيراد خصم تعجيل الدفع', 'إيراد خصم تعجيل الدفع', 1, '2026-07-23 13:32:49', NULL),
-	(97, 'sales_tax_payable', 1028, '2.1.4', 'ضريبة مبيعات مستحقة', 'ضريبة مبيعات مستحقة على العملاء', 1, '2026-07-27 11:21:50', '2026-07-30 03:21:34'),
-	(98, 'sales_discount_given', 1029, '5.2.6', 'خصومات مبيعات ممنوحة', 'خصومات ممنوحة على فواتير البيع', 1, '2026-07-27 11:21:51', '2026-07-30 03:21:34'),
-	(99, 'settlement_discount_expense', 1030, '5.2.7', 'خصم تعجيل استلام من العملاء المبيعات', 'خصم تعجيل استلام من العملاء المبيعات', 1, '2026-07-27 11:21:51', '2026-07-30 03:21:34'),
-	(102, 'customer_advance', 1031, '2.1.5', 'الدفعات المقدمة من العملاء', 'customer_advance', 1, '2026-07-28 10:14:36', '2026-07-30 03:21:34'),
-	(148, 'fx_gain', 1032, '4.2.3', 'أرباح فروقات الصرف', 'أرباح فروقات الصرف', 1, '2026-07-30 03:21:34', NULL),
-	(149, 'fx_loss', 532, '5.4.3', 'فروقات أسعار صرف', 'خسائر فروقات الصرف', 1, '2026-07-30 03:21:34', NULL),
-	(160, 'supplier_advance', 1017, NULL, NULL, NULL, NULL, '2026-08-03 09:09:24', NULL);
 
 -- Dumping structure for table bayhas_local.journal_entries_ret
 CREATE TABLE IF NOT EXISTS `journal_entries_ret` (
@@ -1291,7 +1141,8 @@ CREATE TABLE IF NOT EXISTS `product_categories_ret` (
 INSERT INTO `product_categories_ret` (`id`, `name`, `parent_id`, `description`, `is_active`, `created_at`) VALUES
 	(1, 'بنطلون صبياني', 1, 'بنطلون صبياني', 1, '2026-06-11 11:44:44'),
 	(2, 'بنطلون بناتي', 2, 'بنطلون بناتي', 1, '2026-06-11 11:44:44'),
-	(3, 'طقم بناتي', 2, 'طقم قطعتين / طقم ثلاث قطع / توينز', 1, '2026-06-11 11:44:44');
+	(3, 'طقم بناتي', 2, 'طقم قطعتين / طقم ثلاث قطع / توينز', 1, '2026-06-11 11:44:44'),
+  (4, 'طقم صبياني', 1,'طقم قطعتين / طقم ثلاث قطع / توينز', 1, '2026-06-11 11:44:44');
 
 -- Dumping structure for table bayhas_local.product_colors_ret
 CREATE TABLE IF NOT EXISTS `product_colors_ret` (
@@ -1797,10 +1648,6 @@ CREATE TABLE IF NOT EXISTS `shipping_carriers` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table bayhas_local.shipping_carriers: ~1 rows (approximately)
-INSERT INTO `shipping_carriers` (`id`, `name`, `contact_person`, `phone`, `mobile`, `email`, `address`, `city`, `country`, `website`, `tax_number`, `account_id`, `payable_account_id`, `notes`, `status`, `created_by`, `created_at`, `updated_at`) VALUES
-	(1, 'نهر العطاء', 'منجد الحسن', '0992158951', '', '', '', 'حلب', 'سوريا', '', '', 1019, 1018, '', 'active', 1, '2026-06-28 10:02:43', '0000-00-00 00:00:00');
-
 -- Dumping structure for table bayhas_local.tax_types_ret
 CREATE TABLE IF NOT EXISTS `tax_types_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -1973,6 +1820,7 @@ CREATE TABLE IF NOT EXISTS `warehouses_ret` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `code` (`code`)
+    CONSTRAINT `fk_manager_id` FOREIGN KEY (`manager_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table bayhas_local.warehouses_ret: ~2 rows (approximately)
