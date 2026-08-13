@@ -28,7 +28,19 @@ $TPI = "purchase_items_{$TS}";
 $TR = "purchase_returns_{$TS}";
 $TSP = "product_suppliers_{$TS}";
 $TPROD = "products_{$TS}";
+$TV = "product_variants_{$TS}";
+$TPSZ = "product_sizes_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
+
+// ⚠ عملة الفرع الأساسية — عبر base_currency_id (FK)، لا رمز ثابت بالكود
+// (نفس القاعدة المعتمدة بـindex.php وreturns.php بالضبط). كل التقارير
+// السبعة كانت بتكتب "$" ثابت بكل مكان بدل هالقيمة الحقيقية.
+$baseCurSym = '$';
+if (!empty($_SESSION['branch_id'])) {
+    $bc = $pdo->prepare("SELECT c.symbol FROM branches b JOIN currencies c ON c.id=b.base_currency_id WHERE b.id=?");
+    $bc->execute([$_SESSION['branch_id']]);
+    $baseCurSym = $bc->fetchColumn() ?: '$';
+}
 
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
@@ -40,7 +52,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ١) سجل المشتريات
         if ($act === 'rep_register') {
-            $w = ["p.status != 'draft'"];
+            // ⚠ قرار صريح: كل تقارير التجميع بهالملف تستبعد الفواتير/
+            // المرتجعات الملغاة (status='cancelled') من الإحصائيات —
+            // فاتورة اتأكدت ثم انلغت بالكامل (مخزون رجع، قيد انعكس) صفر
+            // أثر حقيقي على الأعمال، فما لازم تُحسب بـ"الأكثر شراءً"/
+            // "توزيع العملة"/"نسبة الإرجاع". كان الفلتر السابق (!='draft')
+            // بيشملها بالغلط — نفس النمط بكل الاستعلامات هون فصاعداً.
+            $w = ["p.status = 'confirmed'"];
             $prm = [];
             if ($from) {
                 $w[] = 'p.purchase_date >= ?';
@@ -74,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ٢) الأكثر شراءً
         if ($act === 'rep_top_suppliers') {
-            $w = ["p.status != 'draft'"];
+            $w = ["p.status = 'confirmed'"];
             $prm = [];
             if ($from) {
                 $w[] = 'p.purchase_date >= ?';
@@ -101,7 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ٣) تقرير المرتجعات
         if ($act === 'rep_returns') {
-            $w = ["r.status != 'draft'"];
+            $w = ["r.status = 'posted'"];
             $prm = [];
             if ($from) {
                 $w[] = 'r.return_date >= ?';
@@ -114,7 +132,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $sql = "SELECT r.return_number, r.purchase_number, r.return_date, s.name AS supplier_name,
                     r.return_reason, r.return_amount, r.status,
                     c.symbol AS cur_sym,
-                    (r.return_amount / NULLIF(r.exchange_rate,0)) AS return_amount_base
+                    -- ⚠ إصلاح: return_amount أصلاً بعملة الفرع دائماً (مشتق
+                    -- من purchase_items.total_price المخزَّن بعملة الفرع —
+                    -- قرار invoice_new.php)، لا حاجة لأي قسمة على
+                    -- exchange_rate هون. كانت تحويل مزدوج غلط، نفس فئة باگ
+                    -- \$unitBase يلي صلّحناه بـconfirm_purchase_invoice.php.
+                    r.return_amount AS return_amount_base
                 FROM `{$TR}` r
                 LEFT JOIN `{$TSP}` s ON s.id = r.supplier_id
                 LEFT JOIN currencies c ON c.id = r.return_currency_id
@@ -143,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ٤) نسبة الإرجاع لكل مورد
         if ($act === 'rep_return_ratio') {
-            $w = ["p.status != 'draft'"];
+            $w = ["p.status = 'confirmed'"];
             $prm = [];
             if ($from) {
                 $w[] = 'p.purchase_date >= ?';
@@ -163,7 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             foreach ($purchasesBySupplier->fetchAll() as $row)
                 $purchMap[$row['id']] = $row;
 
-            $w2 = ["r.status != 'draft'"];
+            $w2 = ["r.status = 'posted'"];
             $prm2 = [];
             if ($from) {
                 $w2[] = 'r.return_date >= ?';
@@ -174,7 +197,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $prm2[] = $to;
             }
             $returnsBySupplier = $pdo->prepare("SELECT r.supplier_id,
-                    SUM(r.return_amount / NULLIF(r.exchange_rate,0)) AS returns_base
+                    -- ⚠ نفس الإصلاح — return_amount أصلاً بعملة الفرع.
+                    SUM(r.return_amount) AS returns_base
                 FROM `{$TR}` r WHERE " . implode(' AND ', $w2) . "
                 GROUP BY r.supplier_id");
             $returnsBySupplier->execute($prm2);
@@ -207,7 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 FROM `{$TP}` p
                 LEFT JOIN `{$TSP}` s ON s.id = p.supplier_id
                 LEFT JOIN currencies c ON c.id = p.invoice_currency_id
-                WHERE p.status = 'received'
+                WHERE p.status = 'confirmed'
                   AND p.payment_status != 'paid'
                   AND p.settlement_discount_pct > 0
                   AND p.due_date >= CURDATE()
@@ -226,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
         // ٦) توزيع المشتريات حسب العملة
         if ($act === 'rep_currency_dist') {
-            $w = ["p.status != 'draft'"];
+            $w = ["p.status = 'confirmed'"];
             $prm = [];
             if ($from) {
                 $w[] = 'p.purchase_date >= ?';
@@ -269,12 +293,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 exit;
             }
             $sql = "SELECT p.purchase_date, p.purchase_number, s.name AS supplier_name,
-                    pi.unit_price_base_currency, pi.unit_price, c.symbol AS cur_sym
+                    pi.unit_price_base_currency, pi.unit_price, c.symbol AS cur_sym,
+                    psz.size AS size, psz.age_type AS age_type
                 FROM `{$TPI}` pi
                 JOIN `{$TP}` p ON p.id = pi.purchase_id
                 LEFT JOIN `{$TSP}` s ON s.id = p.supplier_id
                 LEFT JOIN currencies c ON c.id = p.invoice_currency_id
-                WHERE pi.product_id = ? AND p.status != 'draft'
+                LEFT JOIN `{$TV}` pv ON pv.id = pi.variant_id
+                LEFT JOIN `{$TPSZ}` psz ON psz.id = pv.size_id
+                WHERE pi.product_id = ? AND p.status = 'confirmed'
                 ORDER BY p.purchase_date ASC, p.id ASC";
             $st = $pdo->prepare($sql);
             $st->execute([$productId]);
@@ -549,6 +576,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let currentReport = 'register';
+        // رمز عملة الفرع الأساسية الحقيقي — بدل "$" الثابت المكرَّر بكل تقرير
+        const BASE_CUR_SYM = <?= json_encode($baseCurSym) ?>;
         let selectedProductId = null;
         let selectedProductLabel = '';
 
@@ -636,27 +665,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         }
 
         const PAY_LABELS = {paid: 'مدفوعة', partial: 'جزئي', pending: 'غير مدفوعة'};
-        const STATUS_LABELS = {received: 'مؤكدة', cancelled: 'ملغاة', draft: 'مسودة', posted: 'مؤكد'};
+        // ⚠ خريطتين منفصلتين — الفاتورة والمرتجع عندهم قيم status مختلفة
+        // فعلياً بقاعدة البيانات (draft/confirmed/cancelled للفاتورة،
+        // draft/posted/cancelled للمرتجع، تأكدنا منها بالـALTER TABLE
+        // سابقاً)، خريطة وحدة مشتركة كانت تعرض قيمة خام غير مترجمة لأحدهم.
+        const PUR_STATUS_LABELS = {draft: 'مسودة', confirmed: 'مؤكدة', cancelled: 'ملغاة'};
+        const RET_STATUS_LABELS = {draft: 'مسودة', posted: 'مؤكد', cancelled: 'ملغى'};
 
         const RENDERERS = {
             register(d) {
                 document.getElementById('repSummaryCards').innerHTML =
                     statCard('عدد الفواتير', d.summary.count, 'bi-receipt', '#1e3a8a', '#eff6ff') +
-                    statCard('الإجمالي (عملة الفرع)', '$ ' + fmt(d.summary.total_base), 'bi-cash-stack', '#16a34a', '#f0fdf4');
+                    statCard('الإجمالي (عملة الفرع)', BASE_CUR_SYM + ' ' + fmt(d.summary.total_base), 'bi-cash-stack', '#16a34a', '#f0fdf4');
                 if (!d.rows.length) {document.getElementById('repBody').innerHTML = emptyMsg('لا توجد فواتير بهالفترة'); return;}
                 document.getElementById('repBody').innerHTML = `<div class="table-responsive"><table class="mtbl" id="repTable">
                     <thead><tr>
                         <th style="color:#1e3a8a">رقم الفاتورة</th><th>التاريخ</th><th style="color:#16a34a">المورد</th>
-                        <th>الإجمالي</th><th>بعملة الفرع</th><th>الدفع</th><th>الحالة</th>
+                        <th>الإجمالي (عملة الفرع)</th><th>الدفع</th><th>الحالة</th>
                     </tr></thead><tbody>${d.rows.map(r => `
                         <tr>
                             <td class="fw-600" style="color:#1e3a8a" dir="ltr">${r.purchase_number}</td>
                             <td class="text-muted">${r.purchase_date}</td>
                             <td style="color:#16a34a" class="fw-600">${r.supplier_name || '—'}</td>
-                            <td class="n">${fmt(r.final_amount)} ${r.cur_sym || ''}</td>
-                            <td class="n text-success">$ ${fmt(r.final_amount_base_currency)}</td>
+                            <td class="n text-success fw-600">${BASE_CUR_SYM} ${fmt(r.final_amount_base_currency)}</td>
                             <td><span class="badge bg-light text-dark">${PAY_LABELS[r.payment_status] || r.payment_status}</span></td>
-                            <td><span class="badge bg-light text-dark">${STATUS_LABELS[r.status] || r.status}</span></td>
+                            <td><span class="badge bg-light text-dark">${PUR_STATUS_LABELS[r.status] || r.status}</span></td>
                         </tr>`).join('')}</tbody></table></div>`;
                 makeSortable(document.getElementById('repTable'));
             },
@@ -669,15 +702,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             <td class="text-muted">${i + 1}</td>
                             <td style="color:#16a34a" class="fw-600">${r.supplier_name || '—'}</td>
                             <td class="n">${r.invoices_count}</td>
-                            <td class="n fw-600 text-success">$ ${fmt(r.total_base)}</td>
+                            <td class="n fw-600 text-success">${BASE_CUR_SYM} ${fmt(r.total_base)}</td>
                         </tr>`).join('')}</tbody></table></div>`;
                 makeSortable(document.getElementById('repTable'));
             },
             returns(d) {
                 const reasonsHtml = Object.entries(d.by_reason).slice(0, 4).map(([reason, amt]) =>
-                    statCard(reason, '$ ' + fmt(amt), 'bi-tag', '#dc2626', '#fef2f2')).join('');
+                    statCard(reason, BASE_CUR_SYM + ' ' + fmt(amt), 'bi-tag', '#dc2626', '#fef2f2')).join('');
                 document.getElementById('repSummaryCards').innerHTML =
-                    statCard('إجمالي المرتجعات (عملة الفرع)', '$ ' + fmt(d.total_base), 'bi-arrow-return-right', '#dc2626', '#fef2f2') + reasonsHtml;
+                    statCard('إجمالي المرتجعات (عملة الفرع)', BASE_CUR_SYM + ' ' + fmt(d.total_base), 'bi-arrow-return-right', '#dc2626', '#fef2f2') + reasonsHtml;
                 if (!d.rows.length) {document.getElementById('repBody').innerHTML = emptyMsg('لا توجد مرتجعات بهالفترة'); return;}
                 document.getElementById('repBody').innerHTML = `<div class="table-responsive"><table class="mtbl" id="repTable">
                     <thead><tr>
@@ -691,7 +724,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             <td style="color:#16a34a" class="fw-600">${r.supplier_name || '—'}</td>
                             <td style="font-size:.78rem">${r.return_reason || '—'}</td>
                             <td class="n">${fmt(r.return_amount)} ${r.cur_sym || ''}</td>
-                            <td><span class="badge bg-light text-dark">${STATUS_LABELS[r.status] || r.status}</span></td>
+                            <td><span class="badge bg-light text-dark">${RET_STATUS_LABELS[r.status] || r.status}</span></td>
                         </tr>`).join('')}</tbody></table></div>`;
                 makeSortable(document.getElementById('repTable'));
             },
@@ -703,8 +736,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     const color = r.ratio >= 10 ? '#dc2626' : (r.ratio >= 3 ? '#d97706' : '#16a34a');
                     return `<tr>
                             <td style="color:#16a34a" class="fw-600">${r.supplier_name || '—'}</td>
-                            <td class="n">$ ${fmt(r.purchases_base)}</td>
-                            <td class="n text-danger">$ ${fmt(r.returns_base)}</td>
+                            <td class="n">${BASE_CUR_SYM} ${fmt(r.purchases_base)}</td>
+                            <td class="n text-danger">${BASE_CUR_SYM} ${fmt(r.returns_base)}</td>
                             <td class="n fw-700" style="color:${color}">${r.ratio}%</td>
                         </tr>`;
                 }).join('')}</tbody></table></div>`;
@@ -713,7 +746,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             settlement(d) {
                 document.getElementById('repSummaryCards').innerHTML =
                     statCard('عدد الفرص المتاحة', d.rows.length, 'bi-lightning-charge', '#16a34a', '#f0fdf4') +
-                    statCard('إجمالي التوفير الممكن (عملة الفرع)', '$ ' + fmt(d.total_potential_saving), 'bi-piggy-bank', '#16a34a', '#f0fdf4');
+                    statCard('إجمالي التوفير الممكن (عملة الفرع)', BASE_CUR_SYM + ' ' + fmt(d.total_potential_saving), 'bi-piggy-bank', '#16a34a', '#f0fdf4');
                 if (!d.rows.length) {document.getElementById('repBody').innerHTML = emptyMsg('لا توجد فرص خصم تعجيل حالياً'); return;}
                 document.getElementById('repBody').innerHTML = `<div class="table-responsive"><table class="mtbl" id="repTable">
                     <thead><tr>
@@ -728,7 +761,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             <td class="text-muted">${r.due_date}</td>
                             <td class="n fw-700" style="color:${urgent ? '#dc2626' : '#d97706'}">${r.days_left} يوم</td>
                             <td class="n">${r.settlement_discount_pct}%</td>
-                            <td class="n fw-600 text-success">$ ${fmt(r.potential_saving_base)}</td>
+                            <td class="n fw-600 text-success">${BASE_CUR_SYM} ${fmt(r.potential_saving_base)}</td>
                             <td class="n">${fmt(r.balance_amount)} ${r.cur_sym || ''}</td>
                         </tr>`;
                 }).join('')}</tbody></table></div>`;
@@ -743,32 +776,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             <td class="fw-600" style="color:#dc2626">${r.cur_code}</td>
                             <td class="n">${r.invoices_count}</td>
                             <td class="n">${fmt(r.total_orig)} ${r.cur_sym || ''}</td>
-                            <td class="n fw-600 text-success">$ ${fmt(r.total_base)}</td>
+                            <td class="n fw-600 text-success">${BASE_CUR_SYM} ${fmt(r.total_base)}</td>
                         </tr>`).join('')}</tbody></table></div>`;
                 makeSortable(document.getElementById('repTable'));
             },
             price_history(d) {
                 if (!selectedProductId) {document.getElementById('repBody').innerHTML = emptyMsg('ابحث واختر منتج فوق لعرض تاريخ أسعاره'); return;}
                 if (!d.rows.length) {document.getElementById('repBody').innerHTML = emptyMsg('لا يوجد تاريخ شراء لهذا المنتج'); return;}
-                const prices = d.rows.map(r => parseFloat(r.unit_price_base_currency));
-                const trend = prices[prices.length - 1] > prices[0] ? '<span class="text-danger"><i class="bi bi-graph-up-arrow me-1"></i>مرتفع</span>' : '<span class="text-success"><i class="bi bi-graph-down-arrow me-1"></i>منخفض</span>';
+
+                // ⚠ إصلاح جوهري: المنتج الواحد ممكن يكون عنده عدة كروبات
+                // (نطاقات مقاسات) بأسعار مختلفة تماماً — مقارنة "أول سعر
+                // مقابل آخر سعر" على مستوى المنتج ككل كانت بتخلط كروبات
+                // مختلفة وكأنها نفس السعر تغيّر عبر الزمن، وهاد غلط منطقياً.
+                // الحل: نجمّع أول شي بالمقاس (كل مقاس له تسلسله الزمني
+                // الخاص)، وبعدين ندمج المقاسات يلي عندها بالضبط نفس تسلسل
+                // (تاريخ+سعر) عبر كل السجل التاريخي بصف "كروب" واحد — لأنه
+                // هيك التعريف الحقيقي لـ"نفس الكروب": مقاسات اشتُريت دايماً
+                // سوا بنفس السعر بكل مرة، من أول فاتورة لآخر وحدة.
+                const bySize = {};
+                d.rows.forEach(r => {
+                    const sz = r.size || '—';
+                    if (!bySize[sz]) bySize[sz] = { ageType: r.age_type || '', history: [] };
+                    bySize[sz].history.push({
+                        date: r.purchase_date, no: r.purchase_number, supplier: r.supplier_name || '—',
+                        priceBase: parseFloat(r.unit_price_base_currency), priceOrig: parseFloat(r.unit_price),
+                        sym: r.cur_sym || ''
+                    });
+                });
+                const signature = obj => obj.history.map(x => x.date + ':' + x.no + ':' + x.priceBase.toFixed(4)).join('|');
+                const grpMap = {};
+                Object.entries(bySize).forEach(([sz, obj]) => {
+                    const sig = signature(obj);
+                    if (!grpMap[sig]) grpMap[sig] = { sizes: [], ageType: obj.ageType, history: obj.history };
+                    grpMap[sig].sizes.push(sz);
+                });
+                const groups = Object.values(grpMap);
+
+                // بطاقات ملخص — عدد الكروبات المميّزة، مو رقم واحد مضلِّل
                 document.getElementById('repSummaryCards').innerHTML =
-                    statCard('أول سعر مسجَّل', '$ ' + fmt(prices[0]), 'bi-calendar-minus', '#64748b', '#f8fafc') +
-                    statCard('آخر سعر مسجَّل', '$ ' + fmt(prices[prices.length - 1]), 'bi-calendar-plus', '#1e3a8a', '#eff6ff') +
-                    statCard('الاتجاه', trend, 'bi-activity', '#1e3a8a', '#eff6ff');
-                document.getElementById('repBody').innerHTML = `<div class="table-responsive"><table class="mtbl" id="repTable">
-                    <thead><tr><th>التاريخ</th><th>رقم الفاتورة</th><th style="color:#16a34a">المورد</th><th>السعر (بعملة الفاتورة)</th><th>السعر (عملة الفرع)</th></tr></thead>
-                    <tbody>${d.rows.map(r => `
-                        <tr>
-                            <td class="text-muted">${r.purchase_date}</td>
-                            <td dir="ltr">${r.purchase_number}</td>
-                            <td style="color:#16a34a" class="fw-600">${r.supplier_name || '—'}</td>
-                            <td class="n">${fmt(r.unit_price)} ${r.cur_sym || ''}</td>
-                            <td class="n fw-600 text-success">$ ${fmt(r.unit_price_base_currency)}</td>
-                        </tr>`).join('')}</tbody></table></div>`;
-                makeSortable(document.getElementById('repTable'));
+                    statCard('عدد الكروبات المميّزة', groups.length, 'bi-collection', '#1e3a8a', '#eff6ff') +
+                    statCard('إجمالي سجلات الشراء', d.rows.length, 'bi-clock-history', '#64748b', '#f8fafc');
+
+                document.getElementById('repBody').innerHTML = groups.map((g, gi) => {
+                    const sizeLabel = formatSizeRangeSimple(g.sizes, g.ageType);
+                    const first = g.history[0], last = g.history[g.history.length - 1];
+                    const trend = g.history.length < 2 ? '<span class="text-muted">سجل واحد بس</span>'
+                        : (last.priceBase > first.priceBase
+                            ? '<span class="text-danger"><i class="bi bi-graph-up-arrow me-1"></i>مرتفع</span>'
+                            : (last.priceBase < first.priceBase
+                                ? '<span class="text-success"><i class="bi bi-graph-down-arrow me-1"></i>منخفض</span>'
+                                : '<span class="text-muted"><i class="bi bi-dash me-1"></i>ثابت</span>'));
+                    return `<div class="tbl-wrap mb-3">
+                        <div class="tbl-hdr" style="justify-content:space-between">
+                            <div>
+                                <span class="badge" style="background:#eff6ff;color:#1e3a8a;font-size:.8rem">كروب ${gi + 1} — ${sizeLabel}</span>
+                            </div>
+                            <div style="font-size:.8rem">
+                                <span style="color:#64748b">أول سعر:</span> <b>${BASE_CUR_SYM} ${fmt(first.priceBase)}</b>
+                                <span style="color:#64748b;margin-right:10px">آخر سعر:</span> <b>${BASE_CUR_SYM} ${fmt(last.priceBase)}</b>
+                                <span style="margin-right:10px">${trend}</span>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                        <table class="mtbl">
+                            <thead><tr><th>التاريخ</th><th>رقم الفاتورة</th><th style="color:#16a34a">المورد</th><th>السعر (بعملة الفاتورة)</th><th>السعر (عملة الفرع)</th></tr></thead>
+                            <tbody>${g.history.map(h => `
+                                <tr>
+                                    <td class="text-muted">${h.date}</td>
+                                    <td dir="ltr">${h.no}</td>
+                                    <td style="color:#16a34a" class="fw-600">${h.supplier}</td>
+                                    <td class="n">${fmt(h.priceOrig)} ${h.sym}</td>
+                                    <td class="n fw-600 text-success">${BASE_CUR_SYM} ${fmt(h.priceBase)}</td>
+                                </tr>`).join('')}</tbody>
+                        </table>
+                        </div>
+                    </div>`;
+                }).join('');
             },
         };
+
+        // نطاق مقاسات مبسَّط لعنوان الكروب — نفس مبدأ formatSizeRange
+        // المستخدم بباقي صفحات القسم، بدون الحاجة لكائن group كامل هون.
+        function formatSizeRangeSimple(sizes, ageType) {
+            if (!sizes.length) return '—';
+            const nums = sizes.map(s => parseFloat(s)).filter(n => !isNaN(n));
+            if (!nums.length) return sizes.join(' · ') + (ageType ? ' ' + ageType : '');
+            const min = Math.min(...nums), max = Math.max(...nums);
+            const rangeTxt = min === max ? `${min}` : `${min}-${max}`;
+            return ageType ? `${ageType} ${rangeTxt}` : rangeTxt;
+        }
 
         // فرز الجداول — نفس الدالة المعتمدة بكل صفحات القسم
         function makeSortable(table) {

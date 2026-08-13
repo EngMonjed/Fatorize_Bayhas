@@ -126,23 +126,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st = $pdo->prepare("
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
-                    s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type,
+                    s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
                     c.name AS color_name, c.hex_code AS color_hex
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id=v.product_id
                 JOIN `{$TSZ}` s   ON s.id=v.size_id
                 LEFT JOIN `{$TCL}` c ON c.id=v.color_id
-                WHERE v.barcode=? AND v.is_active=1 AND p.is_active=1
-                LIMIT 1");
+                WHERE v.barcode=? AND v.is_active=1 AND p.is_active=1");
             $st->execute([$q]);
-            $found = $st->fetch();
+            // ⚠ الباركود ممكن يكون مشترك بين كل مقاسات نفس الكروب — كان
+            // LIMIT 1 يرجّع أول مقاس بس. هلق منرجع كل المطابقات
+            // (group)، والواجهة بتدمجهم بنفس منطق mergeVariant().
+            $foundAll = $st->fetchAll();
+            $found = $foundAll[0] ?? null;
             if ($found) {
-                echo json_encode(['ok' => true, 'type' => 'barcode', 'data' => $found]);
+                echo json_encode(['ok' => true, 'type' => 'barcode', 'data' => $found, 'group' => $foundAll]);
             } else {
                 $st2 = $pdo->prepare("
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
-                        s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type,
+                        s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
                         c.name AS color_name, c.hex_code AS color_hex
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id=v.product_id
@@ -199,24 +202,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (!$docCurrencyId) $docCurrencyId = $baseCurrencyId;
             $docRate = max(0.0001, (float) ($_POST['exchange_rate'] ?? 1));
 
-            // ⚠ قرار نهائي: البيع بالقطعة — الرقم المكتوب يُعتمد حرفياً
-            // بلا أي تعديل. راجع distributeQty() لتوزيعه على المتغيّرات.
-
-            // ⚠ قرار نهائي: سعر الوحدة = سعر القطعة الواحدة مباشرة، بلا
-            // قسمة. الإجمالي الحقيقي = qty × unit_price × عدد المقاسات.
-
-            // حساب الإجماليات — نفس تسمية purchases_ret
-            $totalAmt = 0;
+            // ⚠⚠ نفس القاعدة المعمارية بـinvoice_new.php بالضبط: عملة
+            // الفرع مصدر الحقيقة الوحيد بمستوى الهيدر. عدد المنتجات =
+            // عدد الكروبات × packet_qty الحقيقي (مو عدد المتغيّرات
+            // المدموجة)، والسعر = net_price (بعد الخصم الإفرادي).
+            $totalAmtBase = 0;
             foreach ($rows as $r) {
-                $vCountForTotal = max(1, count(array_values(array_filter(array_map('intval',
-                    $r['variant_ids'] ?? [$r['variant_id'] ?? 0])))));
-                $totalAmt += (float) $r['qty'] * (float) $r['unit_price'] * $vCountForTotal
-                    * (1 - (float) ($r['discount_pct'] ?? 0) / 100);
+                $packetQty = max(1, (float) ($r['packet_qty'] ?? 1));
+                $pieceCount = (float) $r['qty'] * $packetQty;
+                $netPrice = isset($r['net_price']) && $r['net_price'] !== ''
+                    ? (float) $r['net_price']
+                    : (float) $r['default_price'];
+                $totalAmtBase += $pieceCount * $netPrice;
             }
-            $discAmt = $totalAmt * $discPct / 100;
-            $taxAmt = ($totalAmt - $discAmt) * $taxPct / 100;
-            $finalAmt = $totalAmt - $discAmt + $taxAmt;
-            $finalAmtBase = $docRate > 0 ? round($finalAmt / $docRate, 4) : $finalAmt;
+            $discAmt = $totalAmtBase * $discPct / 100;
+            $taxAmt = ($totalAmtBase - $discAmt) * $taxPct / 100;
+            $finalAmt = $totalAmtBase - $discAmt + $taxAmt; // بعملة الفرع
+            $finalAmtBase = $finalAmt; // نفس القيمة بالضبط — لا اشتقاق، لا تحويل
+            $totalAmt = $totalAmtBase;
 
             $pdo->beginTransaction();
             try {
@@ -252,25 +255,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 // ولا قيود بعد).
                 $pdo->prepare("DELETE FROM `{$TII}` WHERE invoice_id=?")->execute([$editInvId]);
 
-                // ⚠ قرار نهائي (يعكس قسمة السعر الخاطئة السابقة): "سعر
-                // الوحدة" هو سعر القطعة الواحدة مباشرة كما أُدخل، بلا أي
-                // قسمة. "عدد الكروبات" ينطبق كاملاً على كل قياس.
+                // ⚠ نفس منطق الحفظ بـinvoice_new.php بالضبط: quantity لكل
+                // مقاس = qty (عدد الكروبات)، لا piece_count الكامل.
+                // unit_price بعملة المستند (الاستثناء الوحيد)،
+                // unit_price_base_currency/total_price/discount_amount
+                // بعملة الفرع (net_price/discount_value مباشرة).
                 foreach ($rows as $r) {
-                    $qty = (float) $r['qty']; // = عدد الكروبات
-                    $unitPr = (float) $r['unit_price']; // = سعر القطعة الواحدة مباشرة
-                    $unitPrBase = isset($r['unit_price_base']) && $r['unit_price_base'] !== ''
-                        ? (float) $r['unit_price_base']
-                        : ($docRate > 0 ? $unitPr / $docRate : $unitPr);
-                    $disc = (float) ($r['discount_pct'] ?? 0);
+                    $qty = (float) $r['qty'];
+                    $packetQty = max(1, (float) ($r['packet_qty'] ?? 1));
+                    $defaultPr = (float) $r['default_price'];
+                    $netPrice = isset($r['net_price']) && $r['net_price'] !== ''
+                        ? (float) $r['net_price']
+                        : $defaultPr;
+                    $discValuePerUnit = max(0, $defaultPr - $netPrice);
+                    $discPctForRecord = $defaultPr > 0 ? round($discValuePerUnit / $defaultPr * 100, 4) : 0;
                     $variantIds = array_values(array_filter(array_map('intval',
                         $r['variant_ids'] ?? [$r['variant_id'] ?? 0])));
                     $variantCount = count($variantIds);
                     if (!$variantCount) continue;
 
                     foreach ($variantIds as $variantId) {
-                        $vQty = $qty; // كامل عدد الكروبات لكل قياس
-                        $vLineTot = $vQty * $unitPr * (1 - $disc / 100);
-                        $vDiscAmt = $vQty * $unitPr * $disc / 100;
+                        $itemQty = $qty;
+                        $itemLineTot = $itemQty * $netPrice;
+                        $itemDiscAmt = $itemQty * $discValuePerUnit;
 
                         $pdo->prepare("INSERT INTO `{$TII}`
                             (invoice_id, product_id, variant_id, quantity, unit_price,
@@ -281,12 +288,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                                 $editInvId,
                                 (int) $r['product_id'],
                                 $variantId,
-                                $vQty,
-                                $unitPr,
-                                $unitPrBase,
-                                $vLineTot,
-                                $vDiscAmt,
-                                $disc,
+                                $itemQty,
+                                round($netPrice * $docRate, 4), // unit_price بعملة المستند — الاستثناء الوحيد
+                                $netPrice,
+                                $itemLineTot,
+                                $itemDiscAmt,
+                                $discPctForRecord,
                                 $_SESSION['user_id']
                             ]);
                     }
@@ -331,7 +338,7 @@ $invNo = $existingInv['invoice_number'];
 // الاختيار (منتج + سعر + كروب + لون واحد = سطر واحد بعدة متغيّرات).
 $stExItems = $pdo->prepare("
     SELECT ii.*, p.name AS product_name, p.model_number,
-           v.color_id, s.size, s.age_type, s.selling_price AS base_selling_price,
+           v.color_id, s.size, s.age_type, s.packet_qty,
            c.name AS color_name, c.hex_code AS color_hex
     FROM `{$TII}` ii
     LEFT JOIN `{$TV}` v ON v.id = ii.variant_id
@@ -343,44 +350,43 @@ $stExItems = $pdo->prepare("
 $stExItems->execute([$invId]);
 $exItemsRaw = $stExItems->fetchAll(PDO::FETCH_ASSOC);
 
+// ⚠ نظام التسعير الثلاثي (default_price/discount_value/net_price) +
+// packet_qty الحقيقي — مطابق لمنطق purchases/invoice_edit.php المرجعي
+// بالضبط، بس selling_price بدل cost_price. السعر الافتراضي هون **تاريخي**
+// (مُعاد بناؤه من unit_price_base_currency وdiscount_percentage المحفوظين
+// فعلياً وقت الإنشاء الأصلي) — لا يُعاد جلبه حياً من الكتالوج الحالي،
+// حتى لو تغيّر سعر المنتج منذ الفاتورة الأصلية.
 $existingLineGroups = [];
 foreach ($exItemsRaw as $it) {
     $ageType = $it['age_type'] ?: 'سنة';
-    $key = $it['product_id'] . '_' . $it['unit_price'] . '_' . $ageType . '_' . ($it['color_id'] ?: 0);
+    $netPrice = (float) $it['unit_price_base_currency'];
+    $discPctRow = (float) ($it['discount_percentage'] ?? 0);
+    $defaultPr = $discPctRow > 0 ? round($netPrice / (1 - $discPctRow / 100), 4) : $netPrice;
+    $key = $it['product_id'] . '_' . ($it['color_id'] ?: 0) . '_' . number_format($defaultPr, 4, '.', '');
     if (!isset($existingLineGroups[$key])) {
         $existingLineGroups[$key] = [
             'grp_key' => $key,
+            'row_id' => 'row_edit_' . $key,
             'product_id' => (int) $it['product_id'],
             'product_name' => $it['product_name'],
             'model_number' => $it['model_number'],
-            'selling_price' => (float) $it['base_selling_price'], // عملة الفرع (أنكر تقريبي للعرض)
             'age_type' => $ageType,
             'color_id' => (int) ($it['color_id'] ?: 0),
             'color_name' => $it['color_name'],
             'color_hex' => $it['color_hex'] ?: '',
             'sizes' => [],
-            'qty' => 0,
-            'unit_price' => (float) $it['unit_price'], // عملة المستند وقت الحفظ
-            // الأنكر بعملة الفرع = القيمة المخزَّنة فعلياً بالبند
-            // (unit_price_base_currency) — أدق من إعادة حسابها، لأنها
-            // محسوبة أصلاً وقت الإدخال.
-            'unit_price_base' => (float) ($it['unit_price_base_currency'] ?? 0) ?: (
-                $existingInv['exchange_rate'] > 0
-                    ? (float) $it['unit_price'] / (float) $existingInv['exchange_rate']
-                    : (float) $it['unit_price']
-            ),
-            'discount_pct' => (float) ($it['discount_percentage'] ?? 0),
+            'packet_qty' => (int) ($it['packet_qty'] ?? 1),
+            'qty' => (float) $it['quantity'], // نفس القيمة على كل مقاسات الخط (موحَّدة)
+            'default_price' => $defaultPr,     // تاريخي — من الفاتورة الأصلية
+            'net_price' => $netPrice,
+            'discount_value' => round($defaultPr - $netPrice, 4),
             'variants' => [],
         ];
     }
-    if (!in_array($it['size'], $existingLineGroups[$key]['sizes'], true)) {
+    if ($it['size'] && !in_array($it['size'], $existingLineGroups[$key]['sizes'], true)) {
         $existingLineGroups[$key]['sizes'][] = $it['size'];
     }
-    $existingLineGroups[$key]['qty'] += (float) $it['quantity'];
-    $existingLineGroups[$key]['variants'][] = [
-        'variant_id' => (int) $it['variant_id'],
-        'size' => $it['size'],
-    ];
+    $existingLineGroups[$key]['variants'][] = ['variant_id' => (int) $it['variant_id']];
 }
 $existingLines = array_values($existingLineGroups);
 $existingWarehouseId = $existingInv['warehouse_id'] ?? null;
@@ -741,7 +747,7 @@ $existingTaxPct = $afterDisc > 0
                                             <?= $existingInv['settlement_discount_pct'] !== null ? 'checked' : '' ?>
                                             onchange="document.getElementById('iSettleDiscWrap').style.display=this.checked?'':'none'">
                                         <label class="form-check-label field-lbl" for="iHasSettleDisc"
-                                            style="cursor:pointer">خصم تعجيل الاستلام؟</label>
+                                            style="cursor:pointer">خصم تعجيل الدفع؟</label>
                                     </div>
                                     <div id="iSettleDiscWrap"
                                         style="display:<?= $existingInv['settlement_discount_pct'] !== null ? '' : 'none' ?>">
@@ -852,16 +858,19 @@ $existingTaxPct = $afterDisc > 0
                                 <table class="lines-table">
                                     <thead>
                                         <tr>
-                                            <th>#</th>
-                                            <th>المنتج / الموديل</th>
-                                            <th>الكروب / القياسات</th>
+                                            <th style="width:24px">#</th>
+                                            <th>بيان المنتج</th>
+                                            <th>الموديل</th>
+                                            <th>الكروب / القياس</th>
+                                            <th class="text-center">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
-                                            <th>عدد الكروبات</th>
-                                            <th>سعر الوحدة <span id="curLbl" style="color:#16a34a"></span></th>
-                                            <th>خصم %</th>
-                                            <th>سعر/<?= htmlspecialchars($baseCurrency['symbol']) ?> <small style="color:#16a34a">(تلقائي)</small></th>
-                                            <th>الإجمالي</th>
-                                            <th></th>
+                                            <th class="text-center">عدد الكروبات</th>
+                                            <th class="text-center">عدد المنتجات</th>
+                                            <th class="text-center">سعر البيع الافتراضي</th>
+                                            <th class="text-center">قيمة الخصم الإفرادي</th>
+                                            <th class="text-center">سعر البيع بعد الخصم</th>
+                                            <th class="text-center">الإجمالي</th>
+                                            <th style="width:22px"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="linesBody">
@@ -1052,39 +1061,16 @@ $existingTaxPct = $afterDisc > 0
             codeCur = opt?.dataset.code || 'USD';
             document.getElementById('iExRate').value = exRate;
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-            document.getElementById('curLbl').textContent = `(${symCur})`;
-            // إعادة حساب سعر كل بند من "الأنكر" الثابت بعملة الفرع
-            // (line.cost_base) — مو من السعر المعروض القديم، عشان نتفادى
-            // تراكم أخطاء تقريب عبر تبديلات عملة متكررة.
-            lines.forEach(line => {
-                if (line.cost_base !== undefined) {
-                    line.unit_price = exRate > 0 ? line.cost_base * exRate : line.cost_base;
-                }
-                const row = document.getElementById(line.row_id);
-                if (row) {
-                    const pInput = row.querySelector('.p-input');
-                    if (pInput) pInput.value = line.unit_price > 0 ? line.unit_price.toFixed(4) : '';
-                    recalcLine(line, row);
-                }
-            });
+            // ⚠ ما عاد في داعي نعيد حساب سعر أي بند — الأسعار (default_price/
+            // net_price) كلها بعملة الفرع أصلاً بالنظام الجديد. سعر الصرف
+            // هلق توثيقي بس (يُخزَّن مع الفاتورة)، وبيُستخدم فقط لعرض
+            // السطر الثانوي بعملة الفاتورة بالملخص.
             calcTotals();
         }
 
         function onExRateChange() {
             exRate = Math.max(0.0001, parseFloat(document.getElementById('iExRate').value) || 1);
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-            // إعادة توليد سعر الوحدة عند تعديل سعر الصرف يدوياً كمان
-            lines.forEach(line => {
-                if (line.cost_base !== undefined) {
-                    line.unit_price = exRate > 0 ? line.cost_base * exRate : line.cost_base;
-                }
-                const row = document.getElementById(line.row_id);
-                if (row) {
-                    const pInput = row.querySelector('.p-input');
-                    if (pInput) pInput.value = line.unit_price > 0 ? line.unit_price.toFixed(4) : '';
-                    recalcLine(line, row);
-                }
-            });
             calcTotals();
         }
         // ⚠ بعكس invoice_new.php: ما ننادي onCurrencyChange() هون —
@@ -1093,7 +1079,8 @@ $existingTaxPct = $afterDisc > 0
         // (exRate/symCur/codeCur) صارت جاهزة فوق من بيانات الفاتورة
         // نفسها؛ onCurrencyChange() بتنادى بس لو المستخدم فعلياً غيّر
         // العملة يدوياً.
-        document.getElementById('curLbl').textContent = `(${symCur})`;
+        // ⚠ curLbl انحذف من رأس الجدول (نظام التسعير الجديد ما عاد
+        // بيعرض "سعر الوحدة بعملة X" كعمود منفرد) — حذفنا المرجع له.
 
         const selectModal = new bootstrap.Modal(document.getElementById('selectModal'));
         const custModal = new bootstrap.Modal(document.getElementById('custModal'));
@@ -1152,7 +1139,21 @@ $existingTaxPct = $afterDisc > 0
             if (!q) return;
             post({ _action: 'search_product', q }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
-                if (d.type === 'barcode') { addLine(d.data); document.getElementById('scanInput').value = ''; document.getElementById('searchResults').style.display = 'none'; }
+                if (d.type === 'barcode') {
+                    // ⚠ إضافة فورية تلقائية (متل السوبرماركت) — +1 لو
+                    // موجود أصلاً (منطق addLine المدمج)، وباقي متغيّرات
+                    // نفس الباركود (لو مشترك بين عدة مقاسات) تندمج بنفس
+                    // السطر عبر mergeVariant().
+                    const group = d.group && d.group.length ? d.group : [d.data];
+                    const gk = makeGrpKey({ ...group[0], selling_price: group[0].selling_price });
+                    const wasExisting = lines.some(l => l.grp_key === gk);
+                    group.forEach((v, i) => { if (i === 0) addLine(v); else mergeVariant(v); });
+                    calcTotals();
+                    document.getElementById('scanInput').value = '';
+                    document.getElementById('scanInput').focus();
+                    document.getElementById('searchResults').style.display = 'none';
+                    if (!wasExisting) toast(`✅ أُضيف: ${group[0].product_name}`);
+                }
                 else showSelectModal(d.data);
             });
         }
@@ -1246,16 +1247,27 @@ $existingTaxPct = $afterDisc > 0
                 const qtyEl = document.querySelector(`.sel-qty[data-key="${key}"]`);
                 const pr = parseFloat(prEl?.value || 0);
                 const qty = parseInt(qtyEl?.value || 1);
+                // ⚠ الآلية الصحيحة (مطابقة لـinvoice_new.php بالضبط —
+                // يلغي ترقيع "net_price = pr بعد الإضافة" السابق):
+                // pr هو السعر كما راجعه/عدّله المستخدم بالمودال بعملة
+                // الفاتورة الحالية. نحوّله هون لعملة الفرع (المرجع الثابت)
+                // ونمرّره كـcost_base_direct — addLine() بتقرأه كسعر
+                // افتراضي مباشرة (بدل الاعتماد على selling_price الخام).
+                const costBaseDirect = exRate > 0 ? pr / exRate : pr;
                 rowDef.variants.forEach((v, vi) => {
-                    const item = { ...v, cost_price: v.cost_price, selling_price: rowDef.selling_price };
-                    if (vi === 0) addLine({ ...item, unit_price: pr });
-                    else mergeVariant({ ...item, unit_price: pr });
+                    const lineItem = { ...v, cost_base_direct: costBaseDirect, selling_price: rowDef.selling_price };
+                    if (vi === 0) addLine(lineItem);
+                    else mergeVariant(lineItem);
                     added++;
                 });
                 if (qty > 1) {
                     const gk = makeGrpKey({ ...rowDef.variants[0], selling_price: rowDef.selling_price });
                     const line = lines.find(l => l.grp_key === gk);
-                    if (line) { line.qty = qty; const row = document.getElementById(line.row_id); if (row) { row.querySelector('.q-input').value = qty; recalcLine(line, row); } }
+                    if (line) {
+                        line.qty = qty;
+                        const row = document.getElementById(line.row_id);
+                        if (row) { row.querySelector('.q-input').value = qty; recalcLine(line, row); }
+                    }
                 }
             });
             selectModal.hide();
@@ -1265,29 +1277,22 @@ $existingTaxPct = $afterDisc > 0
         }
 
         // ── إدارة البنود ──
-        function makeGrpKey(item) { return `${item.product_id}_${item.selling_price || item.unit_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`; }
+        function makeGrpKey(item) { return `${item.product_id}_${item.selling_price || item.default_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`; }
 
         function addLine(item) {
             const gk = makeGrpKey(item);
             const exist = lines.find(l => l.grp_key === gk);
             if (exist) { exist.qty++; const row = document.getElementById(exist.row_id); if (row) { row.querySelector('.q-input').value = exist.qty; recalcLine(exist, row); } calcTotals(); toast('تمت زيادة الكمية'); return; }
 
-            // ── تحديد السعر: item.selling_price دايماً بعملة الفرع الأساسية
-            // (مخزّن هيك بجدول المنتجات). item.unit_price (لو موجود، جاي من
-            // مودال الاختيار) هو بعملة المستند الحالية، ممكن يكون المستخدم
-            // عدّله يدوياً. بأي الحالتين منحسب "أنكر" ثابت بعملة الفرع
-            // (cost_base) عشان تبديل العملة/سعر الصرف لاحقاً يعيد الحساب صح
-            // — نفس تسمية purchases/invoice_new.php بالضبط.
-            const priceBase = parseFloat(item.selling_price || 0);
-            let unitPrice, costBase;
-            if (item.unit_price !== undefined && item.unit_price !== null && item.unit_price !== '') {
-                unitPrice = parseFloat(item.unit_price) || 0;
-                costBase = exRate ? unitPrice / exRate : unitPrice;
-            } else {
-                costBase = priceBase;
-                unitPrice = exRate ? priceBase * exRate : priceBase;
-            }
-
+            // ⚠ نظام تسعير ٣ مستويات (مطابق حرفياً لـinvoice_new.php):
+            // سعر افتراضي (قراءة فقط، من الكتالوج) → قيمة خصم (محسوبة
+            // تلقائياً) → سعر صافي (تحريري). مصدران محتملان للسعر
+            // الافتراضي: cost_base_direct (من مودال الاختيار المتعدد —
+            // المستخدم راجع/عدّل السعر، وconfirmSelection() سبق حوّله
+            // لعملة الفرع) أو selling_price مباشرة (المطابقة بالباركود).
+            const defaultPrice = item.cost_base_direct !== undefined
+                ? parseFloat(item.cost_base_direct) || 0
+                : parseFloat(item.selling_price || 0);
             const idx = lines.length;
             const line = {
                 grp_key: gk, row_id: 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_'),
@@ -1295,10 +1300,14 @@ $existingTaxPct = $afterDisc > 0
                 model_number: item.model_number || '', selling_price: parseFloat(item.selling_price || 0),
                 age_type: item.age_type || 'سنة', color_id: item.color_id || 0,
                 color_name: item.color_name || '', color_hex: item.color_hex || '',
-                sizes: [item.size || ''], qty: 1,
-                unit_price: unitPrice,
-                cost_base: costBase,
-                discount_pct: 0, total: 0,
+                sizes: [item.size || ''],
+                packet_qty: parseFloat(item.packet_qty) || 1,
+                qty: 1,
+                default_price: defaultPrice,
+                discount_value: 0,
+                net_price: defaultPrice,
+                piece_count: 0,
+                total: 0,
             };
             lines.push(line);
             document.getElementById('emptyRow').style.display = 'none';
@@ -1313,27 +1322,34 @@ $existingTaxPct = $afterDisc > 0
             const tr = document.createElement('tr');
             tr.id = line.row_id;
             tr.innerHTML = `
-        <td class="text-muted" style="font-size:.75rem">${idx + 1}</td>
-        <td><div class="fw-600" style="font-size:.8rem">${line.product_name}</div>
-            <div class="text-muted" style="font-size:.7rem" dir="ltr">${line.model_number}</div></td>
+        <td class="text-center"><span class="row-num">${idx + 1}</span></td>
+        <td>${line.product_name}</td>
+        <td class="text-muted" dir="ltr">${line.model_number}</td>
         <td>${grpBadge}
-            <div class="sizes-lbl mt-1" style="font-size:.72rem;color:#334155;font-weight:600">${line.sizes.join(' · ')} ${line.age_type}</div>
-            <div class="piece-count-lbl" style="font-size:.68rem;color:#7c3aed;margin-top:2px"><i class="bi bi-boxes"></i> عدد القطع بالكروب: ${line.variants.length}</div>
+            <div class="sizes-lbl mt-1" style="color:#334155">${line.sizes.join(' · ')} ${line.age_type}</div>
         </td>
-        <td><div class="d-flex align-items-center gap-1">${colorDot}<span style="font-size:.78rem">${line.color_name || '—'}</span></div></td>
-        <td style="width:70px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
+        <td class="text-center">
+            <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
+                title="من إعدادات المنتج — للقراءة فقط">
+        </td>
+        <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${line.color_name || '—'}</span></div></td>
+        <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
-        <td style="width:100px"><input type="number" class="p-input" min="0" step="0.0001"
-            value="${line.unit_price > 0 ? line.unit_price : ''}" dir="ltr" placeholder="0.0000"
-            onchange="updateLine('${gk}','unit_price',this.value)"></td>
-        <td style="width:65px"><input type="number" class="d-input" min="0" max="100" step="0.01"
-            value="0" dir="ltr" onchange="updateLine('${gk}','discount_pct',this.value)"></td>
-        <td style="width:80px"><input type="number" class="u-input calc" readonly dir="ltr" placeholder="0.0000"></td>
-        <td style="width:90px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
+        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
+        <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+            value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
+            title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
+        <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
+            value="0" dir="ltr" readonly
+            title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+        <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+            value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
+            onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
             recalcLine(line, tr); calcTotals(); updateLinesCount();
-            if (!line.unit_price) tr.querySelector('.p-input').focus();
+            if (!line.default_price) tr.querySelector('.q-input').focus();
         }
 
         function mergeVariant(item) {
@@ -1345,41 +1361,41 @@ $existingTaxPct = $afterDisc > 0
                 if (!line.sizes.includes(item.size)) line.sizes.push(item.size);
                 const row = document.getElementById(line.row_id);
                 if (row) {
-                    const sl = row.querySelector('.sizes-lbl'); if (sl) sl.textContent = line.sizes.join(' · ') + ' ' + line.age_type;
-                    const pc = row.querySelector('.piece-count-lbl'); if (pc) pc.innerHTML = `<i class="bi bi-boxes"></i> عدد القطع بالكروب: ${line.variants.length}`;
+                    row.querySelector('.sizes-lbl').textContent = line.sizes.join(' · ') + ' ' + line.age_type;
                     recalcLine(line, row);
                 }
                 // ⚠ قرار نهائي: البيع بالكروب — دمج متغيّر جديد ما بيغيّر
                 // عدد الكروبات المكتوب إطلاقاً.
             }
         }
+
         function updateLine(gk, field, val) {
-            const line = lines.find(l => l.grp_key === gk); if (!line) return;
-            // ⚠ قرار نهائي: البيع بالقطعة — الكمية تُعتمد حرفياً بلا أي
-            // تحقق/تقريب (انلغى قرار "مضاعف صحيح" السابق).
+            const line = lines.find(l => l.grp_key === gk);
+            if (!line) return;
             if (field === 'qty') line.qty = Math.max(0.001, parseFloat(val) || 0);
-            if (field === 'unit_price') {
-                line.unit_price = parseFloat(val) || 0;
-                // المستخدم عدّل السعر يدوياً (بعملة المستند المعروضة) —
-                // نحدّث الأنكر بعملة الفرع منه، عشان يضل متسق لو غيّر
-                // العملة أو سعر الصرف بعدين.
-                line.cost_base = exRate ? line.unit_price / exRate : line.unit_price;
-            }
-            if (field === 'discount_pct') line.discount_pct = Math.min(100, Math.max(0, parseFloat(val) || 0));
-            const row = document.getElementById(line.row_id); recalcLine(line, row); calcTotals();
+            // ⚠ سعر البيع الافتراضي وقيمة الخصم مقفلان — الحقل الوحيد
+            // يلي بيغيّر الخصم هو سعر البيع بعد الخصم نفسه.
+            if (field === 'net_price') line.net_price = Math.max(0, parseFloat(val) || 0);
+            const row = document.getElementById(line.row_id);
+            recalcLine(line, row);
+            calcTotals();
         }
+
         function recalcLine(line, row) {
-            line.unit_price_base = exRate > 0 ? line.unit_price / exRate : 0;
-            // ⚠ سعر الوحدة = سعر القطعة مباشرة. الإجمالي = عدد الكروبات
-            // × سعر القطعة × عدد المقاسات المدموجة بهالسطر.
-            const vCount = line.variants.length || 1;
-            line.total = line.qty * line.unit_price * vCount * (1 - line.discount_pct / 100);
+            line.discount_value = Math.max(0, line.default_price - (line.net_price || 0));
+            // ⚠ عدد المنتجات = عدد الكروبات × عدد القطع بالباكيت فقط —
+            // الكمية الحقيقية يلي بتُحفظ بعمود quantity لكل متغيّر بمفرده.
+            line.piece_count = (line.qty || 0) * (line.packet_qty || 1);
+            line.total = line.piece_count * line.net_price;
+
             if (row) {
-                const uInput = row.querySelector('.u-input');
-                if (uInput) uInput.value = line.unit_price_base > 0 ? line.unit_price_base.toFixed(4) : '';
+                row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
+                row.querySelector('.dv-input').value = (line.discount_value || 0).toFixed(2);
+                row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
                 row.querySelector('.t-input').value = line.total > 0 ? line.total.toFixed(2) : '';
             }
         }
+
         function removeLine(gk) {
             lines = lines.filter(l => l.grp_key !== gk);
             const rowId = 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_');
@@ -1389,33 +1405,37 @@ $existingTaxPct = $afterDisc > 0
         }
         function updateLinesCount() { document.getElementById('linesCount').textContent = lines.length ? `(${lines.length} بند)` : ''; };
 
-        // ── الإجماليات ──
-        // الأساس: عملة الفرع (سطر final، للتوافق المحاسبي المباشر).
-        // الثانوي: عملة الفاتورة (يظهر فقط لو مختلفة عن عملة الفرع).
+        // ── الإجماليات — عملة الفرع فقط (مصدر الحقيقة الوحيد) ──
         function calcTotals() {
-            const subtotal = lines.reduce((s, l) => s + l.total, 0);
-            const totalQty = lines.reduce((s, l) => s + l.qty, 0);
+            const totalLines = lines.reduce((s, l) => s + (l.qty || 0), 0);
+            const gross = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
+            const lineDiscTotal = lines.reduce((s, l) => s + ((l.default_price || 0) - (l.net_price || 0)) * (l.piece_count || 0), 0);
+            const afterLineDisc = gross - lineDiscTotal;
+
             const discPct = parseFloat(document.getElementById('discPct').value) || 0;
+            const afterAllDisc = afterLineDisc * (1 - discPct / 100);
+
             const taxPct = parseFloat(document.getElementById('taxPct').value) || 0;
-            const discAmt = subtotal * discPct / 100;
-            const taxAmt = (subtotal - discAmt) * taxPct / 100;
-            const totalOrig = subtotal - discAmt + taxAmt;           // بعملة الفاتورة
-            const totalBase = exRate > 0 ? totalOrig / exRate : 0;   // بعملة الفرع الأساسية
+            const taxAmt = afterAllDisc * taxPct / 100;
 
-            document.getElementById('sumLines').textContent = lines.length;
-            document.getElementById('sumQty').textContent = totalQty.toFixed(0);
-            document.getElementById('sumSubtotal').textContent = subtotal.toFixed(2) + ' ' + symCur;
-            document.getElementById('sumDisc').textContent = '-' + discAmt.toFixed(2) + ' ' + symCur;
-            document.getElementById('sumTax').textContent = '+' + taxAmt.toFixed(2) + ' ' + symCur;
-            document.getElementById('sumTotal').textContent = totalBase.toFixed(2) + ' ' + BASE_CUR_SYM;
+            const grandTotal = afterAllDisc + taxAmt;
 
-            const origRow = document.getElementById('sumOrigLbl').closest('.tot-row');
-            if (codeCur === BASE_CUR_CODE) {
-                origRow.style.display = 'none';
-            } else {
-                origRow.style.display = '';
-                document.getElementById('sumOrigLbl').textContent = `بعملة الفاتورة (${codeCur})`;
-                document.getElementById('sumUsd').textContent = totalOrig.toFixed(2) + ' ' + symCur;
+            document.getElementById('sumLines').textContent = totalLines.toFixed(0);
+            document.getElementById('sumQty').textContent = totalLines.toFixed(0);
+            document.getElementById('sumSubtotal').textContent = gross.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumDisc').textContent = '-' + lineDiscTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumTax').textContent = '+' + taxAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumTotal').textContent = grandTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
+
+            const origRow = document.getElementById('sumOrigLbl')?.closest('.tot-row');
+            if (origRow) {
+                if (codeCur === BASE_CUR_CODE) {
+                    origRow.style.display = 'none';
+                } else {
+                    origRow.style.display = '';
+                    document.getElementById('sumOrigLbl').textContent = `بعملة الفاتورة (${codeCur})`;
+                    document.getElementById('sumUsd').textContent = (grandTotal * exRate).toFixed(2) + ' ' + symCur;
+                }
             }
         }
 
@@ -1423,7 +1443,7 @@ $existingTaxPct = $afterDisc > 0
         function saveInvoice() {
             if (!document.getElementById('iCustomer').value) { toast('يجب اختيار العميل', 'danger'); document.getElementById('iCustomer').focus(); return; }
             if (!document.getElementById('iWarehouse').value) { toast('يجب اختيار المستودع', 'danger'); return; }
-            const valid = lines.filter(l => l.qty > 0 && l.unit_price > 0);
+            const valid = lines.filter(l => l.qty > 0 && l.net_price > 0);
             if (!valid.length) { toast('يجب إضافة منتج واحد على الأقل بسعر وكمية', 'danger'); return; }
 
             const btn = document.querySelector('[onclick="saveInvoice()"]');
@@ -1512,21 +1532,34 @@ $existingTaxPct = $afterDisc > 0
         // من السيرفر أول ما تُفتح الصفحة.
         function renderExistingLine(l, allLines) {
             lines.push(l); document.getElementById('emptyRow').style.display = 'none';
-            const pricesForProd = [...new Set(allLines.filter(x => x.product_id === l.product_id).map(x => x.selling_price))];
-            const grpIdx = pricesForProd.indexOf(l.selling_price); const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
+            const pricesForProd = [...new Set(allLines.filter(x => x.product_id === l.product_id).map(x => x.default_price))];
+            const grpIdx = pricesForProd.indexOf(l.default_price); const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
             const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';
             const tbody = document.getElementById('linesBody'); const tr = document.createElement('tr'); tr.id = l.row_id;
-            tr.innerHTML = `<td class="text-muted" style="font-size:.75rem">${lines.length}</td>
-                    <td><div class="fw-600" style="font-size:.8rem">${l.product_name}</div><div class="text-muted" style="font-size:.7rem" dir="ltr">${l.model_number}</div></td>
+            tr.innerHTML = `
+                    <td class="text-center"><span class="row-num">${lines.length}</span></td>
+                    <td>${l.product_name}</td>
+                    <td class="text-muted" dir="ltr">${l.model_number}</td>
                     <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>
-                        <div class="sizes-lbl mt-1" style="font-size:.72rem;color:#334155;font-weight:600">${l.sizes.join(' · ')} ${l.age_type}</div>
-                    <div class="piece-count-lbl" style="font-size:.68rem;color:#7c3aed;margin-top:2px"><i class="bi bi-boxes"></i> عدد القطع بالكروب: ${l.variants.length}</div></td>
-                    <td><div class="d-flex align-items-center gap-1">${colorDot}<span style="font-size:.78rem">${l.color_name || '—'}</span></div></td>
-                    <td style="width:70px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr" onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
-                    <td style="width:100px"><input type="number" class="p-input" min="0" step="0.0001" value="${l.unit_price || ''}" dir="ltr" onchange="updateLine('${l.grp_key}','unit_price',this.value)"></td>
-                    <td style="width:65px"><input type="number" class="d-input" min="0" max="100" step="0.01" value="${l.discount_pct || 0}" dir="ltr" onchange="updateLine('${l.grp_key}','discount_pct',this.value)"></td>
-                    <td style="width:80px"><input type="number" class="u-input calc" readonly dir="ltr" placeholder="0.0000"></td>
-                    <td style="width:90px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
+                        <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
+                    <td class="text-center">
+                        <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
+                            title="من إعدادات المنتج — للقراءة فقط">
+                    </td>
+                    <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
+                    <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
+                        onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
+                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
+                    <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+                        value="${l.default_price || ''}" dir="ltr" readonly
+                        title="من الفاتورة الأصلية — للقراءة فقط" placeholder="0.00"></td>
+                    <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
+                        value="${l.discount_value || 0}" dir="ltr" readonly
+                        title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+                    <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+                        value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
+                        onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+                    <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
                     <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
             recalcLine(l, tr);
@@ -1554,7 +1587,6 @@ $existingTaxPct = $afterDisc > 0
                     }
                     if (s.exRate) { document.getElementById('iExRate').value = s.exRate; exRate = Math.max(0.0001, parseFloat(s.exRate) || 1); }
                     document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-                    document.getElementById('curLbl').textContent = `(${symCur})`;
                     if (s.date) document.getElementById('iDate').value = s.date;
                     if (s.dueDate) document.getElementById('iDueDate').value = s.dueDate;
                     if (s.hasSettleDisc) {

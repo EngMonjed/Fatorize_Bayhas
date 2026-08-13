@@ -120,25 +120,29 @@ $bonuses_all = $pdo->query("SELECT b.*,e.full_name,c.symbol AS cur_sym
 
 $currencies = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY is_base DESC")->fetchAll();
 
-// عملة الفرع الأساسية — عبر base_currency_id (FK) فقط، بدون أي اعتماد على
-// العمود النصي القديم branches.base_currency (كان مصدر فساد بيانات سابق —
-// راجع إصلاح "branches.base_currency" بقسم المستهلكات) ولا معرّف ثابت مفترض
-$branchCurrSt = $pdo->prepare("SELECT b.base_currency_id, c.code AS base_curr_code, c.id AS base_curr_id
-    FROM branches b LEFT JOIN currencies c ON c.id=b.base_currency_id
+// عملة الفرع الأساسية — جدول branches فيه عمودين لنفس الغرض:
+// base_currency (varchar(3) NOT NULL DEFAULT 'USD' — مضمون دايماً)
+// base_currency_id (int NULLABLE — موجود بس مش معبّى لكل الفروع بعد،
+// خطوة ترحيل غير مكتملة). نعتمد على base_currency (المضمون) عبر جوين حي،
+// بدل base_currency_id (قد يكون NULL) وبدل أي معرّف ثابت مفترض
+$branchCurrSt = $pdo->prepare("SELECT c.id AS base_curr_id, c.code AS base_curr_code
+    FROM branches b JOIN currencies c ON c.code = b.base_currency
     WHERE b.table_suffix=? LIMIT 1");
 $branchCurrSt->execute([$TS]);
 $branchRow = $branchCurrSt->fetch();
 $branchBaseCurr = $branchRow['base_curr_code'] ?? null;
 $branchBaseCurrId = $branchRow['base_curr_id'] ?? null;
 
-// احتياط دفاعي فقط: لو الفرع ما إله base_currency_id مضبوط أصلاً (بيانات ناقصة
-// حقيقية تستاهل تصليح يدوي)، اجلب العملة المعلَّمة is_base=1 ديناميكياً —
-// لا نفترض أبداً إنها بمعرّف id=1 بالجدول
+// احتياط دفاعي فقط: لو ولا سيناريو نظري ما لقى تطابق (بيانات فرع تالفة
+// فعلاً)، اجلب العملة المعلَّمة is_base=1 ديناميكياً — لا نفترض أبداً إنها
+// بمعرّف id=1 بالجدول
 if (!$branchBaseCurrId) {
     $baseCurRow = $pdo->query("SELECT id, code FROM currencies WHERE is_base=1 LIMIT 1")->fetch();
     $branchBaseCurrId = $baseCurRow['id'] ?? null;
     $branchBaseCurr = $baseCurRow['code'] ?? 'USD';
 }
+
+
 
 // حسابات الصندوق والبنك — جلب كل حسابات الأصول المتداولة النقدية
 // يشمل أي حساب asset level 4 تحت حسابات النقدية والبنوك
@@ -958,11 +962,12 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                     <span class="input-group-text" id="mRateSuffix"
                                         style="font-size:.78rem;min-width:60px"></span>
                                     <input type="hidden" id="mEmpCurCode">
+                                    <input type="hidden" id="mEmpCurId">
                                     <button type="button" class="btn btn-sm btn-outline-primary"
                                         style="border-radius:0 7px 7px 0;white-space:nowrap;font-size:.75rem"
-                                        onclick="fetchExchangeRate(BRANCH_BASE_CURR, document.getElementById('mEmpCurCode').value)"
-                                        title="تحديث السعر من الإنترنت">
-                                        <i class="bi bi-arrow-repeat me-1" id="mRateRefreshIcon"></i>تحديث
+                                        onclick="fetchExchangeRate(document.getElementById('mEmpCurId').value)"
+                                        title="جلب السعر من جدول العملات">
+                                        <i class="bi bi-arrow-repeat me-1" id="mRateRefreshIcon"></i>جلب السعر
                                     </button>
                                 </div>
                                 <div
@@ -987,13 +992,22 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                 onclick="backToStep1()">
                                 <i class="bi bi-arrow-right me-1"></i>تغيير الفترة
                             </button>
-                            <button class="btn btn-sm fw-600"
-                                style="border-radius:8px;min-width:120px;background:#1e3a8a;color:#fff"
-                                onclick="confirmPay()" id="mPayBtn">
-                                <span id="mPayTxt"><i class="bi bi-check2 me-1"></i>تأكيد الصرف</span>
-                                <span id="mPaySpin" class="spinner-border spinner-border-sm ms-1"
-                                    style="display:none"></span>
-                            </button>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-sm fw-600" id="mAccrueBtn"
+                                    style="border-radius:8px;min-width:100px;background:#7c3aed;color:#fff"
+                                    onclick="confirmAccrue()">
+                                    <span id="mAccrueTxt"><i class="bi bi-journal-check me-1"></i>اعتماد فقط</span>
+                                    <span id="mAccrueSpin" class="spinner-border spinner-border-sm ms-1"
+                                        style="display:none"></span>
+                                </button>
+                                <button class="btn btn-sm fw-600"
+                                    style="border-radius:8px;min-width:120px;background:#1e3a8a;color:#fff"
+                                    onclick="confirmPay()" id="mPayBtn">
+                                    <span id="mPayTxt"><i class="bi bi-check2 me-1"></i>تأكيد الصرف</span>
+                                    <span id="mPaySpin" class="spinner-border spinner-border-sm ms-1"
+                                        style="display:none"></span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1046,6 +1060,18 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                     <div id="lCalc" class="mb-2 p-2"
                         style="background:#f5f3ff;border-radius:8px;font-size:.8rem;display:none">
                         القسط: <strong id="lCalcVal" style="color:#7c3aed">—</strong>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-600 text-secondary mb-1">يُصرف من صندوق</label>
+                        <select id="lCashAccount" class="form-select form-select-sm">
+                            <option value="">— اختر صندوق الصرف —</option>
+                            <?php foreach ($cash_accounts as $ca): ?>
+                                <option value="<?= $ca['id'] ?>">
+                                    <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                    (<?= htmlspecialchars($ca['currency_code'] ?? '') ?> <?= htmlspecialchars($ca['currency_symbol'] ?? '') ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
                     <div class="mb-1"><label class="form-label small fw-600 text-secondary mb-1">السبب</label>
                         <input type="text" id="lReason" class="form-control form-control-sm" placeholder="اختياري">
@@ -1202,15 +1228,18 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                 const list = document.getElementById('mPeriodsList');
                 list.innerHTML = d.periods.map((p, i) => {
                     const isPaid = p.status === 'paid';
+                    const isAccrued = p.status === 'accrued';
                     return `<label class="period-opt ${isPaid ? 'paid' : ''}" id="popt_${i}">
                 <input type="radio" name="mPeriod" value="${i}" ${isPaid ? 'disabled' : ''} onchange="selectPeriod(${i})">
                 <div class="d-flex justify-content-between align-items-center">
                     <span>${p.label}</span>
                     ${isPaid
                             ? '<span style="font-size:.73rem;color:#16a34a;font-weight:600">✓ مصروف</span>'
-                            : p.status === 'pending'
-                                ? '<span style="font-size:.73rem;color:#d97706;font-weight:600">⏳ انتظار</span>'
-                                : '<span style="font-size:.73rem;color:#94a3b8">لم يُحتسب</span>'}
+                            : isAccrued
+                                ? '<span style="font-size:.73rem;color:#7c3aed;font-weight:600">📋 معتمد — جاهز للصرف</span>'
+                                : p.status === 'pending'
+                                    ? '<span style="font-size:.73rem;color:#d97706;font-weight:600">⏳ انتظار</span>'
+                                    : '<span style="font-size:.73rem;color:#94a3b8">لم يُحتسب</span>'}
                 </div>
             </label>`;
                 }).join('');
@@ -1272,6 +1301,10 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                     btn.innerHTML = '<i class="bi bi-calculator me-1"></i>احتساب';
                     if (!r.ok) { toast(r.msg, 'danger'); return; }
                     mCalcData = { r, p, emp };
+
+                    // زر "اعتماد فقط" يختفي لو الفترة معتمدة أصلاً — ما في
+                    // داعي إعادة اعتماد نفس الفترة مرتين
+                    document.getElementById('mAccrueBtn').style.display = (p.status === 'accrued') ? 'none' : '';
                     // تحذير فقط عند راتب صفر — لا يمنع الصرف
                     if (!r.net || r.net <= 0) {
                         toast('تنبيه: الراتب الصافي 0 (غياب أو إجازة بدون راتب)', 'warning');
@@ -1307,12 +1340,13 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                         document.getElementById('mRatePrefix').textContent = '1 ' + BRANCH_BASE_CURR + ' =';
                         document.getElementById('mRateSuffix').textContent = r.currency;
                         document.getElementById('mEmpCurCode').value = r.emp_cur_code || r.currency;
+                        document.getElementById('mEmpCurId').value = r.emp_cur_id || '';
                         document.getElementById('mExchangeRate').value = '';
                         document.getElementById('mExchangeRate').required = true;
                         document.getElementById('mExchangeRateHint').innerHTML =
-                            '<span class="text-muted">جارٍ جلب السعر من الإنترنت...</span>';
-                        // جلب السعر من API تلقائياً
-                        fetchExchangeRate(BRANCH_BASE_CURR, r.emp_cur_code || r.currency);
+                            '<span class="text-muted">جارٍ جلب السعر من جدول العملات...</span>';
+                        // جلب السعر من جدول العملات تلقائياً (بديل الإنترنت)
+                        fetchExchangeRate(r.emp_cur_id);
                     } else {
                         rateWrap2.style.display = 'none';
                         document.getElementById('mExchangeRate').value = '1';
@@ -1360,34 +1394,56 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
             document.getElementById('mStep2').style.display = 'none';
         }
 
-        // جلب سعر الصرف من ExchangeRate-API
-        async function fetchExchangeRate(baseCur, targetCur) {
+        // جلب سعر الصرف من جدول العملات المسجّل بقاعدة البيانات (بديل
+        // الـAPI الخارجي المحذوف) — القيمة هون للعرض/التعبئة بس؛ الباك-إند
+        // بيقرأ نفس المصدر مباشرة وقت الاعتماد/الصرف الفعلي، ما بيثق بأي
+        // رقم راجع من هالطلب أو معدَّل يدوياً بالحقل
+        async function fetchExchangeRate(empCurId) {
             const icon = document.getElementById('mRateRefreshIcon');
             if (icon) icon.classList.add('spin');
             try {
-                const resp = await fetch('https://api.exchangerate-api.com/v4/latest/' + baseCur);
-                if (!resp.ok) throw new Error();
-                const data = await resp.json();
-                const rate = data.rates[targetCur];
-                if (rate) {
-                    document.getElementById('mExchangeRate').value = rate.toFixed(4);
-                    if (icon) icon.classList.remove('spin');
+                const d = await post({ _action: 'get_currency_rate', currency_id: empCurId });
+                if (icon) icon.classList.remove('spin');
+                if (d.ok && d.exchange_rate > 0) {
+                    document.getElementById('mExchangeRate').value = d.exchange_rate;
                     document.getElementById('mExchangeRateHint').innerHTML =
                         '<i class="bi bi-check-circle-fill text-success me-1"></i>'
-                        + 'سعر الصرف الحالي: 1 ' + baseCur + ' = <strong>' + rate.toFixed(4) + '</strong> ' + targetCur
-                        + ' <span style="color:#94a3b8;font-size:.7rem">(يمكن تعديله)</span>';
+                        + 'السعر المسجّل بجدول العملات: <strong>' + d.exchange_rate + '</strong> '
+                        + ' <span style="color:#94a3b8;font-size:.7rem">(يمكن تعديله يدوياً للعرض فقط — الاحتساب الفعلي دايماً حسب سعر النظام)</span>';
                 } else {
-                    if (icon) icon.classList.remove('spin');
                     document.getElementById('mExchangeRateHint').innerHTML =
-                        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>'
-                        + 'السعر غير متوفر تلقائياً — أدخله يدوياً';
+                        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>السعر غير مسجّل بجدول العملات — اضبطه من صفحة العملات أولاً';
                 }
             } catch (e) {
                 if (icon) icon.classList.remove('spin');
                 document.getElementById('mExchangeRateHint').innerHTML =
-                    '<i class="bi bi-wifi-off text-danger me-1"></i>'
-                    + 'تعذّر الاتصال بالإنترنت — أدخل السعر يدوياً';
+                    '<i class="bi bi-exclamation-triangle text-danger me-1"></i>تعذّر جلب السعر';
             }
+        }
+
+        function confirmAccrue() {
+            if (!mCalcData) return;
+            const { r, p, emp } = mCalcData;
+
+            document.getElementById('mAccrueTxt').style.opacity = '0';
+            document.getElementById('mAccrueSpin').style.display = 'inline-block';
+
+            post({
+                _action: 'accrue',
+                employee_id: emp.id,
+                payroll_month: p.month,
+                week_number: p.week_num,
+                period_from: p.from,
+                period_to: p.to,
+                calc_data: JSON.stringify(mCalcData.r || {}),
+            }).then(d => {
+                document.getElementById('mAccrueTxt').style.opacity = '1';
+                document.getElementById('mAccrueSpin').style.display = 'none';
+                if (d.ok) {
+                    toast('تم اعتماد الراتب كمستحق — جاهز للصرف لاحقاً');
+                    document.getElementById('mAccrueBtn').style.display = 'none';
+                } else toast(d.msg, 'danger');
+            });
         }
 
         function confirmPay() {
@@ -1436,6 +1492,7 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
             document.getElementById('lAmt').value = '';
             document.getElementById('lInst').value = '1';
             document.getElementById('lReason').value = '';
+            document.getElementById('lCashAccount').value = '';
             document.getElementById('lCalc').style.display = 'none';
             loanModal.show();
         }
@@ -1452,12 +1509,15 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
         function saveLoan() {
             const emp = document.getElementById('lEmp').value;
             const amt = document.getElementById('lAmt').value;
+            const cashAcc = document.getElementById('lCashAccount').value;
             if (!emp || !amt) { toast('الموظف والمبلغ مطلوبان', 'danger'); return; }
+            if (!cashAcc) { toast('اختر الصندوق يلي بتصرف منه السلفة', 'danger'); return; }
             post({
                 _action: 'add_loan', employee_id: emp, amount: amt,
                 installments: document.getElementById('lInst').value,
                 loan_date: document.getElementById('lDate').value,
                 currency_id: document.getElementById('lCur').value,
+                cash_account_id: cashAcc,
                 reason: document.getElementById('lReason').value,
             }).then(d => {
                 if (d.ok) { loanModal.hide(); toast('تمت إضافة السلفة'); setTimeout(() => location.reload(), 1200); }

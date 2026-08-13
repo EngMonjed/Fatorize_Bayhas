@@ -175,6 +175,8 @@ try {
 $criticalKeys = [
     'consumable_expense' => 'صرف المستهلكات (inventory/consumable_issues.php)',
     'consumable_inventory' => 'صرف المستهلكات (inventory/consumable_issues.php)',
+    'salary_payable' => 'إنشاء حساب مستحقات فرعي عند إضافة موظف (hr/employees.php)',
+    'employee_advance' => 'إنشاء حساب سلف فرعي عند إضافة موظف (hr/employees.php)',
 ];
 
 // ── جلب الإعدادات الحالية ──

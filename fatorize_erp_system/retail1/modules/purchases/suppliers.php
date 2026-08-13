@@ -25,6 +25,15 @@ if (!empty($_SESSION['branch_id'])) {
     $baseCurrencyId = $bcSt->fetchColumn() ?: 1;
 }
 
+// رمز عملة الفرع الأساسية — لعرض إجمالي مشتريات المورد (base_currency)
+// بمودال التفاصيل الجديد، نفس منطق index.php/returns.php بالضبط.
+$baseCurSym = '$';
+if (!empty($_SESSION['branch_id'])) {
+    $bcSym = $pdo->prepare("SELECT c.symbol FROM branches b JOIN currencies c ON c.id=b.base_currency_id WHERE b.id=?");
+    $bcSym->execute([$_SESSION['branch_id']]);
+    $baseCurSym = $bcSym->fetchColumn() ?: '$';
+}
+
 // ── AJAX ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -156,7 +165,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 pay.code AS pay_code, pay.name AS pay_name, pay.balance AS pay_balance,
                 pay.base_balance AS pay_base_balance, payCur.code AS pay_cur_code, payCur.symbol AS pay_cur_sym,
                 pre.code AS pre_code, pre.name AS pre_name, pre.balance AS pre_balance,
-                pre.base_balance AS pre_base_balance, preCur.code AS pre_cur_code, preCur.symbol AS pre_cur_sym
+                pre.base_balance AS pre_base_balance, preCur.code AS pre_cur_code, preCur.symbol AS pre_cur_sym,
+                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS purchase_count,
+                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') AS purchase_confirmed_count,
+                (SELECT COALESCE(SUM(pu.final_amount_base_currency),0) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') AS purchase_total_base,
+                (SELECT MAX(pu.purchase_date) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS last_purchase_date
                 FROM `{$TSP}` s
                 LEFT JOIN `{$TAC}` pay ON pay.id=s.account_id
                 LEFT JOIN `currencies` payCur ON payCur.id=pay.currency_id
@@ -181,10 +194,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         } elseif ($act === 'delete') {
             requirePermission('purchases.suppliers', 'delete');
             $id = (int) $_POST['id'];
+
             $used = $pdo->prepare("SELECT COUNT(*) FROM `purchases_{$TS}` WHERE supplier_id=?");
             $used->execute([$id]);
             if ($used->fetchColumn() > 0)
-                throw new Exception('لا يمكن حذف مورد لديه فواتير');
+                throw new Exception('لا يمكن حذف مورد لديه فواتير شراء — استخدم زر التعطيل بدلاً');
+
+            // ⚠ حماية إضافية إجبارية: رصيد حسابي الذمة والدفعة المقدمة
+            // لازم يكونوا صفر بالضبط قبل الحذف الفعلي — حذف مورد له رصيد
+            // قائم (له أو عليه) بيمسح أثر مالي حقيقي بشجرة الحسابات بلا
+            // أي تتبع. لو أي رصيد غير صفري، نرفض الحذف صراحة ونوجّه
+            // لاستخدام التعطيل بدلاً (نفس فحص can_delete المحسوب وقت
+            // عرض القائمة، بس هون تحقق سيادي فعلي — العرض بالواجهة لوحده
+            // مش كافي كحماية).
+            $bal = $pdo->prepare("SELECT
+                    (SELECT COALESCE(balance,0) FROM `{$TAC}` WHERE id=(SELECT account_id FROM `{$TSP}` WHERE id=?)) AS pay_bal,
+                    (SELECT COALESCE(balance,0) FROM `{$TAC}` WHERE id=(SELECT prepaid_account_id FROM `{$TSP}` WHERE id=?)) AS pre_bal");
+            $bal->execute([$id, $id]);
+            $balRow = $bal->fetch(PDO::FETCH_ASSOC);
+            if (abs((float) ($balRow['pay_bal'] ?? 0)) > 0.001 || abs((float) ($balRow['pre_bal'] ?? 0)) > 0.001)
+                throw new Exception('لا يمكن حذف مورد له رصيد قائم بحساب الذمة أو الدفعة المقدمة — استخدم زر التعطيل بدلاً');
+
             $pdo->prepare("DELETE FROM `{$TSP}` WHERE id=?")->execute([$id]);
             ob_get_clean();
             echo json_encode(['ok' => true]);
@@ -201,12 +231,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
 // ── بيانات الصفحة ──
 $suppliers = $pdo->query("SELECT s.*,
-    pay.code AS pay_code, pay.name AS pay_name,
-    pre.code AS pre_code, pre.name AS pre_name
+    pay.code AS pay_code, pay.name AS pay_name, pay.balance AS pay_balance,
+    pre.code AS pre_code, pre.name AS pre_name, pre.balance AS pre_balance,
+    (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS purchase_count
     FROM `{$TSP}` s
     LEFT JOIN `{$TAC}` pay ON pay.id=s.account_id
     LEFT JOIN `{$TAC}` pre ON pre.id=s.prepaid_account_id
     ORDER BY s.name")->fetchAll();
+
+// ⚠ can_delete: حذف حقيقي مسموح فقط لو صفر فواتير شراء + صفر رصيد
+// بالحسابين — أي شرط غير محقَّق يعني الزر لازم يكون "تعطيل" بدل "حذف"،
+// نفس الفحص السيادي المكرَّر بجانب السيرفر بمعالج delete (لا تكفي هالحسابة
+// هون وحدها كحماية — هي للعرض بالواجهة بس).
+foreach ($suppliers as &$sup) {
+    $sup['can_delete'] = (int) $sup['purchase_count'] === 0
+        && abs((float) $sup['pay_balance']) < 0.001
+        && abs((float) ($sup['pre_balance'] ?? 0)) < 0.001;
+}
+unset($sup);
 
 // حسابات الذمم (liability) وحسابات الأصول (للدفعات المقدمة)
 $liabilityAccs = $pdo->query("SELECT id,code,name FROM `{$TAC}` WHERE account_type='liability' AND is_active=1 ORDER BY code")->fetchAll();
@@ -537,15 +579,27 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                             </td>
                                             <td>
                                                 <div class="d-flex gap-1 justify-content-center">
+                                                    <button class="ab" onclick="viewSupplier(<?= $sup['id'] ?>)"
+                                                        title="عرض التفاصيل"><i class="bi bi-eye"></i></button>
+                                                    <a href="index.php?supplier=<?= $sup['id'] ?>" class="ab"
+                                                        title="فواتير هذا المورد"><i class="bi bi-receipt"></i></a>
                                                     <button class="ab" onclick="openEdit(<?= $sup['id'] ?>)" title="تعديل"><i
                                                             class="bi bi-pencil"></i></button>
                                                     <a href="../accounting/supplier_statement.php?supplier_id=<?= $sup['id'] ?>"
                                                         class="ab" title="كشف حساب (قسم المحاسبة)">
                                                         <i class="bi bi-journal-text"></i>
                                                     </a>
-                                                    <button class="ab red"
-                                                        onclick="deleteSupplier(<?= $sup['id'] ?>,'<?= htmlspecialchars($sup['name'], ENT_QUOTES) ?>')"
-                                                        title="حذف"><i class="bi bi-trash"></i></button>
+                                                    <?php if ($sup['can_delete']): ?>
+                                                            <button class="ab red"
+                                                                onclick="deleteSupplier(<?= $sup['id'] ?>,'<?= htmlspecialchars($sup['name'], ENT_QUOTES) ?>')"
+                                                                title="حذف"><i class="bi bi-trash"></i></button>
+                                                    <?php else: ?>
+                                                            <button class="ab" disabled
+                                                                style="opacity:.4;cursor:not-allowed"
+                                                                title="لا يمكن الحذف — لديه فواتير شراء أو رصيد قائم. استخدم زر التعطيل (الشارة أعلاه) بدلاً">
+                                                                <i class="bi bi-trash"></i>
+                                                            </button>
+                                                    <?php endif; ?>
                                                 </div>
                                             </td>
                                         </tr>
@@ -556,6 +610,31 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
             </div>
         </div>
     </main>
+
+    <!-- ══ مودال تفاصيل المورد (قراءة فقط) ══ -->
+    <div class="modal fade" id="viewSupModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content" style="border-radius:16px;border:none">
+                <div class="modal-header py-3 px-4 border-0"
+                    style="background:linear-gradient(135deg,#0c447c,var(--section-color));border-radius:16px 16px 0 0">
+                    <div>
+                        <h6 class="modal-title text-white fw-700 mb-0" id="vsTitle">تفاصيل المورد</h6>
+                        <div id="vsSub" style="font-size:.75rem;color:rgba(255,255,255,.7);margin-top:2px"></div>
+                    </div>
+                    <div class="d-flex gap-2 align-items-center">
+                        <a id="vsInvoicesBtn" href="#" class="btn btn-sm"
+                            style="border-radius:8px;background:rgba(255,255,255,.15);color:#fff;font-size:.76rem;border:1px solid rgba(255,255,255,.3)">
+                            <i class="bi bi-receipt me-1"></i>فواتيره
+                        </a>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                </div>
+                <div class="modal-body px-4 py-3" id="vsBody">
+                    <div class="text-center py-4"><span class="spinner-border text-primary"></span></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- مودال إضافة/تعديل -->
     <div class="modal fade" id="supModal" tabindex="-1" data-bs-backdrop="static">
@@ -713,6 +792,76 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
         document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
 
         const supModal = new bootstrap.Modal(document.getElementById('supModal'));
+        const viewSupModal = new bootstrap.Modal(document.getElementById('viewSupModal'));
+        const BASE_CUR_SYM = <?= json_encode($baseCurSym) ?>;
+
+        function viewSupplier(id) {
+            document.getElementById('vsTitle').textContent = 'جارٍ التحميل...';
+            document.getElementById('vsSub').textContent = '';
+            document.getElementById('vsInvoicesBtn').href = 'index.php?supplier=' + id;
+            document.getElementById('vsBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-primary"></span></div>';
+            viewSupModal.show();
+            post({ _action: 'get', id }).then(d => {
+                if (!d.ok) { document.getElementById('vsBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return; }
+                const s = d.data;
+                const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
+                document.getElementById('vsTitle').textContent = s.name;
+                document.getElementById('vsSub').textContent = s.contact_person || '';
+
+                const fmtBal = (bal, sym) => {
+                    if (bal === null || bal === undefined) return '<span class="text-muted">—</span>';
+                    const n = parseFloat(bal);
+                    const color = n > 0 ? '#16a34a' : (n < 0 ? '#dc2626' : '#94a3b8');
+                    return `<span style="color:${color};font-weight:700">${fmt(n)} ${sym || ''}</span>`;
+                };
+
+                document.getElementById('vsBody').innerHTML = `
+        <div class="row g-2 mb-3">
+            <div class="col-md-4"><small style="color:#64748b">جهة الاتصال</small><div class="fw-600">${s.contact_person || '—'}</div></div>
+            <div class="col-md-4"><small style="color:#64748b">الهاتف</small><div dir="ltr">${s.phone || '—'}</div></div>
+            <div class="col-md-4"><small style="color:#64748b">البريد الإلكتروني</small><div dir="ltr">${s.email || '—'}</div></div>
+            <div class="col-md-6"><small style="color:#64748b">العنوان</small><div>${s.address || '—'}</div></div>
+            <div class="col-md-3"><small style="color:#64748b">الرقم الضريبي</small><div dir="ltr">${s.tax_number || '—'}</div></div>
+            <div class="col-md-3"><small style="color:#64748b">الحالة</small>
+                <div><span class="badge ${s.status === 'active' ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}">${s.status === 'active' ? 'نشط' : 'معطل'}</span></div>
+            </div>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-md-6">
+                <div style="background:#fef2f2;border-radius:10px;padding:10px 14px">
+                    <div style="font-size:.72rem;color:#64748b;margin-bottom:2px"><i class="bi bi-bank me-1"></i>حساب الذمة</div>
+                    ${s.pay_code ? `<div class="fw-600" style="font-size:.8rem">${s.pay_code} — ${s.pay_name}</div>
+                    <div style="margin-top:4px">الرصيد الحالي: ${fmtBal(s.pay_balance, s.pay_cur_sym)}</div>` : '<div class="text-danger" style="font-size:.8rem">غير محدَّد</div>'}
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div style="background:#f0fdf4;border-radius:10px;padding:10px 14px">
+                    <div style="font-size:.72rem;color:#64748b;margin-bottom:2px"><i class="bi bi-cash-coin me-1"></i>حساب الدفعة المقدمة</div>
+                    ${s.pre_code ? `<div class="fw-600" style="font-size:.8rem">${s.pre_code} — ${s.pre_name}</div>
+                    <div style="margin-top:4px">الرصيد الحالي: ${fmtBal(s.pre_balance, s.pre_cur_sym)}</div>` : '<div class="text-muted" style="font-size:.8rem">غير محدَّد</div>'}
+                </div>
+            </div>
+        </div>
+        <div style="background:#f8fafc;border-radius:10px;padding:10px 14px">
+            <div style="font-size:.72rem;color:#64748b;margin-bottom:6px"><i class="bi bi-receipt me-1"></i>ملخص المشتريات</div>
+            <div class="row g-2 text-center">
+                <div class="col-4">
+                    <div class="fw-700" style="font-size:1rem">${s.purchase_count || 0}</div>
+                    <div style="font-size:.7rem;color:#64748b">إجمالي الفواتير</div>
+                </div>
+                <div class="col-4">
+                    <div class="fw-700" style="font-size:1rem;color:#16a34a">${BASE_CUR_SYM} ${fmt(s.purchase_total_base)}</div>
+                    <div style="font-size:.7rem;color:#64748b">إجمالي المشتريات المؤكدة (عملة الفرع)</div>
+                </div>
+                <div class="col-4">
+                    <div class="fw-700" style="font-size:1rem">${s.last_purchase_date || '—'}</div>
+                    <div style="font-size:.7rem;color:#64748b">آخر فاتورة</div>
+                </div>
+            </div>
+        </div>
+        ${s.notes ? `<div style="margin-top:10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:.8rem"><b>ملاحظات:</b> ${s.notes}</div>` : ''}`;
+            });
+        }
 
         function post(data) {
             const fd = new FormData();

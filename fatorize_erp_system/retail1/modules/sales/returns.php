@@ -1,5 +1,4 @@
 <?php
-
 /**
  * sales/returns.php — مرتجعات فواتير البيع
  * المسار: retail1/modules/sales/returns.php
@@ -100,10 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         // بنود فاتورة معيّنة + الكمية المتبقية القابلة للإرجاع لكل بند
         if ($act === 'get_invoice_items') {
             $invId = (int) ($_POST['invoice_id'] ?? 0);
-            if (!$invId) {
-                echo json_encode(['ok' => false, 'msg' => 'فاتورة غير محددة']);
-                exit;
-            }
+            if (!$invId) { echo json_encode(['ok' => false, 'msg' => 'فاتورة غير محددة']); exit; }
 
             $st = $pdo->prepare("SELECT
                     ii.id AS invoice_item_id, ii.product_id, ii.variant_id,
@@ -139,40 +135,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         if ($act === 'save_return') {
             requirePermission('sales.returns', 'create');
             $returnId = (int) ($_POST['return_id'] ?? 0);
-            $invId = (int) ($_POST['invoice_id'] ?? 0);
-            $reason = trim($_POST['return_reason'] ?? '');
+            $invId    = (int) ($_POST['invoice_id'] ?? 0);
+            $reason   = trim($_POST['return_reason'] ?? '');
             $payHandling = $_POST['payment_handling'] ?? 'not_paid';
-            $refundAccId = (int) ($_POST['refund_account_id'] ?? 0) ?: null;
-            $notes = trim($_POST['notes'] ?? '');
-            $lines = json_decode($_POST['lines'] ?? '[]', true) ?: [];
+            // ⚠ نمط "الحساب المستهدف" الجديد (مطابق لمرتجعات المشتريات):
+            // not_paid = بلا حساب مستهدف إطلاقاً (يُصفَّر سيادياً بالسيرفر).
+            // partial/paid_full = حساب مستهدف إجباري (صندوق/ذمة/دفعة مقدمة).
+            $targetType = in_array($payHandling, ['partial', 'paid_full'], true)
+                ? ($_POST['target_account_type'] ?? '') : null;
+            if (in_array($payHandling, ['partial', 'paid_full'], true) && !$targetType) {
+                echo json_encode(['ok' => false, 'msg' => 'اختر الحساب المستهدف (صندوق/بنك، ذمة العميل، أو دفعة مقدمة)']); exit;
+            }
+            $refundAccId = $targetType === 'cash' ? ((int) ($_POST['refund_account_id'] ?? 0) ?: null) : null;
+            if ($targetType === 'cash' && !$refundAccId) {
+                echo json_encode(['ok' => false, 'msg' => 'اختر حساب الصندوق/البنك']); exit;
+            }
+            $notes    = trim($_POST['notes'] ?? '');
+            $lines    = json_decode($_POST['lines'] ?? '[]', true) ?: [];
 
             if (!$invId || empty($lines)) {
-                echo json_encode(['ok' => false, 'msg' => 'اختر الفاتورة وبند واحد على الأقل']);
-                exit;
+                echo json_encode(['ok' => false, 'msg' => 'اختر الفاتورة وبند واحد على الأقل']); exit;
             }
 
             $inv = $pdo->prepare("SELECT i.*, c.name AS customer_name FROM `{$TI}` i
                 JOIN `{$TC}` c ON c.id=i.customer_id WHERE i.id=?");
             $inv->execute([$invId]);
             $inv = $inv->fetch();
-            if (!$inv) {
-                echo json_encode(['ok' => false, 'msg' => 'الفاتورة الأصلية غير موجودة']);
-                exit;
-            }
+            if (!$inv) { echo json_encode(['ok' => false, 'msg' => 'الفاتورة الأصلية غير موجودة']); exit; }
 
             $totalAmt = 0;
             $lineData = [];
             foreach ($lines as $l) {
                 $iiId = (int) ($l['invoice_item_id'] ?? 0);
-                $qty = (float) ($l['quantity_returned'] ?? 0);
-                if (!$iiId || $qty <= 0)
-                    continue;
+                $qty  = (float) ($l['quantity_returned'] ?? 0);
+                if (!$iiId || $qty <= 0) continue;
 
                 $ii = $pdo->prepare("SELECT * FROM `{$TII}` WHERE id=? AND invoice_id=?");
                 $ii->execute([$iiId, $invId]);
                 $ii = $ii->fetch();
-                if (!$ii)
-                    continue;
+                if (!$ii) continue;
 
                 $already = $pdo->prepare("SELECT COALESCE(SUM(ri.quantity_returned),0)
                     FROM `{$TRI}` ri JOIN `{$TR}` r ON r.id=ri.return_id
@@ -180,8 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $already->execute([$iiId, $returnId ?: 0]);
                 $returnable = (float) $ii['quantity'] - (float) $already->fetchColumn();
                 if ($qty > $returnable) {
-                    echo json_encode(['ok' => false, 'msg' => "الكمية المطلوب إرجاعها أكبر من المتاح لبند رقم {$iiId}"]);
-                    exit;
+                    echo json_encode(['ok' => false, 'msg' => "الكمية المطلوب إرجاعها أكبر من المتاح لبند رقم {$iiId}"]); exit;
                 }
 
                 $netUnitPrice = (float) $ii['quantity'] > 0
@@ -191,19 +191,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $lineTotal = $qty * $netUnitPrice;
                 $totalAmt += $lineTotal;
                 $lineData[] = [
-                    'invoice_item_id' => $iiId,
-                    'product_id' => $ii['product_id'],
-                    'variant_id' => $ii['variant_id'],
-                    'product_name' => $l['display_name'] ?? ('بند #' . $iiId),
+                    'invoice_item_id'   => $iiId,
+                    'product_id'        => $ii['product_id'],
+                    'variant_id'        => $ii['variant_id'],
+                    'product_name'      => $l['display_name'] ?? ('بند #' . $iiId),
                     'quantity_returned' => $qty,
-                    'unit_price' => $netUnitPrice,
-                    'total_price' => $lineTotal,
+                    'unit_price'        => $netUnitPrice,
+                    'total_price'       => $lineTotal,
                 ];
             }
-            if (empty($lineData)) {
-                echo json_encode(['ok' => false, 'msg' => 'لا يوجد بند صالح للحفظ']);
-                exit;
-            }
+            if (empty($lineData)) { echo json_encode(['ok' => false, 'msg' => 'لا يوجد بند صالح للحفظ']); exit; }
 
             $invTotal = (float) $inv['total_amount'];
             $discAmt = 0.0;
@@ -229,26 +226,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             invoice_number=?, warehouse_id=?, return_date=CURDATE(),
                             total_amount=?, discount_amount=?, tax_amount=?, return_amount=?,
                             return_currency_id=?, base_currency_id=?,
-                            exchange_rate=?, payment_handling=?, refund_account_id=?, return_reason=?, notes=?
+                            exchange_rate=?, payment_handling=?, target_account_type=?, refund_account_id=?, return_reason=?, notes=?
                         WHERE id=? AND status='draft'")
                         ->execute([
-                            $invId,
-                            $inv['customer_id'],
-                            $inv['customer_name'],
-                            $inv['invoice_number'],
-                            $inv['warehouse_id'],
-                            $totalAmt,
-                            $discAmt,
-                            $taxAmt,
-                            $returnAmt,
-                            $inv['invoice_currency_id'],
-                            $inv['base_currency_id'],
-                            $inv['exchange_rate'],
-                            $payHandling,
-                            $refundAccId,
-                            $reason,
-                            $notes,
-                            $returnId
+                            $invId, $inv['customer_id'], $inv['customer_name'], $inv['invoice_number'], $inv['warehouse_id'],
+                            $totalAmt, $discAmt, $taxAmt, $returnAmt, $inv['invoice_currency_id'], $inv['base_currency_id'],
+                            $inv['exchange_rate'], $payHandling, $targetType, $refundAccId, $reason, $notes, $returnId
                         ]);
                     $pdo->prepare("DELETE FROM `{$TRI}` WHERE return_id=?")->execute([$returnId]);
                 } else {
@@ -257,27 +240,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             (return_number, invoice_id, invoice_number, customer_id, customer_name, warehouse_id,
                              return_date, total_amount, discount_amount, tax_amount, return_amount,
                              return_currency_id, base_currency_id,
-                             exchange_rate, payment_handling, refund_account_id, return_reason, status, notes, user_id)
-                            VALUES (?,?,?,?,?,?, CURDATE(),?,?,?,?,?,?, ?,?,?,?, 'draft', ?, ?)")
+                             exchange_rate, payment_handling, target_account_type, refund_account_id, return_reason, status, notes, user_id)
+                            VALUES (?,?,?,?,?,?, CURDATE(),?,?,?,?,?,?, ?,?,?,?,?, 'draft', ?, ?)")
                         ->execute([
-                            $retNo,
-                            $invId,
-                            $inv['invoice_number'],
-                            $inv['customer_id'],
-                            $inv['customer_name'],
-                            $inv['warehouse_id'],
-                            $totalAmt,
-                            $discAmt,
-                            $taxAmt,
-                            $returnAmt,
-                            $inv['invoice_currency_id'],
-                            $inv['base_currency_id'],
-                            $inv['exchange_rate'],
-                            $payHandling,
-                            $refundAccId,
-                            $reason,
-                            $notes,
-                            $_SESSION['user_id']
+                            $retNo, $invId, $inv['invoice_number'], $inv['customer_id'], $inv['customer_name'], $inv['warehouse_id'],
+                            $totalAmt, $discAmt, $taxAmt, $returnAmt, $inv['invoice_currency_id'], $inv['base_currency_id'],
+                            $inv['exchange_rate'], $payHandling, $targetType, $refundAccId, $reason, $notes, $_SESSION['user_id']
                         ]);
                     $returnId = (int) $pdo->lastInsertId();
                 }
@@ -288,14 +256,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                              quantity_returned, unit_price, total_price)
                             VALUES (?,?,?,?,?,?,?,?)")
                         ->execute([
-                            $returnId,
-                            $ld['invoice_item_id'],
-                            $ld['product_id'],
-                            $ld['variant_id'],
-                            $ld['product_name'],
-                            $ld['quantity_returned'],
-                            $ld['unit_price'],
-                            $ld['total_price']
+                            $returnId, $ld['invoice_item_id'], $ld['product_id'], $ld['variant_id'],
+                            $ld['product_name'], $ld['quantity_returned'], $ld['unit_price'], $ld['total_price']
                         ]);
                 }
 
@@ -322,10 +284,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 WHERE r.id=?");
             $r->execute([$id]);
             $r = $r->fetch();
-            if (!$r) {
-                echo json_encode(['ok' => false, 'msg' => 'غير موجود']);
-                exit;
-            }
+            if (!$r) { echo json_encode(['ok' => false, 'msg' => 'غير موجود']); exit; }
             $items = $pdo->prepare("SELECT * FROM `{$TRI}` WHERE return_id=?");
             $items->execute([$id]);
             echo json_encode(['ok' => true, 'return' => $r, 'items' => $items->fetchAll()]);
@@ -339,8 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $chk = $pdo->prepare("SELECT status FROM `{$TR}` WHERE id=?");
             $chk->execute([$id]);
             if ($chk->fetchColumn() !== 'draft') {
-                echo json_encode(['ok' => false, 'msg' => 'لا يمكن حذف مرتجع مؤكد أو ملغى']);
-                exit;
+                echo json_encode(['ok' => false, 'msg' => 'لا يمكن حذف مرتجع مؤكد أو ملغى']); exit;
             }
             $pdo->prepare("DELETE FROM `{$TR}` WHERE id=? AND status='draft'")->execute([$id]);
             echo json_encode(['ok' => true, 'msg' => 'تم الحذف']);
@@ -355,10 +313,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── عرض الصفحة ──────────────────────────────────────────────────
-$search = trim($_GET['q'] ?? '');
-$status = $_GET['status'] ?? '';
+$search   = trim($_GET['q'] ?? '');
+$status   = $_GET['status'] ?? '';
+$custF    = (int) ($_GET['customer'] ?? 0);
 $dateFrom = $_GET['from'] ?? '';
-$dateTo = $_GET['to'] ?? '';
+$dateTo   = $_GET['to'] ?? '';
 
 $where = [];
 $params = [];
@@ -367,18 +326,10 @@ if ($search !== '') {
     $like = "%{$search}%";
     array_push($params, $like, $like, $like);
 }
-if ($status !== '') {
-    $where[] = "r.status = ?";
-    $params[] = $status;
-}
-if ($dateFrom !== '') {
-    $where[] = "r.return_date >= ?";
-    $params[] = $dateFrom;
-}
-if ($dateTo !== '') {
-    $where[] = "r.return_date <= ?";
-    $params[] = $dateTo;
-}
+if ($status !== '') { $where[] = "r.status = ?"; $params[] = $status; }
+if ($custF) { $where[] = "r.customer_id = ?"; $params[] = $custF; }
+if ($dateFrom !== '') { $where[] = "r.return_date >= ?"; $params[] = $dateFrom; }
+if ($dateTo !== '') { $where[] = "r.return_date <= ?"; $params[] = $dateTo; }
 $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
 $sql = "SELECT r.*, c.name AS customer_name_live, cur.code AS currency_code, cur.symbol AS currency_symbol
@@ -391,9 +342,12 @@ $st = $pdo->prepare($sql);
 $st->execute($params);
 $returns = $st->fetchAll();
 
+// قائمة العملاء لفلتر البحث — مطابق تماماً لفلتر "كل الموردين" بالمشتريات
+$allCustomers = $pdo->query("SELECT id, name FROM `{$TC}` WHERE status='active' ORDER BY name")->fetchAll();
+
 $STATUS_MAP = [
-    'draft' => ['label' => 'مسودة', 'cls' => 'bg-secondary-subtle text-secondary'],
-    'posted' => ['label' => 'مؤكد', 'cls' => 'bg-success-subtle text-success'],
+    'draft'     => ['label' => 'مسودة', 'cls' => 'bg-secondary-subtle text-secondary'],
+    'posted'    => ['label' => 'مؤكد', 'cls' => 'bg-success-subtle text-success'],
     'cancelled' => ['label' => 'ملغى', 'cls' => 'bg-danger-subtle text-danger'],
 ];
 
@@ -405,10 +359,10 @@ if (!empty($_SESSION['branch_id'])) {
 }
 
 $retStats = [
-    'total' => count($returns),
-    'draft' => count(array_filter($returns, fn($r) => $r['status'] === 'draft')),
-    'posted' => count(array_filter($returns, fn($r) => $r['status'] === 'posted')),
-    'amount' => array_sum(array_map(
+    'total'   => count($returns),
+    'draft'   => count(array_filter($returns, fn($r) => $r['status'] === 'draft')),
+    'posted'  => count(array_filter($returns, fn($r) => $r['status'] === 'posted')),
+    'amount'  => array_sum(array_map(
         fn($r) => $r['status'] !== 'cancelled' ? (float) $r['return_amount'] / (float) ($r['exchange_rate'] ?: 1) : 0,
         $returns
     )),
@@ -420,31 +374,51 @@ $retStats = [
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مرتجعات المبيعات — <?= htmlspecialchars($branchName) ?></title>
+    <title>مرتجعات المبيعات — FATORIZE</title>
     <link rel="icon" type="image/png" href="<?= BASE_PATH ?>/assets/images/logo.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
     <style>
-        .n {
-            font-variant-numeric: tabular-nums
-        }
+        .n { font-variant-numeric: tabular-nums }
 
-        .tbl-wrap {
-            background: #fff;
-            border-radius: 14px;
+        .act-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 7px;
             border: 1px solid #e2e8f0;
-            overflow: hidden
+            background: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: .8rem;
+            color: #64748b;
+            cursor: pointer;
+            transition: all .12s;
+            text-decoration: none
         }
 
-        .tbl-hdr {
-            padding: 12px 16px;
-            border-bottom: 1px solid #f1f5f9;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap
+        .act-btn:hover {
+            background: #f1f5f9
+        }
+
+        .act-btn.success-h:hover {
+            background: #dcfce7;
+            color: #16a34a;
+            border-color: #86efac
+        }
+
+        .act-btn.danger:hover {
+            background: #fee2e2;
+            color: #dc2626;
+            border-color: #fca5a5
+        }
+
+        .act-btn.info-h:hover {
+            background: #e0f2fe;
+            color: #0891b2;
+            border-color: #7dd3fc
         }
     </style>
 </head>
@@ -468,19 +442,18 @@ $retStats = [
 
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                 <li class="nav-item">
-                    <a class="nav-link fw-600" href="sales_index.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt me-1"></i>فواتير المبيعات
-                    </a>
-                </li>
-                <li class="nav-item">
                     <a class="nav-link fw-600" href="customers.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-people me-1"></i>إدارة العملاء
+                        <i class="bi bi-people me-1"></i>العملاء
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link fw-600" href="returns.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
+                    <a class="nav-link fw-600" href="sales_index.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-receipt me-1"></i>الفواتير
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600 active" href="returns.php"
+                        style="border:none;border-bottom:2px solid #16a34a;color:#16a34a;font-size:.83rem;margin-bottom:-2px">
                         <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المبيعات
                     </a>
                 </li>
@@ -509,8 +482,8 @@ $retStats = [
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#fef3c7"><i class="bi bi-hourglass text-warning"></i>
-                        </div>
+                        <div class="stat-icon" style="background:#fef3c7"><i
+                                class="bi bi-hourglass text-warning"></i></div>
                         <div>
                             <div class="stat-val"><?= $retStats['draft'] ?></div>
                             <div class="stat-lbl">مسودات</div>
@@ -532,141 +505,142 @@ $retStats = [
                         <div class="stat-icon" style="background:#fee2e2"><i
                                 class="bi bi-currency-dollar text-danger"></i></div>
                         <div>
-                            <div class="stat-val n"><?= number_format($retStats['amount'], 2) ?>
-                                <?= htmlspecialchars($baseCurSym) ?>
-                            </div>
-                            <div class="stat-lbl">إجمالي المرتجعات (بعملة الفرع)</div>
+                            <div class="stat-val n"><?= number_format($retStats['amount'], 2) ?> <?= htmlspecialchars($baseCurSym) ?></div>
+                            <div class="stat-lbl">إجمالي قيمة المرتجعات (بعملة الفرع)</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- فلاتر -->
-            <div class="tbl-wrap mb-3">
-                <div class="tbl-hdr">
-                    <span style="font-size:.88rem;font-weight:700;color:#1e293b;white-space:nowrap">
-                        <i class="bi bi-people me-1 text-primary"></i>سجل قائمة العملاء
-                    </span>
-
-                    <form method="get" class="d-flex gap-2 flex-wrap align-items-center">
-                        <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
-                            placeholder="رقم المرتجع أو الفاتورة أو العميل..." class="form-control form-control-sm"
-                            style="width:200px;border-radius:8px">
-                        <select name="status" class="form-select form-select-sm" style="width:120px;border-radius:8px"
-                            onchange="this.form.submit()">
-                            <option value="">كل الحالات</option>
-                            <?php foreach ($STATUS_MAP as $k => $v): ?>
-                                <option value="<?= $k ?>" <?= $status === $k ? 'selected' : '' ?>>
-                                    <?= $v['label'] ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                        <input type="date" name="from" value="<?= htmlspecialchars($dateFrom) ?>"
-                            class="form-control form-control-sm" style="width:140px;border-radius:8px">
-                        <span style="font-size:.8rem;color:#94a3b8">—</span>
-                        <input type="date" name="to" value="<?= htmlspecialchars($dateTo) ?>"
-                            class="form-control form-control-sm" style="width:140px;border-radius:8px">
-                        <button type="submit" class="btn btn-sm btn-success" style="border-radius:8px">
-                            <i class="bi bi-search me-1"></i>بحث
-                        </button>
-                        <?php if ($search || $status || $dateFrom || $dateTo): ?>
-                            <a href="returns.php" class="btn btn-sm btn-light" style="border-radius:8px">
-                                <i class="bi bi-x-lg me-1"></i>مسح
-                            </a>
-                        <?php endif; ?>
-                    </form>
-
-                    <a class="btn btn-sm fw-600" onclick="openAdd()"
-                        style="border-radius:9px;background:#16a34a;color:#fff;font-size:.82rem;text-decoration:none;white-space:nowrap">
-                        <i class="bi bi-plus-lg me-1"></i>عميل جديد
-                    </a>
-                </div>
-            </div>
-
-
             <div class="tbl-wrap">
                 <div class="tbl-hdr">
+                    <span style="font-size:.88rem;font-weight:700;color:#1e293b">
+                        <i class="bi bi-list-ul me-1 text-success"></i>سجل مرتجعات المبيعات
+                    </span>
+                    <div class="d-flex gap-2 ms-auto flex-wrap align-items-center">
+                        <form method="get" class="d-flex gap-2 flex-wrap align-items-center">
+                            <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
+                                placeholder="رقم المرتجع أو الفاتورة أو العميل..." class="form-control form-control-sm"
+                                style="width:200px;border-radius:8px">
+                            <select name="status" class="form-select form-select-sm"
+                                style="width:120px;border-radius:8px" onchange="this.form.submit()">
+                                <option value="">كل الحالات</option>
+                                <?php foreach ($STATUS_MAP as $k => $v): ?>
+                                            <option value="<?= $k ?>" <?= $status === $k ? 'selected' : '' ?>>
+                                                <?= $v['label'] ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <select name="customer" class="form-select form-select-sm"
+                                style="width:150px;border-radius:8px" onchange="this.form.submit()">
+                                <option value="">كل العملاء</option>
+                                <?php foreach ($allCustomers as $ac): ?>
+                                            <option value="<?= $ac['id'] ?>" <?= $custF === (int) $ac['id'] ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($ac['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <input type="date" name="from" value="<?= htmlspecialchars($dateFrom) ?>"
+                                class="form-control form-control-sm" style="width:140px;border-radius:8px">
+                            <span style="font-size:.8rem;color:#94a3b8">—</span>
+                            <input type="date" name="to" value="<?= htmlspecialchars($dateTo) ?>"
+                                class="form-control form-control-sm" style="width:140px;border-radius:8px">
+                            <button type="submit" class="btn btn-sm btn-success" style="border-radius:8px">
+                                <i class="bi bi-search me-1"></i>بحث
+                            </button>
+                            <?php if ($search || $status || $custF || $dateFrom || $dateTo): ?>
+                                        <a href="returns.php" class="btn btn-sm btn-light" style="border-radius:8px">
+                                            <i class="bi bi-x-lg me-1"></i>مسح
+                                        </a>
+                            <?php endif; ?>
+                        </form>
+                        <button class="btn btn-sm fw-600" onclick="openNewReturn()"
+                            style="border-radius:9px;background:#16a34a;color:#fff;font-size:.82rem">
+                            <i class="bi bi-plus-lg me-1"></i>مرتجع جديد
+                        </button>
+                    </div>
                 </div>
                 <div class="table-responsive">
-
+                    <table class="mtbl" id="returnsTbl">
+                        <thead>
+                            <tr>
+                                <th style="color:#16a34a">رقم المرتجع</th>
+                                <th>التاريخ</th>
+                                <th style="color:#16a34a">العميل</th>
+                                <th>الفاتورة الأصلية</th>
+                                <th>القيمة</th>
+                                <th>طريقة التسوية</th>
+                                <th>الحالة</th>
+                                <th style="text-align:center" data-no-sort>إجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (empty($returns)): ?>
+                                        <tr>
+                                            <td colspan="8" class="text-center text-muted py-5">
+                                                <i class="bi bi-arrow-return-right d-block mb-2"
+                                                    style="font-size:2rem;opacity:.2"></i>
+                                                لا توجد مرتجعات<?= $search ? " تطابق \"{$search}\"" : '' ?>
+                                            </td>
+                                        </tr>
+                            <?php endif; ?>
+                            <?php foreach ($returns as $r):
+                                $st2 = $STATUS_MAP[$r['status']] ?? $STATUS_MAP['draft'];
+                                $sym = $r['currency_symbol'] ?? '$';
+                                $payLabels = [
+                                    'not_paid' => 'لم تُسوَّ', 'partial' => 'تسوية جزئية', 'paid_full' => 'تسوية كاملة',
+                                ];
+                                $targetLabels = [
+                                    'cash' => 'استرداد نقدي', 'receivable' => 'خصم من ذمة العميل', 'prepaid' => 'دفعة مقدمة',
+                                ];
+                                $payDisplay = $payLabels[$r['payment_handling']] ?? '—';
+                                if (!empty($r['target_account_type']) && isset($targetLabels[$r['target_account_type']])) {
+                                    $payDisplay .= ' — ' . $targetLabels[$r['target_account_type']];
+                                }
+                                ?>
+                                        <tr>
+                                            <td class="n fw-600" style="direction:ltr;color:#16a34a">
+                                                <?= htmlspecialchars($r['return_number'] ?? '—') ?>
+                                            </td>
+                                            <td class="text-muted"><?= $r['return_date'] ?></td>
+                                            <td style="color:#16a34a" class="fw-600">
+                                                <?= htmlspecialchars($r['customer_name_live'] ?? $r['customer_name'] ?? '—') ?>
+                                            </td>
+                                            <td class="text-muted" style="font-size:.8rem">
+                                                <?= htmlspecialchars($r['invoice_number'] ?? '—') ?>
+                                            </td>
+                                            <td class="n fw-600"><?= number_format((float) $r['return_amount'], 2) ?>
+                                                <?= $sym ?></td>
+                                            <td style="font-size:.78rem"><?= htmlspecialchars($payDisplay) ?></td>
+                                            <td><span class="badge <?= $st2['cls'] ?>"
+                                                    style="font-size:.68rem"><?= $st2['label'] ?></span></td>
+                                            <td>
+                                                <div class="d-flex gap-1 justify-content-center">
+                                                    <button class="act-btn info-h" onclick="viewReturn(<?= $r['id'] ?>)"
+                                                        title="عرض"><i class="bi bi-eye"></i></button>
+                                                    <button class="act-btn" onclick="printSaleReturn(<?= $r['id'] ?>)"
+                                                        title="طباعة"><i class="bi bi-printer"></i></button>
+                                                    <?php if ($r['status'] === 'draft'): ?>
+                                                                <button class="act-btn" onclick="editReturn(<?= $r['id'] ?>)"
+                                                                    title="تعديل"><i class="bi bi-pencil"></i></button>
+                                                                <button class="act-btn success-h"
+                                                                    onclick="confirmReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
+                                                                    title="تأكيد"><i
+                                                                        class="bi bi-check-circle"></i></button>
+                                                                <button class="act-btn danger"
+                                                                    onclick="deleteReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
+                                                                    title="حذف"><i class="bi bi-trash"></i></button>
+                                                    <?php elseif ($r['status'] === 'posted'): ?>
+                                                                <button class="act-btn danger"
+                                                                    onclick="cancelReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
+                                                                    title="إلغاء"><i class="bi bi-x-circle"></i></button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
-                <table class="mtbl" id="returnsTbl">
-                    <thead>
-                        <tr>
-                            <th style="color:#16a34a">رقم المرتجع</th>
-                            <th>التاريخ</th>
-                            <th style="color:#16a34a">العميل</th>
-                            <th>الفاتورة الأصلية</th>
-                            <th>القيمة</th>
-                            <th>طريقة التسوية</th>
-                            <th>الحالة</th>
-                            <th style="text-align:center" data-no-sort>إجراءات</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($returns)): ?>
-                            <tr>
-                                <td colspan="8" class="text-center text-muted py-5">
-                                    <i class="bi bi-arrow-return-right d-block mb-2" style="font-size:2rem;opacity:.2"></i>
-                                    لا توجد مرتجعات<?= $search ? " تطابق \"{$search}\"" : '' ?>
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                        <?php foreach ($returns as $r):
-                            $st2 = $STATUS_MAP[$r['status']] ?? $STATUS_MAP['draft'];
-                            $sym = $r['currency_symbol'] ?? '$';
-                            $payLabels = [
-                                'not_paid' => 'لم تُسوَّ',
-                                'partial' => 'تسوية جزئية',
-                                'paid_refund_cash' => 'استرداد نقدي',
-                                'paid_credit_customer' => 'خصم من ذمة العميل'
-                            ];
-                            ?>
-                            <tr>
-                                <td class="n fw-600" style="direction:ltr;color:#16a34a">
-                                    <?= htmlspecialchars($r['return_number'] ?? '—') ?>
-                                </td>
-                                <td class="text-muted"><?= $r['return_date'] ?></td>
-                                <td style="color:#16a34a" class="fw-600">
-                                    <?= htmlspecialchars($r['customer_name_live'] ?? $r['customer_name'] ?? '—') ?>
-                                </td>
-                                <td class="text-muted" style="font-size:.8rem">
-                                    <?= htmlspecialchars($r['invoice_number'] ?? '—') ?>
-                                </td>
-                                <td class="n fw-600"><?= number_format((float) $r['return_amount'], 2) ?>
-                                    <?= $sym ?>
-                                </td>
-                                <td style="font-size:.78rem"><?= $payLabels[$r['payment_handling']] ?? '—' ?></td>
-                                <td><span class="badge <?= $st2['cls'] ?>"
-                                        style="font-size:.68rem"><?= $st2['label'] ?></span></td>
-                                <td>
-                                    <div class="d-flex gap-1 justify-content-center">
-                                        <button class="act-btn info-h" onclick="viewReturn(<?= $r['id'] ?>)" title="عرض"><i
-                                                class="bi bi-eye"></i></button>
-                                        <button class="act-btn" onclick="printSaleReturn(<?= $r['id'] ?>)" title="طباعة"><i
-                                                class="bi bi-printer"></i></button>
-                                        <?php if ($r['status'] === 'draft'): ?>
-                                            <button class="act-btn" onclick="editReturn(<?= $r['id'] ?>)" title="تعديل"><i
-                                                    class="bi bi-pencil"></i></button>
-                                            <button class="act-btn success-h"
-                                                onclick="confirmReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
-                                                title="تأكيد"><i class="bi bi-check-circle"></i></button>
-                                            <button class="act-btn danger"
-                                                onclick="deleteReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
-                                                title="حذف"><i class="bi bi-trash"></i></button>
-                                        <?php elseif ($r['status'] === 'posted'): ?>
-                                            <button class="act-btn danger"
-                                                onclick="cancelReturn(<?= $r['id'] ?>,'<?= htmlspecialchars($r['return_number'], ENT_QUOTES) ?>')"
-                                                title="إلغاء"><i class="bi bi-x-circle"></i></button>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
             </div>
-        </div>
 
         </div>
     </main>
@@ -736,8 +710,17 @@ $retStats = [
                                     onchange="onRPayHandlingChange()">
                                     <option value="not_paid">لم تُسوَّ بعد</option>
                                     <option value="partial">تسوية جزئية</option>
-                                    <option value="paid_refund_cash">استرداد نقدي فوري</option>
-                                    <option value="paid_credit_customer">خصم من ذمة العميل</option>
+                                    <option value="paid_full">تسوية كاملة</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4" id="rTargetTypeWrap" style="display:none">
+                                <label class="form-label small fw-600">الحساب المستهدف</label>
+                                <select id="rTargetType" class="form-select form-select-sm" style="border-radius:8px"
+                                    onchange="onRTargetTypeChange()">
+                                    <option value="">— اختر —</option>
+                                    <option value="cash">استرداد نقدي (صندوق/بنك)</option>
+                                    <option value="receivable">خصم من ذمة العميل</option>
+                                    <option value="prepaid">تحويل لرصيد دائن (دفعة مقدمة)</option>
                                 </select>
                             </div>
                             <div class="col-md-4">
@@ -749,15 +732,14 @@ $retStats = [
                                 <label class="form-label small fw-600">
                                     <i class="bi bi-safe me-1"></i>حساب استرداد المبلغ (صندوق/بنك)
                                 </label>
-                                <select id="rRefundAccount" class="form-select form-select-sm"
-                                    style="border-radius:8px">
+                                <select id="rRefundAccount" class="form-select form-select-sm" style="border-radius:8px">
                                     <option value="">— اختر حساب الاسترداد —</option>
                                     <?php foreach ($cashAccounts as $ca): ?>
-                                        <option value="<?= $ca['id'] ?>"
-                                            data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
-                                            <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                            (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                        </option>
+                                                <option value="<?= $ca['id'] ?>"
+                                                    data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
+                                                    <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                                    (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
+                                                </option>
                                     <?php endforeach; ?>
                                 </select>
                                 <div class="form-text" style="font-size:.7rem">تُفلتَر تلقائياً حسب عملة المرتجع
@@ -765,8 +747,7 @@ $retStats = [
                             </div>
                         </div>
 
-                        <div class="mt-3"
-                            style="background:#f8fafc;border-radius:10px;padding:12px 14px;font-size:.82rem">
+                        <div class="mt-3" style="background:#f8fafc;border-radius:10px;padding:12px 14px;font-size:.82rem">
                             <div class="row g-2 mb-2 pb-2" style="border-bottom:1px solid #e2e8f0">
                                 <div class="col-6 col-md-3">
                                     <small style="color:#64748b">عملة الفاتورة</small>
@@ -800,8 +781,7 @@ $retStats = [
                                 </div>
                                 <div class="col-6 col-md-3">
                                     <small style="color:#64748b">صافي المرتجع</small>
-                                    <div class="fw-700" style="color:#065f46;font-size:.95rem" id="rTotalLine">0.00
-                                    </div>
+                                    <div class="fw-700" style="color:#065f46;font-size:.95rem" id="rTotalLine">0.00</div>
                                 </div>
                             </div>
                             <div class="form-text mt-1" style="font-size:.7rem">
@@ -814,8 +794,7 @@ $retStats = [
                 <div class="modal-footer">
                     <button type="button" class="btn btn-light btn-sm" data-bs-dismiss="modal"
                         style="border-radius:8px">إلغاء</button>
-                    <button type="button" class="btn btn-sm fw-600"
-                        style="border-radius:8px;background:#16a34a;color:#fff" id="btnSaveReturn"
+                    <button type="button" class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff" id="btnSaveReturn"
                         onclick="saveReturn()" disabled>
                         <span id="saveRetTxt"><i class="bi bi-save me-1"></i>حفظ كمسودة</span>
                         <span id="saveRetSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
@@ -827,31 +806,12 @@ $retStats = [
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const sb = document.getElementById('sidebar'),
-            ov = document.getElementById('sbOverlay');
-
-        function sbOpen() {
-            sb.classList.add('open');
-            ov.classList.add('show');
-        }
-
-        function sbClose() {
-            sb.classList.remove('open');
-            ov.classList.remove('show');
-        }
-        window.addEventListener('resize', () => {
-            if (window.innerWidth > 991) sbClose();
-        });
-
-        function toggleGroup(g) {
-            const o = g.classList.contains('open');
-            document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
-            g.classList.toggle('open', !o);
-            localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());
-        }
-        document.querySelectorAll('.sb-group').forEach(g => {
-            if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');
-        });
+        const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
+        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
+        function toggleGroup(g) { const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString()); }
+        document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
 
         const retModal = new bootstrap.Modal(document.getElementById('retModal'));
         let rItems = [];
@@ -860,10 +820,7 @@ $retStats = [
         function post(data) {
             const fd = new FormData();
             for (const k in data) fd.append(k, data[k]);
-            return fetch('returns.php', {
-                method: 'POST',
-                body: fd
-            }).then(r => r.json());
+            return fetch('returns.php', { method: 'POST', body: fd }).then(r => r.json());
         }
 
         function toast(msg, type = 'success') {
@@ -903,10 +860,7 @@ $retStats = [
             clearTimeout(_rSearchDebounce);
             _rSearchDebounce = setTimeout(() => {
                 const q = document.getElementById('rSearchInvoice').value.trim();
-                post({
-                    _action: 'find_invoice',
-                    q
-                }).then(d => {
+                post({ _action: 'find_invoice', q }).then(d => {
                     const sel = document.getElementById('rInvoiceSelect');
                     _rInvoicesMap = {};
                     if (!d.ok || !d.invoices.length) {
@@ -939,52 +893,59 @@ $retStats = [
             _rSelectedInvoice = p;
             onRPayHandlingChange();
 
-            const PAY_LABELS = {
-                paid: 'مدفوعة بالكامل',
-                partial: 'مدفوعة جزئياً',
-                pending: 'غير مدفوعة'
-            };
+            const PAY_LABELS = { paid: 'مدفوعة بالكامل', partial: 'مدفوعة جزئياً', pending: 'غير مدفوعة' };
             document.getElementById('rInvCurLbl').textContent = p.currency_code || '—';
-            document.getElementById('rExRateLbl').textContent = p.base_currency_code && p.exchange_rate ?
-                `1 ${p.base_currency_code} = ${Number(p.exchange_rate).toFixed(4)} ${p.currency_code}` : '—';
+            document.getElementById('rExRateLbl').textContent = p.base_currency_code && p.exchange_rate
+                ? `1 ${p.base_currency_code} = ${Number(p.exchange_rate).toFixed(4)} ${p.currency_code}` : '—';
             document.getElementById('rPayStatusLbl').textContent = PAY_LABELS[p.payment_status] || p.payment_status || '—';
-            document.getElementById('rInvNetLbl').textContent = p.final_amount ?
-                Number(p.final_amount).toFixed(2) + ' ' + (p.currency_symbol || '') : '—';
+            document.getElementById('rInvNetLbl').textContent = p.final_amount
+                ? Number(p.final_amount).toFixed(2) + ' ' + (p.currency_symbol || '') : '—';
 
-            const refundOpt = document.querySelector('#rPayHandling option[value="paid_refund_cash"]');
+            // ⚠ "استرداد نقدي" منطقي بس لو الفاتورة فعلاً كان فيها دفع
+            // (وإلا مافي مبلغ نقدي حقيقي نرجّعه). نفس تحقق سابق، بس
+            // مطبَّق على خيار target_account_type='cash' هلق بدل
+            // payment_handling القديم.
+            const cashOpt = document.querySelector('#rTargetType option[value="cash"]');
             const hadPayment = p.payment_status === 'paid' || p.payment_status === 'partial';
-            refundOpt.disabled = !hadPayment;
-            refundOpt.textContent = hadPayment ? 'استرداد نقدي فوري' : 'استرداد نقدي فوري (الفاتورة غير مدفوعة أصلاً)';
-            if (!hadPayment && document.getElementById('rPayHandling').value === 'paid_refund_cash') {
-                document.getElementById('rPayHandling').value = 'not_paid';
-                onRPayHandlingChange();
+            if (cashOpt) {
+                cashOpt.disabled = !hadPayment;
+                cashOpt.textContent = hadPayment ? 'استرداد نقدي (صندوق/بنك)' : 'استرداد نقدي (الفاتورة غير مدفوعة أصلاً)';
+                if (!hadPayment && document.getElementById('rTargetType').value === 'cash') {
+                    document.getElementById('rTargetType').value = '';
+                    onRTargetTypeChange();
+                }
             }
 
-            post({
-                _action: 'get_invoice_items',
-                invoice_id: p.id
-            }).then(d => {
-                if (!d.ok) {
-                    toast(d.msg, 'danger');
-                    return;
-                }
+            post({ _action: 'get_invoice_items', invoice_id: p.id }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
                 rItems = d.items;
                 renderItemsTable();
             });
         }
 
+        // ⚠ نمط "الحساب المستهدف" الجديد (مطابق لمرتجعات المشتريات):
+        // not_paid = بلا حساب مستهدف إطلاقاً. partial/paid_full = لازم
+        // يختار نوع الحساب (صندوق/ذمة/دفعة مقدمة)، وحساب الصندوق نفسه
+        // بس يظهر لو اختار "صندوق/بنك" تحديداً.
         function onRPayHandlingChange() {
+            const val = document.getElementById('rPayHandling').value;
+            const needsTarget = val === 'partial' || val === 'paid_full';
+            document.getElementById('rTargetTypeWrap').style.display = needsTarget ? '' : 'none';
+            if (!needsTarget) {
+                document.getElementById('rTargetType').value = '';
+                onRTargetTypeChange();
+            }
+        }
+
+        function onRTargetTypeChange() {
             const wrap = document.getElementById('rRefundAccWrap');
-            const isRefund = document.getElementById('rPayHandling').value === 'paid_refund_cash';
-            wrap.style.display = isRefund ? '' : 'none';
-            if (isRefund) {
+            const isCash = document.getElementById('rTargetType').value === 'cash';
+            wrap.style.display = isCash ? '' : 'none';
+            if (isCash) {
                 const sel = document.getElementById('rRefundAccount');
                 let stillValid = false;
                 Array.from(sel.options).forEach(opt => {
-                    if (!opt.value) {
-                        opt.style.display = '';
-                        return;
-                    }
+                    if (!opt.value) { opt.style.display = ''; return; }
                     const show = opt.dataset.cur === _rSelectedCurrency;
                     opt.style.display = show ? '' : 'none';
                     if (show && opt.value === sel.value) stillValid = true;
@@ -1000,8 +961,7 @@ $retStats = [
             const nums = sizes.map(s => parseFloat(s)).filter(n => !isNaN(n));
             let label;
             if (nums.length === sizes.length && nums.length > 0) {
-                const min = Math.min(...nums),
-                    max = Math.max(...nums);
+                const min = Math.min(...nums), max = Math.max(...nums);
                 label = min === max ? String(min) : `${min}-${max}`;
             } else {
                 label = sizes.join(' · ') || '—'; // مقاسات نصية (S/M/L مثلاً) — تبقى كما هي
@@ -1023,12 +983,9 @@ $retStats = [
             rItems.forEach(it => {
                 const key = (it.product_id || it.item_name) + '_' + it.unit_price + '_' + (it.color || '');
                 if (!map[key]) map[key] = {
-                    product_name: it.product_name,
-                    model_number: it.model_number || '',
-                    color: it.color || '—',
-                    unit_price: parseFloat(it.unit_price),
-                    sizes: [],
-                    members: []
+                    product_name: it.product_name, model_number: it.model_number || '',
+                    color: it.color || '—', unit_price: parseFloat(it.unit_price),
+                    sizes: [], members: []
                 };
                 if (it.size && !map[key].sizes.includes(it.size)) map[key].sizes.push(it.size);
                 if (!map[key].age_type) map[key].age_type = it.age_type || '';
@@ -1070,14 +1027,8 @@ $retStats = [
         function onQtyChange(i) {
             const g = rGroups[i];
             let qty = parseFloat(document.getElementById(`qty${i}`).value) || 0;
-            if (qty > g.minReturnable) {
-                qty = g.minReturnable;
-                document.getElementById(`qty${i}`).value = qty;
-            }
-            if (qty < 0) {
-                qty = 0;
-                document.getElementById(`qty${i}`).value = '';
-            }
+            if (qty > g.minReturnable) { qty = g.minReturnable; document.getElementById(`qty${i}`).value = qty; }
+            if (qty < 0) { qty = 0; document.getElementById(`qty${i}`).value = ''; }
             g.qty = qty;
             // إجمالي الكروب = عدد الكروبات المرتجعة × سعر القطعة × عدد
             // المقاسات المدموجة — نفس صيغة "عدد الكروبات" المعتمدة بكل
@@ -1088,8 +1039,7 @@ $retStats = [
         }
 
         function updateTotal() {
-            let subtotal = 0,
-                anySelected = false;
+            let subtotal = 0, anySelected = false;
             rGroups.forEach(g => {
                 if (g.qty > 0) {
                     anySelected = true;
@@ -1097,8 +1047,7 @@ $retStats = [
                 }
             });
 
-            let discAmt = 0,
-                taxAmt = 0;
+            let discAmt = 0, taxAmt = 0;
             const p = _rSelectedInvoice;
             if (p && parseFloat(p.total_amount) > 0) {
                 const discRatio = (parseFloat(p.inv_discount_amount) || 0) / parseFloat(p.total_amount);
@@ -1133,10 +1082,7 @@ $retStats = [
                     });
                 }
             });
-            if (!lines.length) {
-                toast('اختر بند واحد على الأقل', 'danger');
-                return;
-            }
+            if (!lines.length) { toast('اختر بند واحد على الأقل', 'danger'); return; }
 
             document.getElementById('saveRetTxt').style.opacity = '0';
             document.getElementById('saveRetSpin').style.display = '';
@@ -1148,6 +1094,7 @@ $retStats = [
                 invoice_id: document.getElementById('rInvoiceId').value,
                 return_reason: document.getElementById('rReason').value,
                 payment_handling: document.getElementById('rPayHandling').value,
+                target_account_type: document.getElementById('rTargetType').value,
                 refund_account_id: document.getElementById('rRefundAccount').value,
                 notes: document.getElementById('rNotes').value,
                 lines: JSON.stringify(lines)
@@ -1155,11 +1102,8 @@ $retStats = [
                 document.getElementById('saveRetTxt').style.opacity = '1';
                 document.getElementById('saveRetSpin').style.display = 'none';
                 document.getElementById('btnSaveReturn').disabled = false;
-                if (d.ok) {
-                    toast(d.msg);
-                    retModal.hide();
-                    setTimeout(() => location.reload(), 700);
-                } else toast(d.msg, 'danger');
+                if (d.ok) { toast(d.msg); retModal.hide(); setTimeout(() => location.reload(), 700); }
+                else toast(d.msg, 'danger');
             });
         }
 
@@ -1168,14 +1112,8 @@ $retStats = [
         }
 
         function editReturn(id, readOnly = false) {
-            post({
-                _action: 'get_return',
-                id
-            }).then(d => {
-                if (!d.ok) {
-                    toast(d.msg, 'danger');
-                    return;
-                }
+            post({ _action: 'get_return', id }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
                 document.getElementById('rReturnId').value = id;
                 document.getElementById('rInvoiceId').value = d.return.invoice_id;
                 document.getElementById('rSelCustomer').textContent = d.return.customer_name_live || '';
@@ -1185,38 +1123,29 @@ $retStats = [
                 document.getElementById('rNotes').value = d.return.notes || '';
                 _rSelectedCurrency = d.return.currency_code || 'USD';
                 _rSelectedInvoice = {
-                    total_amount: d.return.total_amount,
-                    inv_discount_amount: d.return.inv_discount_amount,
-                    inv_tax_amount: d.return.inv_tax_amount,
-                    final_amount: d.return.final_amount,
-                    payment_status: d.return.payment_status,
-                    currency_code: d.return.currency_code,
-                    currency_symbol: d.return.currency_symbol,
-                    base_currency_code: d.return.base_currency_code,
+                    total_amount: d.return.total_amount, inv_discount_amount: d.return.inv_discount_amount,
+                    inv_tax_amount: d.return.inv_tax_amount, final_amount: d.return.final_amount,
+                    payment_status: d.return.payment_status, currency_code: d.return.currency_code,
+                    currency_symbol: d.return.currency_symbol, base_currency_code: d.return.base_currency_code,
                     exchange_rate: d.return.exchange_rate
                 };
-                const PAY_LABELS2 = {
-                    paid: 'مدفوعة بالكامل',
-                    partial: 'مدفوعة جزئياً',
-                    pending: 'غير مدفوعة'
-                };
+                const PAY_LABELS2 = { paid: 'مدفوعة بالكامل', partial: 'مدفوعة جزئياً', pending: 'غير مدفوعة' };
                 document.getElementById('rInvCurLbl').textContent = d.return.currency_code || '—';
-                document.getElementById('rExRateLbl').textContent = d.return.base_currency_code && d.return.exchange_rate ?
-                    `1 ${d.return.base_currency_code} = ${Number(d.return.exchange_rate).toFixed(4)} ${d.return.currency_code}` : '—';
+                document.getElementById('rExRateLbl').textContent = d.return.base_currency_code && d.return.exchange_rate
+                    ? `1 ${d.return.base_currency_code} = ${Number(d.return.exchange_rate).toFixed(4)} ${d.return.currency_code}` : '—';
                 document.getElementById('rPayStatusLbl').textContent = PAY_LABELS2[d.return.payment_status] || d.return.payment_status || '—';
-                document.getElementById('rInvNetLbl').textContent = d.return.final_amount ?
-                    Number(d.return.final_amount).toFixed(2) + ' ' + (d.return.currency_symbol || '') : '—';
+                document.getElementById('rInvNetLbl').textContent = d.return.final_amount
+                    ? Number(d.return.final_amount).toFixed(2) + ' ' + (d.return.currency_symbol || '') : '—';
                 onRPayHandlingChange();
+                document.getElementById('rTargetType').value = d.return.target_account_type || '';
+                onRTargetTypeChange();
                 if (d.return.refund_account_id) document.getElementById('rRefundAccount').value = d.return.refund_account_id;
                 document.getElementById('stepFindInvoice').style.display = 'none';
                 document.getElementById('stepItems').style.display = '';
                 document.getElementById('retModalTitle').innerHTML =
                     (readOnly ? '<i class="bi bi-eye me-1 text-success"></i>عرض مرتجع: ' : '<i class="bi bi-pencil me-1 text-success"></i>تعديل مرتجع: ') + d.return.return_number;
 
-                post({
-                    _action: 'get_invoice_items',
-                    invoice_id: d.return.invoice_id
-                }).then(d2 => {
+                post({ _action: 'get_invoice_items', invoice_id: d.return.invoice_id }).then(d2 => {
                     rItems = d2.items;
                     renderItemsTable();
                     // ⚠ البحث هون بالكروب (rGroups) يلي يحتوي هالمقاس
@@ -1249,10 +1178,7 @@ $retStats = [
             const fd = new FormData();
             fd.append('_action', 'confirm_return');
             fd.append('return_id', id);
-            fetch('../../api/confirm_sale_return.php', {
-                method: 'POST',
-                body: fd
-            })
+            fetch('../../api/confirm_sale_return.php', { method: 'POST', body: fd })
                 .then(async r => {
                     const text = await r.text();
                     if (!r.ok) {
@@ -1267,24 +1193,17 @@ $retStats = [
                     }
                 })
                 .then(d => {
-                    if (d.ok) {
-                        toast('✅ ' + d.msg);
-                        setTimeout(() => location.reload(), 800);
-                    } else toast(d.msg, 'danger');
+                    if (d.ok) { toast('✅ ' + d.msg); setTimeout(() => location.reload(), 800); }
+                    else toast(d.msg, 'danger');
                 })
                 .catch(err => toast(err.message || 'تعذّر الاتصال بخادم التأكيد', 'danger'));
         }
 
         function deleteReturn(id, no) {
             if (!confirm(`حذف المرتجع "${no}"؟ (مسودة فقط، بدون أي تأثير على المخزون)`)) return;
-            post({
-                _action: 'delete_return',
-                id
-            }).then(d => {
-                if (d.ok) {
-                    toast(d.msg);
-                    setTimeout(() => location.reload(), 600);
-                } else toast(d.msg, 'danger');
+            post({ _action: 'delete_return', id }).then(d => {
+                if (d.ok) { toast(d.msg); setTimeout(() => location.reload(), 600); }
+                else toast(d.msg, 'danger');
             });
         }
 
@@ -1299,20 +1218,13 @@ $retStats = [
         ], JSON_UNESCAPED_UNICODE) ?>;
 
         function printSaleReturn(id) {
-            post({
-                _action: 'get_return',
-                id
-            }).then(d => {
-                if (!d.ok) {
-                    toast(d.msg, 'danger');
-                    return;
-                }
+            post({ _action: 'get_return', id }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
                 const r = d.return;
                 const sym = r.currency_symbol || '$';
                 const fmt = n => sym + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
 
-                let rows = '',
-                    i = 1;
+                let rows = '', i = 1;
                 (d.items || []).forEach(it => {
                     rows += `<tr>
                 <td>${i++}</td>
@@ -1412,28 +1324,22 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
             fd.append('_action', 'cancel_return');
             fd.append('return_id', id);
             fd.append('reason', reason || '');
-            fetch('../../api/confirm_sale_return.php', {
-                method: 'POST',
-                body: fd
-            })
+            fetch('../../api/confirm_sale_return.php', { method: 'POST', body: fd })
                 .then(async r => {
                     const text = await r.text();
                     if (!r.ok) {
                         console.error('HTTP', r.status, text);
                         throw new Error(`HTTP ${r.status} — راجع مسار confirm_sale_return.php`);
                     }
-                    try {
-                        return JSON.parse(text);
-                    } catch (e) {
+                    try { return JSON.parse(text); }
+                    catch (e) {
                         console.error('استجابة غير صالحة (مو JSON):', text);
                         throw new Error('الخادم رجّع استجابة غير متوقعة — افتح Console (F12)');
                     }
                 })
                 .then(d => {
-                    if (d.ok) {
-                        toast('✅ ' + d.msg);
-                        setTimeout(() => location.reload(), 800);
-                    } else toast(d.msg, 'danger');
+                    if (d.ok) { toast('✅ ' + d.msg); setTimeout(() => location.reload(), 800); }
+                    else toast(d.msg, 'danger');
                 })
                 .catch(err => toast(err.message || 'تعذّر الاتصال بخادم الإلغاء', 'danger'));
         }
@@ -1466,8 +1372,7 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
             const getCellValue = (row) => (row.children[colIndex]?.innerText || '').trim();
             const isoDateRe = /^\d{4}-\d{2}-\d{2}/;
             rows.sort((a, b) => {
-                const valA = getCellValue(a),
-                    valB = getCellValue(b);
+                const valA = getCellValue(a), valB = getCellValue(b);
                 if (isoDateRe.test(valA) && isoDateRe.test(valB)) {
                     const dA = new Date(valA.slice(0, 10)).getTime();
                     const dB = new Date(valB.slice(0, 10)).getTime();
@@ -1475,8 +1380,8 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
                 }
                 const cleanA = valA.replace(/[^0-9.\-]/g, '');
                 const cleanB = valB.replace(/[^0-9.\-]/g, '');
-                const fullyNumeric = /^-?[0-9]+(\.[0-9]+)?$/.test(cleanA) && /^-?[0-9]+(\.[0-9]+)?$/.test(cleanB) &&
-                    cleanA !== '' && cleanB !== '' && cleanA !== '-' && cleanB !== '-';
+                const fullyNumeric = /^-?[0-9]+(\.[0-9]+)?$/.test(cleanA) && /^-?[0-9]+(\.[0-9]+)?$/.test(cleanB)
+                    && cleanA !== '' && cleanB !== '' && cleanA !== '-' && cleanB !== '-';
                 if (fullyNumeric) {
                     return isAsc ? parseFloat(cleanA) - parseFloat(cleanB) : parseFloat(cleanB) - parseFloat(cleanA);
                 }
@@ -1492,28 +1397,25 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
         makeSortable(document.getElementById('returnsTbl'));
 
         <?php if (!empty($_GET['open_invoice_id'])): ?>
-                (function () {
-                    const targetId = <?= (int) $_GET['open_invoice_id'] ?>;
-                    openNewReturn();
-                    const tryFind = () => {
-                        if (_rInvoicesMap[targetId]) {
-                            document.getElementById('rInvoiceSelect').value = targetId;
-                            onInvoiceSelectChange();
-                        } else {
-                            post({
-                                _action: 'find_invoice',
-                                q: '<?= addslashes($_GET['open_invoice_id']) ?>'
-                            });
-                            setTimeout(() => {
-                                if (_rInvoicesMap[targetId]) {
-                                    document.getElementById('rInvoiceSelect').value = targetId;
-                                    onInvoiceSelectChange();
-                                }
-                            }, 400);
-                        }
-                    };
-                    setTimeout(tryFind, 350);
-                })();
+            (function () {
+                const targetId = <?= (int) $_GET['open_invoice_id'] ?>;
+                openNewReturn();
+                const tryFind = () => {
+                    if (_rInvoicesMap[targetId]) {
+                        document.getElementById('rInvoiceSelect').value = targetId;
+                        onInvoiceSelectChange();
+                    } else {
+                        post({ _action: 'find_invoice', q: '<?= addslashes($_GET['open_invoice_id']) ?>' });
+                        setTimeout(() => {
+                            if (_rInvoicesMap[targetId]) {
+                                document.getElementById('rInvoiceSelect').value = targetId;
+                                onInvoiceSelectChange();
+                            }
+                        }, 400);
+                    }
+                };
+                setTimeout(tryFind, 350);
+            })();
         <?php endif; ?>
     </script>
 </body>

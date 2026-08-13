@@ -143,15 +143,13 @@ try {
                 $stJI = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
                 $stJI->execute([$ret['journal_entry_id']]);
                 foreach ($stJI->fetchAll(PDO::FETCH_ASSOC) as $ji) {
-                    // net (عملة الفرع) لـbase_balance، original_amount
-                    // بإشارة صحيحة (مدين=+/دائن=-) لـbalance — نفس تصحيح
-                    // باگ الإلغاء المطبَّق بفاتورة البيع بالضبط.
+                    // ⚠ إصلاح: القيد الرئيسي هون بيلمس بس حسابات غير
+                    // نقدية (إيراد/عميل/ضريبة/خصم) — كلهم balance ==
+                    // base_balance بالضبط (نفس تصحيح فاتورة البيع). $net
+                    // وحده كافٍ للاثنين.
                     $net = $ji['debit'] - $ji['credit'];
-                    $netOriginal = $ji['debit'] > 0
-                        ? (float) $ji['original_amount']
-                        : -1 * (float) $ji['original_amount'];
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                        ->execute([$net, $netOriginal, $ji['account_id']]);
+                        ->execute([$net, $net, $ji['account_id']]);
                 }
                 $pdo->prepare("UPDATE `{$TJE}` SET status='cancelled',cancelled_at=NOW(),cancelled_by=? WHERE id=?")
                     ->execute([$_SESSION['user_id'], $ret['journal_entry_id']]);
@@ -177,7 +175,7 @@ try {
     $retId = (int) ($_POST['return_id'] ?? 0);
     if (!$retId) throw new Exception('رقم المرتجع مطلوب');
 
-    $stRet = $pdo->prepare("SELECT r.*, c.account_id AS customer_account_id
+    $stRet = $pdo->prepare("SELECT r.*, c.account_id AS customer_account_id, c.prepaid_account_id AS customer_prepaid_account_id
         FROM `{$TR}` r
         LEFT JOIN `{$TC}` c ON c.id = r.customer_id
         WHERE r.id=?");
@@ -195,12 +193,17 @@ try {
     if ($rate <= 0) $rate = 1;
     $docCurrencyId = (int) ($ret['return_currency_id'] ?: $baseCurrencyId);
 
-    $returnOrig = (float) $ret['return_amount'];              // عملة المرتجع (= عملة الفاتورة الأصلية)
-    $returnBase = $rate > 0 ? $returnOrig / $rate : $returnOrig; // عملة الفرع
-    $taxOrig = (float) $ret['tax_amount'];
-    $discOrig = (float) $ret['discount_amount'];
-    $taxBase = $rate > 0 ? $taxOrig / $rate : $taxOrig;
-    $discBase = $rate > 0 ? $discOrig / $rate : $discOrig;
+    // ⚠⚠ نفس إصلاح confirm_sale_invoice.php بالضبط: return_amount/
+    // tax_amount/discount_amount بجدول المرتجع صاروا بعملة الفرع
+    // مباشرة (returns.php يحسبهم من total_price المخزَّن بعملة الفرع
+    // أصلاً) — القراءة المباشرة هي "Base"، والمكافئ بعملة الفاتورة
+    // يُشتق بالضرب لا القسمة.
+    $returnBase = (float) $ret['return_amount'];
+    $returnOrig = round($returnBase * $rate, 4);
+    $taxBase = (float) $ret['tax_amount'];
+    $discBase = (float) $ret['discount_amount'];
+    $taxOrig = round($taxBase * $rate, 4);
+    $discOrig = round($discBase * $rate, 4);
 
     $pdo->beginTransaction();
     try {
@@ -318,7 +321,7 @@ try {
             ->execute([$jeId, $accRevenue['id'], $revenueReversalBase, $revenueReversalOrig, $revenueReversalBase,
                 "مرتجع {$ret['return_number']}", $docCurrencyId, $rate]);
         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-            ->execute([$revenueReversalBase, $revenueReversalOrig, $accRevenue['id']]);
+            ->execute([$revenueReversalBase, $revenueReversalBase, $accRevenue['id']]);
 
         // دائن: ذمم العملاء (تخفيض — العميل ما عاد يدين إلنا بهالقيمة)
         $pdo->prepare("INSERT INTO `{$TJI}`
@@ -327,7 +330,7 @@ try {
             ->execute([$jeId, $accCustomer['id'], $returnBase, $returnOrig, $returnBase,
                 "ذمة {$ret['customer_name']} — مرتجع", $docCurrencyId, $rate]);
         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-            ->execute([$returnBase, $returnOrig, $accCustomer['id']]);
+            ->execute([$returnBase, $returnBase, $accCustomer['id']]);
 
         // مدين: ضريبة مبيعات مستحقة (تخفيض الالتزام، لو مفكَّكة)
         if ($splitTax) {
@@ -337,7 +340,7 @@ try {
                 ->execute([$jeId, $accTaxPayable['id'], $taxBase, $taxOrig, $taxBase,
                     "ضريبة مرتجع {$ret['return_number']}", $docCurrencyId, $rate]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                ->execute([$taxBase, $taxOrig, $accTaxPayable['id']]);
+                ->execute([$taxBase, $taxBase, $accTaxPayable['id']]);
         }
 
         // دائن: خصومات مبيعات ممنوحة (تخفيض المصروف يلي سُجِّل بالفاتورة الأصلية)
@@ -348,7 +351,7 @@ try {
                 ->execute([$jeId, $accSalesDiscount['id'], $discBase, $discOrig, $discBase,
                     "خصم مرتجع {$ret['return_number']}", $docCurrencyId, $rate]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                ->execute([$discBase, $discOrig, $accSalesDiscount['id']]);
+                ->execute([$discBase, $discBase, $accSalesDiscount['id']]);
         }
 
         // ── قيد منفصل: عكس تكلفة البضاعة المباعة (إضافة للمخزون،
@@ -383,8 +386,15 @@ try {
                 ->execute([$totalCogs, $totalCogs, $accCogs['id']]);
         }
 
-        // ── قيد منفصل: استرداد نقدي فعلي (لو payment_handling=paid_refund_cash فقط) ──
-        if ($ret['payment_handling'] === 'paid_refund_cash' && $ret['refund_account_id']) {
+        // ── قيد منفصل حسب "الحساب المستهدف" — نمط جديد مطابق لمرتجعات
+        // المشتريات: receivable (الافتراضي) = بلا قيد إضافي (القيد
+        // الرئيسي فوق كافي، خفّض ذمة العميل وخلص). cash/prepaid = لازم
+        // نعكس تخفيض الذمة (القيد الرئيسي خفّضها بافتراض default)،
+        // ونحوّل الأثر لحساب تاني (صندوق فعلي، أو رصيد دائن بحساب
+        // العميل الخاص).
+        $targetType = $ret['target_account_type'] ?? null;
+
+        if ($targetType === 'cash' && $ret['refund_account_id']) {
             $seq++;
             $jeNo3 = 'JE-' . $y . '-' . str_pad($seq, 4, '0', STR_PAD_LEFT);
             $pdo->prepare("INSERT INTO `{$TJE}`
@@ -395,20 +405,18 @@ try {
                     $baseCurrencyId, $returnBase, $returnBase, $retId, $_SESSION['user_id']]);
             $jeRefundId = (int) $pdo->lastInsertId();
 
-            // مدين: ذمم العملاء (نرجّعها متل ما كانت — القيد الرئيسي
-            // خفّضها، بس هون عم نرجّع كاش فعلي مو تخفيض دين، فلازم
-            // نعكس ذاك التخفيض)
+            // مدين: ذمم العملاء (عكس تخفيض القيد الرئيسي — رجعنا كاش
+            // فعلي مو تخفيض دين)
             $pdo->prepare("INSERT INTO `{$TJI}`
                 (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                 VALUES (?,?,?,0,?,?,?,?,?)")
                 ->execute([$jeRefundId, $accCustomer['id'], $returnBase, $returnOrig, $returnBase,
                     "عكس تخفيض ذمة — استرداد نقدي", $docCurrencyId, $rate]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                ->execute([$returnBase, $returnOrig, $accCustomer['id']]);
+                ->execute([$returnBase, $returnBase, $accCustomer['id']]);
 
-            // دائن: حساب الاسترداد (صندوق/بنك) — بعملة الفرع دايماً
-            // (حساب الاسترداد نفسه فُلتر بالواجهة ليكون بنفس عملة
-            // المرتجع، فمافي تحويل عملة إضافي هون)
+            // دائن: حساب الاسترداد (صندوق/بنك) — balance بعملته الأصلية
+            // (حساب نقدي حقيقي، نفس نمط الصناديق بفاتورة البيع/الشراء)
             $pdo->prepare("INSERT INTO `{$TJI}`
                 (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                 VALUES (?,?,0,?,?,?,?,?,?)")
@@ -416,7 +424,43 @@ try {
                     "استرداد نقدي {$ret['return_number']}", $docCurrencyId, $rate]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                 ->execute([$returnBase, $returnOrig, (int) $ret['refund_account_id']]);
+
+        } elseif ($targetType === 'prepaid') {
+            $prepaidAccId = (int) ($ret['customer_prepaid_account_id'] ?? 0);
+            if (!$prepaidAccId) {
+                throw new Exception('العميل ما إله حساب دفعة مقدمة مضبوط — لا يمكن تحويل المرتجع لرصيد دائن');
+            }
+            $seq++;
+            $jeNo3 = 'JE-' . $y . '-' . str_pad($seq, 4, '0', STR_PAD_LEFT);
+            $pdo->prepare("INSERT INTO `{$TJE}`
+                (entry_number,entry_date,description,currency_id,exchange_rate,
+                 total_debit,total_credit,status,reference_type,reference_id,created_by)
+                VALUES (?,?,?,?,1,?,?,'posted','sale_return_prepaid',?,?)")
+                ->execute([$jeNo3, date('Y-m-d'), "تحويل مرتجع لرصيد دائن — {$ret['return_number']}",
+                    $baseCurrencyId, $returnBase, $returnBase, $retId, $_SESSION['user_id']]);
+            $jePrepaidId = (int) $pdo->lastInsertId();
+
+            // مدين: ذمم العملاء (عكس تخفيض القيد الرئيسي)
+            $pdo->prepare("INSERT INTO `{$TJI}`
+                (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
+                VALUES (?,?,?,0,?,?,?,?,?)")
+                ->execute([$jePrepaidId, $accCustomer['id'], $returnBase, $returnOrig, $returnBase,
+                    "عكس تخفيض ذمة — تحويل لرصيد دائن", $docCurrencyId, $rate]);
+            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                ->execute([$returnBase, $returnBase, $accCustomer['id']]);
+
+            // دائن: حساب الدفعة المقدمة الخاص بالعميل (رصيد دائن يستفيد
+            // منه بفاتورة مستقبلية) — غير نقدي، balance=base_balance
+            $pdo->prepare("INSERT INTO `{$TJI}`
+                (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
+                VALUES (?,?,0,?,?,?,?,?,1)")
+                ->execute([$jePrepaidId, $prepaidAccId, $returnBase, $returnBase, $returnBase,
+                    "رصيد دائن — مرتجع {$ret['return_number']}", $baseCurrencyId]);
+            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                ->execute([$returnBase, $returnBase, $prepaidAccId]);
         }
+        // target_account_type === 'receivable' (أو null لو not_paid) —
+        // بلا قيد إضافي، القيد الرئيسي فوق كافي وكامل.
 
         // ── تحديث المرتجع ──
         $pdo->prepare("UPDATE `{$TR}` SET status='posted', journal_entry_id=? WHERE id=?")

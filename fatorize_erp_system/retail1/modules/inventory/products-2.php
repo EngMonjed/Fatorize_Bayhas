@@ -793,6 +793,22 @@ $catColors = [
             content: ' ▼';
             font-size: .65em;
         }
+
+        .tbl-wrap {
+            background: #fff;
+            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            overflow: hidden
+        }
+
+        .tbl-hdr {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f1f5f9;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap
+        }
     </style>
 </head>
 
@@ -890,29 +906,25 @@ $catColors = [
             </div>-->
 
             <!-- جدول المنتجات -->
-            <div class="sec-card mb-3">
-                <div class="sec-hdr">
-                    <span style="font-size:.88rem;font-weight:700;color:#1e293b">
-                        <i class="bi bi-boxes me-2 text-primary"></i>
-                        قائمة المنتجات
-                        <?php if ($sel_cat): ?>
-                            <span class="text-muted fw-400" style="font-size:.8rem">
-                                —
-                                <?= htmlspecialchars(array_filter($categories, function ($c) use ($sel_cat) {
-                                    return $c['id'] == $sel_cat;
-                                })[array_key_first(array_filter($categories, function ($c) use ($sel_cat) {
-                                                return $c['id'] == $sel_cat;
-                                            }))]['name'] ?? '') ?>
-                            </span>
-                        <?php endif; ?>
+            <div class="tbl-wrap">
+                <div class="tbl-hdr">
+                    <span style="font-size:.88rem;font-weight:700;color:#1e293b;white-space:nowrap">
+                        <i class="bi bi-boxes me-1 text-success"></i>قائمة المنتجات
                     </span>
-
                     <!-- بحث -->
-                    <form method="GET" class="ms-auto d-flex gap-2">
-                        <?php if ($sel_cat): ?><input type="hidden" name="cat" value="<?= $sel_cat ?>"><?php endif; ?>
-                        <input type="search" name="q" value="<?= htmlspecialchars($search) ?>"
-                            class="form-control form-control-sm" style="width:180px;border-radius:9px"
-                            placeholder="بحث بالاسم أو الموديل...">
+                    <form method="get" class="d-flex gap-2 flex-wrap align-items-center ms-auto">
+                        <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
+                            placeholder="بحث بالاسم أو الموديل..." class="form-control form-control-sm"
+                            style="width:180px;border-radius:8px">
+                        <select name="status" class="form-select form-select-sm" style="width:120px;border-radius:8px"
+                            onchange="this.form.submit()">
+                            <option value="">كل الحالات</option>
+                            <?php foreach ($STATUS_MAP as $k => $v): ?>
+                                <option value="<?= $k ?>" <?= $status === $k ? 'selected' : '' ?>><?= $v['label'] ?></option>
+                            <?php endforeach; ?>
+                        </select>
+
+
                         <button type="submit" class="btn btn-sm btn-outline-secondary" style="border-radius:9px">
                             <i class="bi bi-search"></i>
                         </button>

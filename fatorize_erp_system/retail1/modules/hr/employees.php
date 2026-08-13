@@ -9,9 +9,22 @@ requirePermission('hr.employees', 'view');
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $currentModule = 'hr.employees';
-$T = "hr_employees_{$_SESSION['table_suffix']}";
+$TS = $_SESSION['table_suffix'];
+$T = "hr_employees_{$TS}";
+$TAC = "account_charts_{$TS}";
+$TIAS = "invoice_account_settings_{$TS}";
 
 $currencies = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,code")->fetchAll();
+
+// عملة الفرع الأساسية — نفس النمط المعتمد بـpayroll.php (جوين حي عبر
+// base_currency النصي المضمون، لا نعتمد على base_currency_id لأنه nullable
+// وغير مضمون التعبئة لكل الفروع)
+$baseCurRow = $pdo->prepare("SELECT c.id FROM branches b JOIN currencies c ON c.code=b.base_currency WHERE b.table_suffix=? LIMIT 1");
+$baseCurRow->execute([$TS]);
+$baseCurrencyId = (int) ($baseCurRow->fetchColumn() ?: 0);
+if (!$baseCurrencyId) {
+    $baseCurrencyId = (int) ($pdo->query("SELECT id FROM currencies WHERE is_base=1 LIMIT 1")->fetchColumn() ?: 0);
+}
 
 // أيام الأسبوع بالترتيب
 const DAYS = ['friday', 'saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday'];
@@ -71,6 +84,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (!$full_name || !$position)
                 throw new Exception('الاسم الكامل والمسمى الوظيفي مطلوبان');
 
+            $pdo->beginTransaction();
+            try {
+                // إنشاء حسابي الموظف الفرعيين بشجرة الحسابات — نفس نمط
+                // suppliers.php حرفياً: الحساب الأب يُضبط مرة وحدة بصفحة
+                // إعدادات الربط المحاسبي (salary_payable/employee_advance)،
+                // وكل موظف جديد ياخد حسابيه تلقائياً تحتهم — إجباري دايماً
+                $payableAccId = null;
+                $loanAccId = null;
+                if ($act === 'create') {
+                    $getParent = function (string $key) use ($pdo, $TIAS, $TAC): ?array {
+                        $st = $pdo->prepare("SELECT ac.* FROM `{$TIAS}` i JOIN `{$TAC}` ac ON ac.id=i.account_id WHERE i.setting_key=? LIMIT 1");
+                        $st->execute([$key]);
+                        return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+                    };
+                    $parentPayable = $getParent('salary_payable');
+                    $parentAdvance = $getParent('employee_advance');
+                    if (!$parentPayable || !$parentAdvance)
+                        throw new Exception('اضبط حسابي "مستحقات الموظفين" و"سلف الموظفين" أولاً من صفحة إعدادات الربط المحاسبي');
+
+                    // حساب مستحقات هذا الموظف تحت الحساب الأب المضبوط بالإعدادات
+                    $cnt = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentPayable['id']}")->fetchColumn();
+                    $code = $parentPayable['code'] . '.' . str_pad($cnt + 1, 3, '0', STR_PAD_LEFT);
+                    $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                        VALUES (?,?,?,'liability',?,?,0)")
+                        ->execute([$code, "مستحقات {$full_name}", $parentPayable['id'], $baseCurrencyId, substr_count($code, '.') + 1]);
+                    $payableAccId = (int) $pdo->lastInsertId();
+
+                    // حساب سلف هذا الموظف تحت الحساب الأب المضبوط بالإعدادات
+                    $cnt2 = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentAdvance['id']}")->fetchColumn();
+                    $code2 = $parentAdvance['code'] . '.' . str_pad($cnt2 + 1, 3, '0', STR_PAD_LEFT);
+                    $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                        VALUES (?,?,?,'asset',?,?,0)")
+                        ->execute([$code2, "سلف {$full_name}", $parentAdvance['id'], $baseCurrencyId, substr_count($code2, '.') + 1]);
+                    $loanAccId = (int) $pdo->lastInsertId();
+                }
+
             // بناء حقول الأيام
             $dayCols = [];
             $dayVals = [];
@@ -93,9 +142,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if ($act === 'create') {
                 $cols = "full_name,position,department,phone,email,hire_date,
                            salary_type,basic_salary,currency_id,bank_account,notes,
-                           overtime_multiplier,status,created_by,"
+                           overtime_multiplier,status,created_by,payable_account_id,loan_account_id,"
                     . implode(',', $dayCols);
-                $marks = str_repeat('?,', 14 + count($dayCols));
+                $marks = str_repeat('?,', 16 + count($dayCols));
                 $marks = rtrim($marks, ',');
                 $params = [
                     $full_name,
@@ -112,11 +161,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $ot_mult,
                     $status,
                     $_SESSION['user_id'],
+                    $payableAccId,
+                    $loanAccId,
                     ...$dayVals
                 ];
                 $pdo->prepare("INSERT INTO `{$T}` ({$cols}) VALUES ({$marks})")
                     ->execute($params);
-                echo json_encode(['ok' => true, 'msg' => 'تم إضافة الموظف', 'id' => $pdo->lastInsertId()]);
+                $newEmpId = (int) $pdo->lastInsertId();
+                $pdo->commit();
+                echo json_encode(['ok' => true, 'msg' => 'تم إضافة الموظف', 'id' => $newEmpId]);
             } else {
                 $id = (int) ($_POST['id'] ?? 0);
                 if (!$id)
@@ -143,8 +196,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $id
                 ];
                 $pdo->prepare("UPDATE `{$T}` SET {$sets} WHERE id=?")->execute($params);
+                $pdo->commit();
                 echo json_encode(['ok' => true, 'msg' => 'تم تحديث بيانات الموظف']);
             }
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction())
+                    $pdo->rollBack();
+                throw $e;
+            }
+        } elseif ($act === 'backfill_accounts') {
+            // ترحيل بأثر رجعي — للموظفين المُنشأين قبل تفعيل الحسابات
+            // الفرعية التلقائية، نفس منطق الإنشاء بالضبط (create) بس بلوب
+            // على كل موظف ناقص، ملفوف بمعاملة وحدة تشمل الكل
+            requirePermission('hr.employees', 'edit');
+            $missing = $pdo->query("SELECT id, full_name FROM `{$T}` WHERE payable_account_id IS NULL OR loan_account_id IS NULL")->fetchAll(PDO::FETCH_ASSOC);
+            if (!$missing) {
+                echo json_encode(['ok' => true, 'msg' => 'لا يوجد موظفين ناقصين حسابات', 'count' => 0]);
+                exit;
+            }
+            $getParent = function (string $key) use ($pdo, $TIAS, $TAC): ?array {
+                $st = $pdo->prepare("SELECT ac.* FROM `{$TIAS}` i JOIN `{$TAC}` ac ON ac.id=i.account_id WHERE i.setting_key=? LIMIT 1");
+                $st->execute([$key]);
+                return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+            };
+            $parentPayable = $getParent('salary_payable');
+            $parentAdvance = $getParent('employee_advance');
+            if (!$parentPayable || !$parentAdvance)
+                throw new Exception('اضبط حسابي "مستحقات الموظفين" و"سلف الموظفين" أولاً من صفحة إعدادات الربط المحاسبي');
+
+            $pdo->beginTransaction();
+            try {
+                $done = 0;
+                foreach ($missing as $m) {
+                    $st = $pdo->prepare("SELECT payable_account_id, loan_account_id FROM `{$T}` WHERE id=?");
+                    $st->execute([$m['id']]);
+                    $cur = $st->fetch(PDO::FETCH_ASSOC);
+
+                    $newPayableId = $cur['payable_account_id'];
+                    $newLoanId = $cur['loan_account_id'];
+
+                    if (!$newPayableId) {
+                        $cnt = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentPayable['id']}")->fetchColumn();
+                        $code = $parentPayable['code'] . '.' . str_pad($cnt + 1, 3, '0', STR_PAD_LEFT);
+                        $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                            VALUES (?,?,?,'liability',?,?,0)")
+                            ->execute([$code, "مستحقات {$m['full_name']}", $parentPayable['id'], $baseCurrencyId, substr_count($code, '.') + 1]);
+                        $newPayableId = (int) $pdo->lastInsertId();
+                    }
+                    if (!$newLoanId) {
+                        $cnt2 = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentAdvance['id']}")->fetchColumn();
+                        $code2 = $parentAdvance['code'] . '.' . str_pad($cnt2 + 1, 3, '0', STR_PAD_LEFT);
+                        $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                            VALUES (?,?,?,'asset',?,?,0)")
+                            ->execute([$code2, "سلف {$m['full_name']}", $parentAdvance['id'], $baseCurrencyId, substr_count($code2, '.') + 1]);
+                        $newLoanId = (int) $pdo->lastInsertId();
+                    }
+                    $pdo->prepare("UPDATE `{$T}` SET payable_account_id=?, loan_account_id=? WHERE id=?")
+                        ->execute([$newPayableId, $newLoanId, $m['id']]);
+                    $done++;
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction())
+                    $pdo->rollBack();
+                throw $e;
+            }
+            echo json_encode(['ok' => true, 'msg' => "تم ترحيل حسابات {$done} موظف", 'count' => $done]);
         } elseif ($act === 'get') {
             $stmt = $pdo->prepare("SELECT * FROM `{$T}` WHERE id=?");
             $stmt->execute([(int) $_POST['id']]);
@@ -179,6 +296,8 @@ $employees = $pdo->query("
     LEFT JOIN currencies c ON c.id = e.currency_id
     ORDER BY e.department, e.full_name
 ")->fetchAll();
+
+$missingAccountsCount = (int) $pdo->query("SELECT COUNT(*) FROM `{$T}` WHERE payable_account_id IS NULL OR loan_account_id IS NULL")->fetchColumn();
 
 $deptLabels = [
     'sales' => ['مبيعات', 'info'],
@@ -570,6 +689,18 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                     </a>
                 </li>
             </ul>
+
+            <?php if ($missingAccountsCount > 0): ?>
+                <div id="backfillBanner"
+                    style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px 16px;margin-bottom:1rem;font-size:.85rem;color:#991b1b;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                    <span><i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <strong><?= $missingAccountsCount ?></strong> موظف بدون حسابات محاسبية فرعية مرتبطة (مستحقات/سلف)
+                        — الاعتماد وصرف السلف لن يعملا لهم قبل الترحيل.</span>
+                    <button class="btn btn-sm btn-danger fw-600" style="border-radius:8px" onclick="backfillAccounts()">
+                        <i class="bi bi-arrow-repeat me-1"></i>رحّل الحسابات الآن
+                    </button>
+                </div>
+            <?php endif; ?>
 
             <div class="page-header">
                 <h5><i class="bi bi-people-fill me-2 text-primary"></i>الموظفون (<?= count($employees) ?>)</h5>
@@ -1172,6 +1303,27 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                     if (!d.ok) {
                         alert(d.msg);
                         el.checked = !el.checked;
+                    }
+                });
+        }
+
+        function backfillAccounts() {
+            if (!confirm('رح ينشئ حسابات محاسبية فرعية (مستحقات/سلف) لكل موظف ناقصها. متابعة؟')) return;
+            const btn = event.target.closest('button');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> جارٍ الترحيل...';
+            const fd = new FormData();
+            fd.append('_action', 'backfill_accounts');
+            fetch(location.href, { method: 'POST', body: fd })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.ok) {
+                        alert(d.msg);
+                        location.reload();
+                    } else {
+                        alert(d.msg);
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>رحّل الحسابات الآن';
                     }
                 });
         }

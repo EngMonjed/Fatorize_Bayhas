@@ -29,14 +29,7 @@ CREATE TABLE IF NOT EXISTS `currencies` (
   UNIQUE KEY `uniq_code` (`code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='قاموس عملات مصغّر — لدعم reporting_currency_id فقط، بدون أسعار صرف';
 
--- Dumping data for table fatorize_master.currencies: ~6 rows (approximately)
-INSERT INTO `currencies` (`id`, `code`, `name`, `symbol`) VALUES
-	(1, 'USD', 'دولار أمريكي', '$'),
-	(2, 'EUR', 'يورو', '€'),
-	(3, 'SYP', 'ليرة سورية', 'ل.س'),
-	(4, 'TRY', 'ليرة تركية', '₺'),
-	(5, 'SAR', 'ريال سعودي', 'ر.س'),
-	(6, 'AED', 'درهم إماراتي', 'د.إ');
+-- Data exporting was unselected.
 
 -- Dumping structure for table fatorize_master.purchase_payments_ret
 CREATE TABLE IF NOT EXISTS `purchase_payments_ret` (
@@ -66,7 +59,7 @@ CREATE TABLE IF NOT EXISTS `purchase_payments_ret` (
   KEY `idx_date` (`payment_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table fatorize_master.purchase_payments_ret: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table fatorize_master.purchase_payment_invoices_ret
 CREATE TABLE IF NOT EXISTS `purchase_payment_invoices_ret` (
@@ -80,7 +73,7 @@ CREATE TABLE IF NOT EXISTS `purchase_payment_invoices_ret` (
   CONSTRAINT `fk_ppi_payment_ret` FOREIGN KEY (`payment_id`) REFERENCES `purchase_payments_ret` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Dumping data for table fatorize_master.purchase_payment_invoices_ret: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table fatorize_master.tenants
 CREATE TABLE IF NOT EXISTS `tenants` (
@@ -105,9 +98,7 @@ CREATE TABLE IF NOT EXISTS `tenants` (
   CONSTRAINT `fk_tenants_reporting_currency` FOREIGN KEY (`reporting_currency_id`) REFERENCES `currencies` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='سجل مركزي لكل الشركات المشتركة بالنظام (SaaS tenant registry)';
 
--- Dumping data for table fatorize_master.tenants: ~1 rows (approximately)
-INSERT INTO `tenants` (`id`, `company_name`, `subdomain`, `tenant_type`, `reporting_currency_id`, `db_host`, `db_name`, `db_user`, `db_pass_enc`, `status`, `plan`, `trial_ends_at`, `created_at`, `updated_at`) VALUES
-	(4, 'Bayhas', 'bayhas', 'both', 1, 'localhost', 'bayhas_local', 'root', 'AlBir7OI86kQhIA6BmEekI74gNvV5/Hn1Ypo9TA2wYE=', 'active', 'basic', NULL, '2026-07-15 17:12:05', '2026-07-18 16:48:49');
+-- Data exporting was unselected.
 
 -- Dumping structure for procedure fatorize_master._check_db_before_payments_setup
 DELIMITER //

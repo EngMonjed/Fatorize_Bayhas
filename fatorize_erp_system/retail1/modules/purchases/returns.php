@@ -32,6 +32,10 @@ $TSP  = "product_suppliers_{$TS}";
 $TW   = "warehouses_{$TS}";
 $TV   = "product_variants_{$TS}";
 $TAC  = "account_charts_{$TS}";
+$TPROD = "products_{$TS}";
+$TPSZ = "product_sizes_{$TS}";
+$TPCL = "product_colors_{$TS}";
+$TJE  = "journal_entries_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
 // حسابات الصندوق/البنك — لاسترداد المرتجع نقداً (لو target_account_type=cash)
@@ -291,21 +295,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         // جلب مرتجع كامل (للعرض/التعديل)
         if ($act === 'get_return') {
             $id = (int) ($_POST['id'] ?? 0);
-            $r = $pdo->prepare("SELECT r.*, s.name AS supplier_name_live, c.code AS currency_code,
-                    c.symbol AS currency_symbol, bc.code AS base_currency_code,
-                    p.total_amount, p.discount_amount AS inv_discount_amount,
-                    p.tax_amount AS inv_tax_amount, p.final_amount, p.payment_status
+            // ⚠ إصلاح حرج: p.total_amount (الفاتورة الأصلية) وr.total_amount
+            // (المرتجع نفسه) بنفس الاسم بالضبط — بدون alias، PDO كان بيرجّع
+            // مصفوفة واحدة وآخر عمود بنفس الاسم (p.total_amount، جاي بعد
+            // r.*) بيدهس قيمة r.total_amount الصحيحة. سبّب عرض "١٧٧$" (إجمالي
+            // الفاتورة الكاملة) بدل "١٠١$" (الصحيح لهالمرتجع تحديداً) بقسم
+            // المبالغ بمودال التفاصيل.
+            $r = $pdo->prepare("SELECT r.*, s.name AS supplier_name_live, s.phone AS supplier_phone,
+                    c.code AS currency_code, c.symbol AS currency_symbol, bc.code AS base_currency_code,
+                    p.total_amount AS inv_total_amount, p.discount_amount AS inv_discount_amount,
+                    p.tax_amount AS inv_tax_amount, p.final_amount AS inv_final_amount, p.payment_status,
+                    w.name AS warehouse_name
                 FROM `{$TR}` r LEFT JOIN `{$TSP}` s ON s.id=r.supplier_id
                 LEFT JOIN currencies c ON c.id=r.return_currency_id
                 LEFT JOIN currencies bc ON bc.id=r.base_currency_id
                 LEFT JOIN `{$TP}` p ON p.id=r.purchase_id
+                LEFT JOIN `{$TW}` w ON w.id=r.warehouse_id
                 WHERE r.id=?");
             $r->execute([$id]);
             $r = $r->fetch();
             if (!$r) { echo json_encode(['ok' => false, 'msg' => 'غير موجود']); exit; }
-            $items = $pdo->prepare("SELECT * FROM `{$TRI}` WHERE return_id=?");
+
+            // ⚠ purchase_return_items ما فيها مقاس/لون/موديل مباشرة —
+            // نجيبهم عبر variant_id (نفس نمط get_purchase بـindex.php).
+            // discount_percentage نجيبها من purchase_items الأصلية (عبر
+            // purchase_item_id) — غير مخزَّنة على purchase_return_items
+            // نفسها، بس لازمة لإعادة بناء "سعر الشراء الافتراضي" للعرض.
+            $items = $pdo->prepare("SELECT tri.*,
+                    pr.model_number AS model_number,
+                    psz.size AS size, psz.age_type AS age_type,
+                    pcl.name AS color,
+                    pi.discount_percentage AS discount_percentage
+                FROM `{$TRI}` tri
+                LEFT JOIN `{$TPROD}` pr ON pr.id = tri.product_id
+                LEFT JOIN `{$TV}` pv ON pv.id = tri.variant_id
+                LEFT JOIN `{$TPSZ}` psz ON psz.id = pv.size_id
+                LEFT JOIN `{$TPCL}` pcl ON pcl.id = pv.color_id
+                LEFT JOIN `{$TPI}` pi ON pi.id = tri.purchase_item_id
+                WHERE tri.return_id=?");
             $items->execute([$id]);
-            echo json_encode(['ok' => true, 'return' => $r, 'items' => $items->fetchAll()]);
+            $items = $items->fetchAll();
+            // ⚠ نفس معادلة إعادة البناء المعتمدة بكل الملف — راجع
+            // get_purchase_items للتفصيل الكامل.
+            foreach ($items as &$it2) {
+                $discPct2 = (float) ($it2['discount_percentage'] ?? 0);
+                $it2['default_price'] = $discPct2 > 0
+                    ? round((float) $it2['unit_price'] / (1 - $discPct2 / 100), 4)
+                    : (float) $it2['unit_price'];
+            }
+            unset($it2);
+
+            // ⚠ القيد المحاسبي المرتبط فعلياً (لو مؤكد) — من journal_entries
+            // مباشرة (مصدر الحقيقة)، نفس مبدأ get_purchase بـindex.php.
+            $jes = $pdo->prepare("SELECT je.*, c.code AS je_currency
+                FROM `{$TJE}` je LEFT JOIN currencies c ON c.id = je.currency_id
+                WHERE je.reference_type='purchase_return' AND je.reference_id=?
+                ORDER BY je.id");
+            $jes->execute([$id]);
+
+            echo json_encode(['ok' => true, 'return' => $r, 'items' => $items, 'journal_entries' => $jes->fetchAll()]);
             exit;
         }
 
@@ -408,6 +456,15 @@ $retStats = [
     <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
     <style>
         .n { font-variant-numeric: tabular-nums }
+
+        /* ⚠ نفس تعريف صفوف تفاصيل المبالغ المستخدم بـindex.php (مودال
+        التفاصيل) — لازم لعرض قسم "المبالغ" بمودال تفاصيل المرتجع الجديد. */
+        .det-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            font-size: .82rem
+        }
 
         /* ⚠ نفس تعريف بطاقات الإحصائيات المستخدم بـindex.php بالضبط —
         كان ناقص هون بالكامل (معتمد بس على layout.css العام)، وهاد سبب
@@ -800,8 +857,11 @@ $retStats = [
                                         <th style="color:#16a34a;min-width:90px">اللون</th>
                                         <th class="text-center" style="min-width:70px">المشتراة</th>
                                         <th class="text-center" style="min-width:80px">المتاح للإرجاع</th>
-                                        <th style="width:100px;color:#dc2626" class="text-center">الكمية المرتجعة</th>
-                                        <th class="text-center" style="min-width:80px">سعر الوحدة</th>
+                                        <th style="width:90px;color:#dc2626" class="text-center">عدد الكروبات</th>
+                                        <th class="text-center" style="min-width:80px;color:#7c3aed">عدد المنتجات</th>
+                                        <th class="text-center" style="min-width:85px;color:#64748b">سعر الشراء الافتراضي</th>
+                                        <th class="text-center" style="min-width:70px;color:#dc2626">الخصم</th>
+                                        <th class="text-center" style="min-width:85px">سعر الشراء المسجَّل</th>
                                         <th class="text-end" style="min-width:80px">الإجمالي</th>
                                     </tr>
                                 </thead>
@@ -836,30 +896,25 @@ $retStats = [
                                 <label class="form-label small fw-600">
                                     <i class="bi bi-bullseye me-1"></i>الحساب المستهدف
                                 </label>
-                                <select id="rTargetType" class="form-select form-select-sm" style="border-radius:8px"
+                                <select id="rTargetAccount" class="form-select form-select-sm" style="border-radius:8px"
                                     onchange="onRTargetTypeChange()">
                                     <option value="">— اختر —</option>
-                                    <option value="cash">صندوق / بنك</option>
-                                    <option value="supplier">ذمة المورد</option>
-                                    <option value="advance">دفعة مقدمة للمورد</option>
+                                    <optgroup label="حساب المورد" id="rTargetSupplierGroup">
+                                        <option value="supplier">ذمة المورد</option>
+                                        <option value="advance">دفعة مقدمة للمورد</option>
+                                    </optgroup>
+                                    <optgroup label="صندوق / بنك">
+                                        <?php foreach ($cashAccounts as $ca): ?>
+                                                    <option value="cash:<?= $ca['id'] ?>"
+                                                        data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
+                                                        <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
+                                                        (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
+                                                    </option>
+                                        <?php endforeach; ?>
+                                    </optgroup>
                                 </select>
-                            </div>
-                            <div class="col-md-4" id="rRefundAccWrap" style="display:none">
-                                <label class="form-label small fw-600">
-                                    <i class="bi bi-safe me-1"></i>حساب الصندوق/البنك
-                                </label>
-                                <select id="rRefundAccount" class="form-select form-select-sm" style="border-radius:8px">
-                                    <option value="">— اختر حساب الاسترداد —</option>
-                                    <?php foreach ($cashAccounts as $ca): ?>
-                                                <option value="<?= $ca['id'] ?>"
-                                                    data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
-                                                    <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                                    (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                                </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <div class="form-text" style="font-size:.7rem">تُفلتَر تلقائياً حسب عملة المرتجع
-                                </div>
+                                <div class="form-text" style="font-size:.7rem" id="rTargetHint">حسابات الصندوق/البنك
+                                    تُفلتَر تلقائياً حسب عملة المرتجع</div>
                             </div>
                         </div>
 
@@ -921,9 +976,38 @@ $retStats = [
         </div>
     </div>
 
+    <!-- ══ مودال تفاصيل المرتجع (قراءة فقط) — مطابق viewModal بـindex.php ══ -->
+    <div class="modal fade" id="viewRetModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content" style="border-radius:16px;border:none">
+                <div class="modal-header py-3 px-4 border-0"
+                    style="background:linear-gradient(135deg,#0c447c,var(--section-color));border-radius:16px 16px 0 0">
+                    <div>
+                        <h6 class="modal-title text-white fw-700 mb-0" id="rvTitle">تفاصيل المرتجع</h6>
+                        <div id="rvSub" style="font-size:.75rem;color:rgba(255,255,255,.7);margin-top:2px"></div>
+                    </div>
+                    <div class="d-flex gap-2 align-items-center">
+                        <a id="rvEditBtn" href="#" class="btn btn-sm" style="display:none;border-radius:8px;background:rgba(255,255,255,.15);color:#fff;font-size:.76rem;border:1px solid rgba(255,255,255,.3)"
+                            onclick="viewRetModalInst.hide();editReturn(_rvCurrentId);return false;">
+                            <i class="bi bi-pencil me-1"></i>تعديل
+                        </a>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                </div>
+                <div class="modal-body px-4 py-3" id="rvBody">
+                    <div class="text-center py-4"><span class="spinner-border text-primary"></span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const retModal = new bootstrap.Modal(document.getElementById('retModal'));
+        const viewRetModalInst = new bootstrap.Modal(document.getElementById('viewRetModal'));
+        let _rvCurrentId = 0;
+        // نسخة JS من STATUS_MAP (PHP) — لعرض شارة الحالة بمودال التفاصيل
+        const STATUS_MAP = <?= json_encode($STATUS_MAP) ?>;
         // رمز عملة الفرع الأساسية — كل مبالغ المرتجع (مبلغ فرعي/خصم/ضريبة/
         // صافي/سعر الوحدة بجدول البنود) بعملة الفرع دائماً، لأنها مشتقة من
         // purchase_items.total_price المخزَّن بعملة الفرع (قرار invoice_new.php).
@@ -956,8 +1040,7 @@ $retStats = [
             document.getElementById('btnSaveReturn').disabled = true;
             document.getElementById('rPayHandling').value = 'not_paid';
             document.getElementById('rTargetTypeWrap').style.display = 'none';
-            document.getElementById('rTargetType').value = '';
-            document.getElementById('rRefundAccWrap').style.display = 'none';
+            document.getElementById('rTargetAccount').value = '';
             document.getElementById('retModalTitle').innerHTML = '<i class="bi bi-arrow-return-right me-1 text-primary"></i>مرتجع شراء جديد';
             retModal.show();
             searchPurchaseForReturn(); // تحميل أحدث الفواتير المؤكدة فوراً
@@ -1017,15 +1100,23 @@ $retStats = [
             document.getElementById('rInvNetLbl').textContent = p.final_amount
                 ? Number(p.final_amount).toFixed(2) + ' ' + BASE_CUR_SYM : '—';
 
-            // ⚠ الاسترداد النقدي (خيار "صندوق/بنك" داخل الحساب المستهدف)
-            // منطقي بس لو فيه فعلاً مبلغ مسدَّد على الفاتورة الأصلية —
-            // مافيش شي نرجعه كاش لو ما انسددت أصلاً.
-            const cashOpt = document.querySelector('#rTargetType option[value="cash"]');
+            // ⚠ الاسترداد النقدي (خيارات الصندوق/البنك داخل القائمة
+            // الموحَّدة) منطقي بس لو فيه فعلاً مبلغ مسدَّد على الفاتورة
+            // الأصلية — مافيش شي نرجعه كاش لو ما انسددت أصلاً. نعطّل كل
+            // خيارات الصندوق/البنك سوا (مو خيار واحد — صاروا متعددين
+            // بعد الدمج بقائمة موحّدة).
             const hadPayment = p.payment_status === 'paid' || p.payment_status === 'partial';
-            cashOpt.disabled = !hadPayment;
-            cashOpt.textContent = hadPayment ? 'صندوق / بنك' : 'صندوق / بنك (الفاتورة غير مدفوعة أصلاً)';
-            if (!hadPayment && document.getElementById('rTargetType').value === 'cash') {
-                document.getElementById('rTargetType').value = '';
+            const cashOpts = document.querySelectorAll('#rTargetAccount option[value^="cash:"]');
+            let currentIsCash = false;
+            cashOpts.forEach(opt => {
+                opt.disabled = !hadPayment;
+                if (opt.value === document.getElementById('rTargetAccount').value) currentIsCash = true;
+            });
+            document.getElementById('rTargetHint').textContent = hadPayment
+                ? 'حسابات الصندوق/البنك تُفلتَر تلقائياً حسب عملة المرتجع'
+                : 'خيارات الصندوق/البنك معطَّلة — الفاتورة الأصلية غير مدفوعة أصلاً';
+            if (!hadPayment && currentIsCash) {
+                document.getElementById('rTargetAccount').value = '';
                 onRTargetTypeChange();
             }
 
@@ -1045,29 +1136,23 @@ $retStats = [
             const show = val === 'partial' || val === 'paid_full';
             document.getElementById('rTargetTypeWrap').style.display = show ? '' : 'none';
             if (!show) {
-                document.getElementById('rTargetType').value = '';
-                onRTargetTypeChange();
+                document.getElementById('rTargetAccount').value = '';
             }
         }
 
-        // إظهار/إخفاء حقل حساب الصندوق/البنك حسب نوع الحساب المستهدف
-        // المختار، مع فلترته تلقائياً حسب عملة الفاتورة الأصلية (نفس
-        // آلية index.php) — يظهر فقط لو الحساب المستهدف = "صندوق/بنك".
+        // ⚠ فلترة خيارات الصندوق/البنك داخل القائمة الموحَّدة حسب عملة
+        // الفاتورة الأصلية تلقائياً — خيارا "ذمة المورد"/"دفعة مقدمة"
+        // يضلوا ظاهرين دايماً (حساب المورد نفسه، مو صندوق بعملة محدَّدة).
         function onRTargetTypeChange() {
-            const wrap = document.getElementById('rRefundAccWrap');
-            const isCash = document.getElementById('rTargetType').value === 'cash';
-            wrap.style.display = isCash ? '' : 'none';
-            if (isCash) {
-                const sel = document.getElementById('rRefundAccount');
-                let stillValid = false;
-                Array.from(sel.options).forEach(opt => {
-                    if (!opt.value) { opt.style.display = ''; return; }
-                    const show = opt.dataset.cur === _rSelectedCurrency;
-                    opt.style.display = show ? '' : 'none';
-                    if (show && opt.value === sel.value) stillValid = true;
-                });
-                if (!stillValid) sel.value = '';
-            }
+            const sel = document.getElementById('rTargetAccount');
+            let stillValid = !sel.value || !sel.value.startsWith('cash:');
+            Array.from(sel.options).forEach(opt => {
+                if (!opt.value || !opt.value.startsWith('cash:')) return;
+                const show = opt.dataset.cur === _rSelectedCurrency;
+                opt.style.display = show ? '' : 'none';
+                if (show && opt.value === sel.value) stillValid = true;
+            });
+            if (!stillValid) sel.value = '';
         }
 
         // ⚠ التجميع بمستوى (منتج+سعر) — يدمج كل الألوان والمقاسات بنفس
@@ -1088,7 +1173,8 @@ $retStats = [
                 if (!map[key]) map[key] = {
                     name: it.product_name || ('بند #' + it.purchase_item_id),
                     model: it.model_number || '', sizes: [], colors: [], ageType: it.age_type || '',
-                    unit_price: it.unit_price, purchased: 0, available: Infinity,
+                    unit_price: it.unit_price, default_price: it.default_price ?? it.unit_price,
+                    purchased: 0, available: Infinity,
                     memberIdx: [], _colorQty: {}
                 };
                 const g = map[key];
@@ -1105,7 +1191,7 @@ $retStats = [
                 if (it.size && !g.sizes.includes(it.size)) g.sizes.push(it.size);
                 if (it.color && !g.colors.includes(it.color)) g.colors.push(it.color);
             });
-            rGroups = Object.values(map);
+            rGroups = Object.values(map).map(g => ({ ...g, packet_qty: g.sizes.length || 1 }));
         }
 
         // عرض القياس كنطاق مختصر: "{نوع العمر} {أصغر}-{أكبر}"
@@ -1135,7 +1221,10 @@ $retStats = [
                         <input type="number" class="form-control form-control-sm" id="gqty${i}" min="0"
                         max="${g.available}" step="1" value="0" ${g.available <= 0 ? 'disabled' : ''}
                         oninput="onGroupQtyChange(${i})" style="border-radius:6px;border-color:#fecaca;text-align:center;font-size:.78rem"></td>
-                    <td class="n text-center">${Number(g.unit_price).toFixed(2)} ${BASE_CUR_SYM}</td>
+                    <td class="n text-center" style="color:#7c3aed" id="gPieces${i}">0</td>
+                    <td class="n text-center" style="color:#64748b">${Number(g.default_price).toFixed(2)} ${BASE_CUR_SYM}</td>
+                    <td class="n text-center" style="color:#dc2626">${(Number(g.default_price) - Number(g.unit_price)) > 0.001 ? '-' + (Number(g.default_price) - Number(g.unit_price)).toFixed(2) + ' ' + BASE_CUR_SYM : '—'}</td>
+                    <td class="n text-center fw-600">${Number(g.unit_price).toFixed(2)} ${BASE_CUR_SYM}</td>
                     <td class="n text-end fw-600" id="gLineTotal${i}">0.00 ${BASE_CUR_SYM}</td>
                 </tr>`).join('');
             updateTotal();
@@ -1145,7 +1234,14 @@ $retStats = [
             let qty = parseFloat(document.getElementById(`gqty${i}`).value) || 0;
             const max = rGroups[i].available;
             if (qty > max) { qty = max; document.getElementById(`gqty${i}`).value = max; }
-            const lineTotal = qty * rGroups[i].unit_price;
+            // ⚠ عدد المنتجات = عدد الكروبات × عدد القطع بالباكيت — نفس
+            // آلية invoice_new.php بالضبط. المبلغ الإجمالي لازم يُحسب
+            // على عدد المنتجات الحقيقي (كل القطع بكل المقاسات المدموجة
+            // بالكروب)، لا عدد الكروبات وحده — وإلا "١" كروب بكروب فيه
+            // ٤ مقاسات كان يُحسب بسعر قطعة وحدة بس بدل ٤ قطع.
+            const pieces = qty * rGroups[i].packet_qty;
+            document.getElementById(`gPieces${i}`).textContent = pieces.toFixed(0);
+            const lineTotal = pieces * rGroups[i].unit_price;
             document.getElementById(`gLineTotal${i}`).textContent = lineTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
             updateTotal();
         }
@@ -1156,7 +1252,9 @@ $retStats = [
                 const qty = parseFloat(document.getElementById(`gqty${i}`)?.value) || 0;
                 if (qty > 0) {
                     anySelected = true;
-                    subtotal += qty * g.unit_price;
+                    // ⚠ نفس تصحيح onGroupQtyChange — عدد المنتجات
+                    // (كروبات×باكيت)، لا عدد الكروبات وحده.
+                    subtotal += (qty * g.packet_qty) * g.unit_price;
                 }
             });
 
@@ -1203,6 +1301,16 @@ $retStats = [
             });
             if (!lines.length) { toast('اختر بند واحد على الأقل', 'danger'); return; }
 
+            // ⚠ تفكيك القائمة الموحَّدة: "cash:123" → target_account_type='cash'
+            // + refund_account_id=123؛ "supplier"/"advance" → نفس القيمة
+            // مباشرة بلا حساب فرعي (الحساب ضمني، حساب المورد نفسه).
+            const rawTarget = document.getElementById('rTargetAccount').value;
+            let targetType = rawTarget, refundAccId = '';
+            if (rawTarget.startsWith('cash:')) {
+                targetType = 'cash';
+                refundAccId = rawTarget.split(':')[1];
+            }
+
             document.getElementById('saveRetTxt').style.opacity = '0';
             document.getElementById('saveRetSpin').style.display = '';
             document.getElementById('btnSaveReturn').disabled = true;
@@ -1213,8 +1321,8 @@ $retStats = [
                 purchase_id: document.getElementById('rPurchaseId').value,
                 return_reason: document.getElementById('rReason').value,
                 payment_handling: document.getElementById('rPayHandling').value,
-                target_account_type: document.getElementById('rTargetType').value,
-                refund_account_id: document.getElementById('rRefundAccount').value,
+                target_account_type: targetType,
+                refund_account_id: refundAccId,
                 notes: document.getElementById('rNotes').value,
                 lines: JSON.stringify(lines)
             }).then(d => {
@@ -1227,8 +1335,144 @@ $retStats = [
         }
 
         function viewReturn(id) {
-            // ⚠ عرض تفصيلي (read-only) — سيُبنى مع صفحة التأكيد المحاسبي
-            editReturn(id, true);
+            _rvCurrentId = id;
+            document.getElementById('rvTitle').textContent = 'جارٍ التحميل...';
+            document.getElementById('rvSub').textContent = '';
+            document.getElementById('rvEditBtn').style.display = 'none';
+            document.getElementById('rvBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-primary"></span></div>';
+            viewRetModalInst.show();
+            post({ _action: 'get_return', id }).then(d => {
+                if (!d.ok) { document.getElementById('rvBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return; }
+                const r = d.return, items = d.items || [], jes = d.journal_entries || [];
+                const st = STATUS_MAP[r.status] || STATUS_MAP['draft'];
+                const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
+
+                document.getElementById('rvTitle').textContent = 'مرتجع: ' + r.return_number;
+                document.getElementById('rvSub').textContent = r.supplier_name_live || '';
+                if (r.status === 'draft') {
+                    document.getElementById('rvEditBtn').style.display = '';
+                }
+
+                // ⚠ تجميع البنود بنفس مبدأ viewInvoice — بمفتاح (منتج ×
+                // سعر الوحدة الصافي)، مع دمج الألوان/المقاسات بصف واحد.
+                // default_price مُعاد بناؤه بجانب السيرفر (عبر discount_
+                // percentage الأصلية من purchase_items) — للعرض المعلوماتي
+                // فقط، البند بالمرتجع مسجَّل بسعره الصافي التاريخي مباشرة،
+                // بلا أي خصم إفرادي جديد يُطبَّق وقت الإرجاع نفسه.
+                // ⚠ عدد الكروبات ≠ عدد المنتجات: quantity_returned لكل
+                // صف مقاس بمفرده = عدد الكروبات (مكرَّر على كل مقاسات
+                // نفس اللون، نفس اتفاقية purchase_items) — لازم يُجمع
+                // مرة وحدة لكل لون فريد لناتج "عدد الكروبات" الصحيح،
+                // بينما "عدد المنتجات" = المجموع الفعلي عبر كل الصفوف
+                // (يشمل الضرب الضمني بعدد المقاسات). نفس المبدأ بالضبط
+                // المستخدم بمودال الإنشاء (buildGroups/_colorQty).
+                const grpMap = {};
+                items.forEach(it => {
+                    const k = `${it.product_id || it.product_name}_${parseFloat(it.unit_price).toFixed(4)}`;
+                    if (!grpMap[k]) grpMap[k] = {
+                        product_name: it.product_name || '—', model_number: it.model_number || '',
+                        unit_price: parseFloat(it.unit_price), default_price: parseFloat(it.default_price ?? it.unit_price),
+                        pieces: 0, total: 0,
+                        sizes: [], colors: [], ageType: it.age_type || '', _colorQty: {}
+                    };
+                    const colorKey = it.color || '_none';
+                    grpMap[k]._colorQty[colorKey] = parseFloat(it.quantity_returned);
+                    grpMap[k].pieces += parseFloat(it.quantity_returned);
+                    grpMap[k].total += parseFloat(it.total_price);
+                    if (it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
+                    if (it.color && !grpMap[k].colors.includes(it.color)) grpMap[k].colors.push(it.color);
+                });
+                const itemsHtml = Object.values(grpMap).map(g => {
+                    const groups = Object.values(g._colorQty).reduce((s, v) => s + v, 0);
+                    return `<tr>
+                <td>
+                    <div class="fw-600" style="font-size:.8rem">${g.product_name}</div>
+                    <div style="font-size:.7rem;color:#94a3b8" dir="ltr">${g.model_number}</div>
+                </td>
+                <td class="text-center" style="font-size:.78rem;font-weight:600">${formatSizeRange(g)}</td>
+                <td class="text-center" style="font-size:.78rem">${g.colors.join(' · ') || '—'}</td>
+                <td class="n text-center fw-600" style="color:#dc2626">${groups.toFixed(0)}</td>
+                <td class="n text-center" style="color:#7c3aed">${g.pieces.toFixed(0)}</td>
+                <td class="n text-center" style="color:#64748b">${g.default_price.toFixed(2)} ${BASE_CUR_SYM}</td>
+                <td class="n text-center" style="color:#dc2626">${(g.default_price - g.unit_price) > 0.001 ? '-' + (g.default_price - g.unit_price).toFixed(2) + ' ' + BASE_CUR_SYM : '—'}</td>
+                <td class="n text-center">${g.unit_price.toFixed(2)} ${BASE_CUR_SYM}</td>
+                <td class="n text-end fw-600">${g.total.toFixed(2)} ${BASE_CUR_SYM}</td>
+            </tr>`;
+                }).join('');
+
+                // ⚠ القيد المحاسبي المرتبط — قيد واحد بس لكل مرتجع
+                // (بعكس فاتورة الشراء يلي فيها لغاية ٤ قيود منفصلة)،
+                // راجع confirm_purchase_return.php.
+                const TARGET_LABELS = { cash: 'صندوق/بنك', supplier: 'ذمة المورد', advance: 'دفعة مقدمة' };
+                const je = jes.find(j => j.reference_type === 'purchase_return');
+                const jeHtml = je ? `
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;margin-top:12px">
+            <div style="font-size:.82rem;font-weight:700;color:#065f46;margin-bottom:8px">
+                <i class="bi bi-check-circle-fill me-1"></i>تفاصيل التأكيد — بتاريخ ${je.entry_date}
+            </div>
+            <div class="row g-2">
+                <div class="col-6 col-md-4">
+                    <small style="color:#64748b">رقم القيد</small>
+                    <div class="fw-600" dir="ltr">${je.entry_number}</div>
+                </div>
+                <div class="col-6 col-md-4">
+                    <small style="color:#64748b">الوجهة المحاسبية</small>
+                    <div class="fw-600">${TARGET_LABELS[r.target_account_type] || 'ذمة المورد (افتراضي)'}</div>
+                </div>
+                <div class="col-6 col-md-4">
+                    <small style="color:#64748b">قيمة القيد</small>
+                    <div class="fw-600">${fmt(je.total_debit)} ${je.je_currency || BASE_CUR_SYM}</div>
+                </div>
+            </div>
+        </div>` : (r.status === 'posted' ? `<div class="mt-2 text-warning small"><i class="bi bi-exclamation-triangle me-1"></i>مرتجع مؤكد بلا قيد محاسبي مرتبط — راجع يدوياً.</div>` : '');
+
+                document.getElementById('rvBody').innerHTML = `
+        <div class="row g-2 mb-3">
+            <div class="col-md-3"><small style="color:#64748b">المورد</small><div class="fw-600">${r.supplier_name_live || '—'}</div></div>
+            <div class="col-md-2"><small style="color:#64748b">فاتورة الشراء الأصلية</small><div dir="ltr">${r.purchase_number || '—'}</div></div>
+            <div class="col-md-2"><small style="color:#64748b">تاريخ المرتجع</small><div>${r.return_date || '—'}</div></div>
+            <div class="col-md-2"><small style="color:#64748b">المستودع</small><div>${r.warehouse_name || '—'}</div></div>
+            <div class="col-md-1"><small style="color:#64748b">الحالة</small><div><span class="badge ${st.cls}">${st.label}</span></div></div>
+            <div class="col-md-2"><small style="color:#64748b">سبب الإرجاع</small><div style="font-size:.8rem">${r.return_reason || '—'}</div></div>
+        </div>
+        <div class="table-responsive mb-3">
+        <table class="mtbl" id="viewRetItemsTbl" style="font-size:.78rem">
+            <thead><tr style="background:#f8fafc">
+                <th>بيان المنتج / الموديل</th>
+                <th class="text-center">القياس</th>
+                <th class="text-center">الألوان</th>
+                <th class="text-center" style="color:#dc2626">عدد الكروبات</th>
+                <th class="text-center" style="color:#7c3aed">عدد المنتجات</th>
+                <th class="text-center" style="color:#64748b">سعر الشراء الافتراضي (${BASE_CUR_SYM})</th>
+                <th class="text-center" style="color:#dc2626">الخصم (${BASE_CUR_SYM})</th>
+                <th class="text-center">سعر الشراء المسجَّل (${BASE_CUR_SYM})</th>
+                <th class="text-end">الإجمالي (${BASE_CUR_SYM})</th>
+            </tr></thead>
+            <tbody>${itemsHtml || '<tr><td colspan="9" class="text-center text-muted py-3">لا توجد بنود</td></tr>'}</tbody>
+        </table>
+        </div>
+        <div class="row justify-content-end">
+          <div class="col-md-6">
+            <div style="background:#f8fafc;border-radius:10px;padding:10px 14px">
+                <div class="det-row"><span style="color:#64748b">المبلغ الفرعي المرتجع</span><span class="n">${fmt(r.total_amount)} ${BASE_CUR_SYM}</span></div>
+                ${parseFloat(r.discount_amount) > 0 ? `<div class="det-row"><span style="color:#64748b">الخصم المتناسب</span><span class="n text-danger">-${fmt(r.discount_amount)} ${BASE_CUR_SYM}</span></div>` : ''}
+                ${parseFloat(r.tax_amount) > 0 ? `<div class="det-row"><span style="color:#64748b">الضريبة المتناسبة</span><span class="n">+${fmt(r.tax_amount)} ${BASE_CUR_SYM}</span></div>` : ''}
+                <div class="det-row" style="font-weight:700;font-size:.9rem;border-top:1px solid #e2e8f0;padding-top:6px">
+                    <span>صافي المرتجع</span><span class="n">${fmt(r.return_amount)} ${BASE_CUR_SYM}</span>
+                </div>
+            </div>
+          </div>
+        </div>
+        ${jeHtml}
+        ${r.notes ? `<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${r.notes}</div>` : ''}
+        ${r.status === 'draft' ? `<div style="margin-top:12px">
+            <button type="button" class="btn btn-sm fw-600" style="border-radius:8px;border:1px solid var(--section-color);color:var(--section-color);width:100%;font-size:.8rem;padding:.5rem"
+                onclick="viewRetModalInst.hide();confirmReturn(${r.id}, '${r.return_number}')">
+                <i class="bi bi-check-circle me-1"></i>تأكيد المرتجع
+            </button>
+        </div>` : ''}`;
+                makeSortable(document.getElementById('viewRetItemsTbl'));
+            });
         }
 
         function editReturn(id, readOnly = false) {
@@ -1254,12 +1498,17 @@ $retStats = [
                 document.getElementById('rExRateLbl').textContent = d.return.base_currency_code && d.return.exchange_rate
                     ? `1 ${d.return.base_currency_code} = ${Number(d.return.exchange_rate).toFixed(4)} ${d.return.currency_code}` : '—';
                 document.getElementById('rPayStatusLbl').textContent = PAY_LABELS2[d.return.payment_status] || d.return.payment_status || '—';
-                document.getElementById('rInvNetLbl').textContent = d.return.final_amount
-                    ? Number(d.return.final_amount).toFixed(2) + ' ' + BASE_CUR_SYM : '—';
+                document.getElementById('rInvNetLbl').textContent = d.return.inv_final_amount
+                    ? Number(d.return.inv_final_amount).toFixed(2) + ' ' + BASE_CUR_SYM : '—';
                 onRPayHandlingChange();
-                if (d.return.target_account_type) document.getElementById('rTargetType').value = d.return.target_account_type;
+                // ⚠ إعادة بناء قيمة القائمة الموحَّدة من الحقلين المحفوظين
+                // منفصلين — عكس تفكيك saveReturn() بالضبط.
+                if (d.return.target_account_type === 'cash' && d.return.refund_account_id) {
+                    document.getElementById('rTargetAccount').value = 'cash:' + d.return.refund_account_id;
+                } else if (d.return.target_account_type) {
+                    document.getElementById('rTargetAccount').value = d.return.target_account_type;
+                }
                 onRTargetTypeChange();
-                if (d.return.refund_account_id) document.getElementById('rRefundAccount').value = d.return.refund_account_id;
                 document.getElementById('stepFindPurchase').style.display = 'none';
                 document.getElementById('stepItems').style.display = '';
                 document.getElementById('retModalTitle').innerHTML =

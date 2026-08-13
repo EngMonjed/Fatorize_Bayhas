@@ -88,7 +88,8 @@ try {
         if (!$invId)
             throw new Exception('رقم الفاتورة مطلوب');
 
-        $stInv = $pdo->prepare("SELECT i.*, c.name AS customer_name, cur.code AS currency_code
+        $stInv = $pdo->prepare("SELECT i.*, c.name AS customer_name, c.account_id AS customer_account_id,
+                cur.code AS currency_code
             FROM `{$TI}` i
             LEFT JOIN `{$TC}` c ON c.id=i.customer_id
             LEFT JOIN `currencies` cur ON cur.id=i.invoice_currency_id
@@ -142,8 +143,16 @@ try {
         $curCode = $inv['currency_code'] ?: $baseCurrencyCode;
         $docCurrencyId = (int) ($inv['invoice_currency_id'] ?: $baseCurrencyId);
 
-        $finalOrig = (float) $inv['final_amount'];       // عملة الفاتورة
-        $finalBase = $rate > 0 ? $finalOrig / $rate : $finalOrig; // عملة الفرع
+        // ⚠⚠ إصلاح معماري حرج: بعد قرار "عملة الفرع = مصدر الحقيقة
+        // الوحيد بالهيدر" (نفس قرار invoice_new.php)، عمود final_amount
+        // صار بعملة الفرع مباشرة (== final_amount_base_currency)، مش
+        // عملة الفاتورة كما كان مفترَضاً هون سابقاً. القسمة القديمة
+        // (finalOrig/rate) كانت بتنتج رقم مصغَّر خاطئ فوق قيمة أصلاً
+        // صحيحة بعملة الفرع — تماماً نفس فئة الإصلاح بـ
+        // confirm_purchase_invoice.php (finalBase مباشرة، finalOrig
+        // مُشتق بالضرب لا القسمة).
+        $finalBase = (float) ($inv['final_amount_base_currency'] ?? $inv['final_amount']);
+        $finalOrig = round($finalBase * $rate, 4); // المكافئ بعملة الفاتورة — توثيقي بس
 
         $pdo->beginTransaction();
         try {
@@ -223,7 +232,20 @@ try {
             }
 
             // ── حسابات الربط ──
-            $accCustomer = $getAcc('customer_receivable');
+            // ⚠ إصلاح رجعة كانت انفقدت أثناء إعادة البناء السابقة: لو
+            // العميل عنده حساب ذمة خاص (customers.account_id)، الفاتورة
+            // لازم تترحّل لنفس هالحساب — مش الحساب العام دايماً. الحساب
+            // العام يضل fallback بس لو العميل ما إله حساب خاص مضبوط
+            // (أو الحساب المضبوط أصبح غير نشط).
+            $accCustomer = null;
+            if (!empty($inv['customer_account_id'])) {
+                $stCa = $pdo->prepare("SELECT * FROM `{$TAC}` WHERE id=? AND is_active=1");
+                $stCa->execute([$inv['customer_account_id']]);
+                $accCustomer = $stCa->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            if (!$accCustomer) {
+                $accCustomer = $getAcc('customer_receivable');
+            }
             $accRevenue = $getAcc('sales_revenue');
             $accCogs = $getAcc('cogs');
             $accInventory = $getAcc('finished_inventory');
@@ -255,10 +277,13 @@ try {
             $splitTax = $accTaxPayable && (float) $inv['tax_amount'] > 0;
             $splitDisc = $accSalesDiscount && (float) $inv['discount_amount'] > 0;
 
-            $taxOrig = (float) $inv['tax_amount'];
-            $discOrig = (float) $inv['discount_amount'];
-            $taxBaseAmt = $rate > 0 ? $taxOrig / $rate : $taxOrig;
-            $discBaseAmt = $rate > 0 ? $discOrig / $rate : $discOrig;
+            // ⚠ نفس الإصلاح: tax_amount/discount_amount بجدول الفاتورة
+            // صارا بعملة الفرع مباشرة (لا عملة الفاتورة) — القراءة
+            // المباشرة هي "Base"، والمكافئ بعملة الفاتورة يُشتق بالضرب.
+            $taxBaseAmt = (float) $inv['tax_amount'];
+            $discBaseAmt = (float) $inv['discount_amount'];
+            $taxOrig = round($taxBaseAmt * $rate, 4);
+            $discOrig = round($discBaseAmt * $rate, 4);
 
             $revenueOrig = $finalOrig + ($splitDisc ? $discOrig : 0) - ($splitTax ? $taxOrig : 0);
             $revenueBase = $finalBase + ($splitDisc ? $discBaseAmt : 0) - ($splitTax ? $taxBaseAmt : 0);
@@ -299,7 +324,7 @@ try {
                     $rate
                 ]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                ->execute([$finalBase, $finalOrig, $accCustomer['id']]);
+                ->execute([$finalBase, $finalBase, $accCustomer['id']]);
 
             // دائن: إيرادات المبيعات (صافية أو إجمالية حسب التفكيك أعلاه)
             $pdo->prepare("INSERT INTO `{$TJI}`
@@ -316,7 +341,7 @@ try {
                     $rate
                 ]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                ->execute([$revenueBase, $revenueOrig, $accRevenue['id']]);
+                ->execute([$revenueBase, $revenueBase, $accRevenue['id']]);
 
             // دائن: ضريبة مبيعات مستحقة (لو مفكَّكة)
             if ($splitTax) {
@@ -334,7 +359,7 @@ try {
                         $rate
                     ]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                    ->execute([$taxBaseAmt, $taxOrig, $accTaxPayable['id']]);
+                    ->execute([$taxBaseAmt, $taxBaseAmt, $accTaxPayable['id']]);
             }
 
             // مدين: خصومات مبيعات ممنوحة (لو مفكَّكة)
@@ -353,7 +378,7 @@ try {
                         $rate
                     ]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                    ->execute([$discBaseAmt, $discOrig, $accSalesDiscount['id']]);
+                    ->execute([$discBaseAmt, $discBaseAmt, $accSalesDiscount['id']]);
             }
 
             // ── قيد منفصل: تكلفة البضاعة المباعة (COGS) — دايماً بعملة
@@ -465,7 +490,7 @@ try {
                             $shipRateForLine
                         ]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                        ->execute([$shipBase, $shipCost, $accShipExpense['id']]);
+                        ->execute([$shipBase, $shipBase, $accShipExpense['id']]);
 
                     // دائن: حسب طريقة الدفع (نقدي من صندوق، أو آجل لذمة شركة التوصيل)
                     if ($shipPayMethod === 'cash' && $shipCashAccId) {
@@ -499,7 +524,7 @@ try {
                                 $shipRateForLine
                             ]);
                         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$shipBase, $shipCost, $shipPayableId]);
+                            ->execute([$shipBase, $shipBase, $shipPayableId]);
                     }
                 }
             }
@@ -574,7 +599,7 @@ try {
                         $paidRateForLine
                     ]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                    ->execute([$paidAmt, $paidAmtInput, $accCustomer['id']]);
+                    ->execute([$paidAmt, $paidAmt, $accCustomer['id']]);
             }
 
             // ── خصم تعجيل الاستلام — تحقق سيادي بالسيرفر حصراً (تاريخ +
@@ -614,14 +639,14 @@ try {
                             VALUES (?,?,?,0,?,?,'خصم تعجيل دفع',?,?)")
                             ->execute([$jeSettleId, $accSettleDisc['id'], $settleDiscFullBase, $settleDiscOrig, $settleDiscFullBase, $docCurrencyId, $rate]);
                         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                            ->execute([$settleDiscFullBase, $settleDiscOrig, $accSettleDisc['id']]);
+                            ->execute([$settleDiscFullBase, $settleDiscFullBase, $accSettleDisc['id']]);
 
                         // دائن: ذمم العملاء (تخفيض إضافي)
                         $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                             VALUES (?,?,0,?,?,?,'خصم تعجيل دفع',?,?)")
                             ->execute([$jeSettleId, $accCustomer['id'], $settleDiscFullBase, $settleDiscOrig, $settleDiscFullBase, $docCurrencyId, $rate]);
                         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$settleDiscFullBase, $settleDiscOrig, $accCustomer['id']]);
+                            ->execute([$settleDiscFullBase, $settleDiscFullBase, $accCustomer['id']]);
 
                         $settleDiscApplied = $settleDiscFullBase;
                     }
@@ -801,16 +826,16 @@ try {
                     $stJI = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
                     $stJI->execute([$inv['journal_entry_id']]);
                     foreach ($stJI->fetchAll(PDO::FETCH_ASSOC) as $ji) {
-                        // ⚠ net (بعملة الفرع) يعكس base_balance بشكل صحيح.
-                        // بس balance لازم ينعكس بمبلغه الأصلي (original_amount)
-                        // بنفس إشارة جهة القيد (مدين=+، دائن=-) — مو نفس
-                        // $net (عملة الفرع)، وإلا نفس باگ الشحن/التحصيل.
+                        // ⚠ إصلاح: بعد قرار "عملة الفرع بالهيدر"، القيد
+                        // الرئيسي هون بيلمس بس حسابات غير نقدية (ذمة
+                        // العميل/الإيراد/الضريبة/الخصم) — وكلهم صاروا
+                        // balance == base_balance بالضبط (راجع تصحيح
+                        // القيد الرئيسي أعلاه). $net (بعملة الفرع) كافٍ
+                        // وحده للاثنين، مطابق تماماً لنمط عكس الإلغاء
+                        // بـconfirm_purchase_invoice.php.
                         $net = $ji['debit'] - $ji['credit'];
-                        $netOriginal = $ji['debit'] > 0
-                            ? (float) $ji['original_amount']
-                            : -1 * (float) $ji['original_amount'];
                         $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$net, $netOriginal, $ji['account_id']]);
+                            ->execute([$net, $net, $ji['account_id']]);
                     }
                     $pdo->prepare("UPDATE `{$TJE}` SET status='cancelled',cancelled_at=NOW(),cancelled_by=? WHERE id=?")
                         ->execute([$_SESSION['user_id'], $inv['journal_entry_id']]);

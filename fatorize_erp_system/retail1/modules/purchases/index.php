@@ -375,6 +375,49 @@ $PAY_MAP = [
             flex-wrap: wrap
         }
 
+        .sec-card {
+            background: #fff;
+            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            overflow: hidden;
+            margin-bottom: 1.1rem
+        }
+
+        .sec-card table {
+            margin: 0;
+            font-size: .83rem
+        }
+
+        .sec-card th {
+            background: #f8fafc;
+            color: #64748b;
+            font-size: .75rem;
+            font-weight: 600;
+            border: none;
+            padding: .6rem .9rem;
+            white-space: nowrap
+        }
+
+        .sec-card td {
+            padding: .55rem .9rem;
+            vertical-align: middle;
+            border-top: 1px solid #f1f5f9
+        }
+
+        .sec-card tbody tr:hover td {
+            background: #f8fafc
+        }
+
+        .sec-hdr {
+            padding: .7rem 1.1rem;
+            border-bottom: 1px solid #f1f5f9;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: .5rem
+        }
+
         table.mtbl {
             width: 100%;
             border-collapse: collapse;
@@ -566,7 +609,7 @@ $PAY_MAP = [
             <div class="tbl-wrap">
                 <div class="tbl-hdr">
                     <span style="font-size:.88rem;font-weight:700;color:#1e293b;white-space:nowrap">
-                        <i class="bi bi-receipt me-1"></i>سجل فواتير المشتريات
+                        <i class="bi bi-receipt me-1 text-success"></i>سجل فواتير المشتريات
                     </span>
                     <form method="get" class="d-flex gap-2 flex-wrap align-items-center ms-auto">
                         <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
@@ -614,101 +657,105 @@ $PAY_MAP = [
                     </a>
                 </div>
             </div>
-            <div class="table-responsive">
-                <table class="mtbl" id="purchasesTbl">
-                    <thead>
-                        <tr>
-                            <th style="color:#1e3a8a">رقم الفاتورة</th>
-                            <th>التاريخ</th>
-                            <th style="color:#1e3a8a">المورد</th>
-                            <th>البنود</th>
-                            <th>العملة</th>
-                            <th>الإجمالي</th>
-                            <th>بعملة الفرع (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
-                            <th>حالة الدفع</th>
-                            <th>الحالة</th>
-                            <th style="text-align:center" data-no-sort>إجراءات</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($purchases)): ?>
+            <!-- جدول الفواتير -->
+            <div class="tbl-wrap">
+                <div class="table-responsive">
+                    <table class="mtbl" id="purchasesTbl">
+                        <thead>
                             <tr>
-                                <td colspan="10" class="text-center text-muted py-5">
-                                    <i class="bi bi-receipt d-block mb-2" style="font-size:2rem;opacity:.2"></i>
-                                    لا توجد فواتير<?= $search ? " تطابق \"{$search}\"" : '' ?>
-                                </td>
+                                <th style="color:#1e3a8a">رقم الفاتورة</th>
+                                <th>التاريخ</th>
+                                <th style="color:#1e3a8a">المورد</th>
+                                <th>البنود</th>
+                                <th>العملة</th>
+                                <th>الإجمالي</th>
+                                <th>بعملة الفرع (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
+                                <th>حالة الدفع</th>
+                                <th>الحالة</th>
+                                <th style="text-align:center" data-no-sort>إجراءات</th>
                             </tr>
-                        <?php endif; ?>
-                        <?php foreach ($purchases as $pur):
-                            $st = $STATUS_MAP[$pur['status']] ?? $STATUS_MAP['draft'];
-                            $pay = $PAY_MAP[$pur['payment_status']] ?? $PAY_MAP['pending'];
-                            $sym = $pur['currency_symbol'] ?? '$';
-                            ?>
-                            <tr style="<?= purchaseRowStyle($pur['status'], $pur['payment_status']) ?>">
-                                <td class="n fw-600" style="direction:rtl;color:#16a34a">
-                                    <a href="invoice_view.php?id=<?= $pur['id'] ?>"
-                                        style="color:#1e3a8a;text-decoration:none">
-                                        <?= htmlspecialchars($pur['purchase_number']) ?>
-                                    </a>
-                                </td>
-                                <td class="text-muted" style="direction:rtl"><?= $pur['purchase_date'] ?></td>
-                                <td>
-                                    <div class="fw-600" style="font-size:.83rem;color:#16a34a;direction:rtl">
-                                        <?= htmlspecialchars($pur['supplier_name'] ?? '—') ?>
-                                    </div>
-                                </td>
-                                <td class=" text-center" style="direction:rtl">
-                                    <span class="badge bg-secondary-subtle text-secondary"><?= $pur['items_count'] ?>
-                                        بند</span>
-                                </td>
-                                <td>
-                                    <span class="badge bg-info-subtle text-info" style="font-size:.72rem" dir="rtl">
-                                        <?= htmlspecialchars($pur['currency_code'] ?: '—') ?>
-                                    </span>
-                                </td>
-                                <td class="n fw-600"><?= number_format($pur['final_amount'], 2) ?>     <?= $sym ?></td>
-                                <td class="n text-muted" style="font-size:.78rem">
-                                    <?= $pur['final_amount_base_currency'] ? number_format($pur['final_amount_base_currency'], 2) . ' $' : '—' ?>
-                                </td>
-                                <td><span class="<?= $pay['cls'] ?>"
-                                        style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
-                                <td><span class="badge <?= $st['cls'] ?>"
-                                        style="font-size:.68rem"><?= $st['label'] ?></span></td>
-                                <td>
-                                    <div class="d-flex gap-1 justify-content-center">
-                                        <button class="act-btn info-h" onclick="viewInvoice(<?= $pur['id'] ?>)" title="عرض">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
-                                        <?php if ($pur['status'] === 'draft'): ?>
-                                            <a href="invoice_edit.php?id=<?= $pur['id'] ?>" class="act-btn" title="تعديل">
-                                                <i class="bi bi-pencil"></i>
-                                            </a>
-                                        <?php endif; ?>
-                                        <?php if ($pur['status'] === 'draft'): ?>
-                                            <button class="act-btn success-h"
-                                                onclick="confirmInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
-                                                title="تأكيد الفاتورة"><i class="bi bi-check-circle"></i>
+                        </thead>
+                        <tbody>
+                            <?php if (empty($purchases)): ?>
+                                <tr>
+                                    <td colspan="10" class="text-center text-muted py-5">
+                                        <i class="bi bi-receipt d-block mb-2" style="font-size:2rem;opacity:.2"></i>
+                                        لا توجد فواتير<?= $search ? " تطابق \"{$search}\"" : '' ?>
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                            <?php foreach ($purchases as $pur):
+                                $st = $STATUS_MAP[$pur['status']] ?? $STATUS_MAP['draft'];
+                                $pay = $PAY_MAP[$pur['payment_status']] ?? $PAY_MAP['pending'];
+                                $sym = $pur['currency_symbol'] ?? '$';
+                                ?>
+                                <tr style="<?= purchaseRowStyle($pur['status'], $pur['payment_status']) ?>">
+                                    <td class="n fw-600" style="direction:rtl;color:#16a34a">
+                                        <a onclick="viewInvoice(<?= $pur['id'] ?>)" title="عرض"
+                                            style="color:#1e3a8a;text-decoration:none">
+                                            <?= htmlspecialchars($pur['purchase_number']) ?>
+                                        </a>
+                                    </td>
+                                    <td class="text-muted" style="direction:rtl"><?= $pur['purchase_date'] ?></td>
+                                    <td>
+                                        <div class="fw-600" style="font-size:.83rem;color:#16a34a;direction:rtl">
+                                            <?= htmlspecialchars($pur['supplier_name'] ?? '—') ?>
+                                        </div>
+                                    </td>
+                                    <td class=" text-center" style="direction:rtl">
+                                        <span class="badge bg-secondary-subtle text-secondary"><?= $pur['items_count'] ?>
+                                            بند</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info-subtle text-info" style="font-size:.72rem" dir="rtl">
+                                            <?= htmlspecialchars($pur['currency_code'] ?: '—') ?>
+                                        </span>
+                                    </td>
+                                    <td class="n fw-600"><?= number_format($pur['final_amount'], 2) ?>     <?= $sym ?></td>
+                                    <td class="n text-muted" style="font-size:.78rem">
+                                        <?= $pur['final_amount_base_currency'] ? number_format($pur['final_amount_base_currency'], 2) . ' $' : '—' ?>
+                                    </td>
+                                    <td><span class="<?= $pay['cls'] ?>"
+                                            style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
+                                    <td><span class="badge <?= $st['cls'] ?>"
+                                            style="font-size:.68rem"><?= $st['label'] ?></span></td>
+                                    <td>
+                                        <div class="d-flex gap-1 justify-content-center">
+                                            <button class="act-btn info-h" onclick="viewInvoice(<?= $pur['id'] ?>)"
+                                                title="عرض">
+                                                <i class="bi bi-eye"></i>
                                             </button>
-                                        <?php endif; ?>
-                                        <?php if ($pur['status'] === 'confirmed'): ?>
+                                            <?php if ($pur['status'] === 'draft'): ?>
+                                                <a href="invoice_edit.php?id=<?= $pur['id'] ?>" class="act-btn" title="تعديل">
+                                                    <i class="bi bi-pencil"></i>
+                                                </a>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] === 'draft'): ?>
+                                                <button class="act-btn success-h"
+                                                    onclick="confirmInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
+                                                    title="تأكيد الفاتورة"><i class="bi bi-check-circle"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] === 'confirmed'): ?>
 
-                                            <a href="returns.php?open_purchase_id=<?= $pur['id'] ?>" class="act-btn"
-                                                style="color:#dc2626" title="إنشاء مرتجع لهذه الفاتورة">
-                                                <i class="bi bi-arrow-return-right"></i>
-                                            </a>
-                                        <?php endif; ?>
-                                        <?php if ($pur['status'] !== 'cancelled'): ?>
-                                            <button class="act-btn danger"
-                                                onclick="cancelInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
-                                                title="إلغاء"><i class="bi bi-x-circle"></i>
-                                            </button>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                                                <a href="returns.php?open_purchase_id=<?= $pur['id'] ?>" class="act-btn"
+                                                    style="color:#dc2626" title="إنشاء مرتجع لهذه الفاتورة">
+                                                    <i class="bi bi-arrow-return-right"></i>
+                                                </a>
+                                            <?php endif; ?>
+                                            <?php if ($pur['status'] !== 'cancelled'): ?>
+                                                <button class="act-btn danger"
+                                                    onclick="cancelInvoice(<?= $pur['id'] ?>,'<?= htmlspecialchars($pur['purchase_number'], ENT_QUOTES) ?>')"
+                                                    title="إلغاء"><i class="bi bi-x-circle"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
         </div>
@@ -1884,7 +1931,7 @@ $PAY_MAP = [
 
         function printPurchaseInvoice() {
             const p = _cPurchaseData;
-            if (!p) { toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return; }
+            if (!p) {toast('يرجى فتح مودال التأكيد أولاً', 'danger'); return;}
             // ⚠ عملة الفرع دائماً — نفس قرار invoice_new.php: كل الأسعار
             // والمبالغ (سعر الوحدة، الإجماليات، كشف الحساب) حقيقتها
             // الوحيدة بعملة الفرع. عملة الفاتورة (sym) توثيقية بس، ما
@@ -1920,7 +1967,7 @@ $PAY_MAP = [
             const groups = Object.values(grpMap).map(g => {
                 const packetQty = g.sizes.length || 1;
                 const totalQty = g.qty * packetQty;
-                return { ...g, packet_qty: packetQty, total_qty: totalQty, line_total: totalQty * g.net_price };
+                return {...g, packet_qty: packetQty, total_qty: totalQty, line_total: totalQty * g.net_price};
             });
 
             let itemRows = '', i = 1, grandTotalQty = 0;

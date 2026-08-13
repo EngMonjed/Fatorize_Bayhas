@@ -198,7 +198,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     COALESCE(c.name, r.customer_name) AS customer_name,
                     r.return_reason, r.return_amount, r.status,
                     cur.symbol AS cur_sym,
-                    (r.return_amount / NULLIF(r.exchange_rate,0)) AS return_amount_base
+                    r.return_amount AS return_amount_base
                 FROM `{$TR}` r
                 LEFT JOIN `{$TC}` c ON c.id = r.customer_id
                 LEFT JOIN currencies cur ON cur.id = r.return_currency_id
@@ -239,7 +239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $sql = "SELECT i.payment_status,
                     COUNT(i.id) AS invoices_count,
                     SUM(i.final_amount_base_currency) AS total_base,
-                    SUM(i.balance_amount / NULLIF(i.exchange_rate,0)) AS balance_base
+                    SUM(i.balance_amount) AS balance_base
                 FROM `{$TI}` i
                 WHERE " . implode(' AND ', $w) . "
                 GROUP BY i.payment_status

@@ -221,75 +221,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         // بالمبيعات، بس فعلياً لسا موجودة وشغّالة هون). رح تُحذف بالكامل
         // لما نبني confirm_sale_invoice.php الجديد المطابق للمشتريات،
         // وزر "تأكيد" رح يصير يستدعيه حصرياً بدل هالمسار.
-        elseif ($act === 'confirm_invoice') {
-            requirePermission('sales.invoices', 'edit');
-            $id = (int) $_POST['id'];
-            $pSt = $pdo->prepare("SELECT * FROM `{$TI}` WHERE id=?");
-            $pSt->execute([$id]);
-            $inv = $pSt->fetch();
-            if (!$inv)
-                throw new Exception('الفاتورة غير موجودة');
-            if ($inv['status'] !== 'draft')
-                throw new Exception('يمكن تأكيد المسودات فقط');
-
-            $pdo->beginTransaction();
-            try {
-                // خصم المخزون
-                $items = $pdo->prepare("SELECT ii.*, p.name AS item_name FROM `{$TII}` ii
-                    LEFT JOIN `{$TPROD}` p ON p.id=ii.product_id WHERE ii.invoice_id=?");
-                $items->execute([$id]);
-                foreach ($items->fetchAll() as $row) {
-                    if (!$row['variant_id'] || !$inv['warehouse_id'])
-                        continue;
-                    $cur = $pdo->prepare("SELECT quantity FROM `{$TWI}` WHERE variant_id=? AND warehouse_id=?");
-                    $cur->execute([$row['variant_id'], $inv['warehouse_id']]);
-                    $stock = (float) ($cur->fetchColumn() ?? 0);
-                    if ($stock < $row['quantity'])
-                        throw new Exception("مخزون غير كافٍ: {$row['item_name']} (متوفر: {$stock})");
-                    $pdo->prepare("UPDATE `{$TWI}` SET quantity=quantity-? WHERE variant_id=? AND warehouse_id=?")
-                        ->execute([$row['quantity'], $row['variant_id'], $inv['warehouse_id']]);
-                }
-                // تحديث الفاتورة
-                $pdo->prepare("UPDATE `{$TI}` SET status='confirmed', payment_status='pending',
-                    paid_amount=0, balance_amount=final_amount,
-                    updated_by=?, updated_at=NOW()
-                    WHERE id=?")
-                    ->execute([$_SESSION['user_id'], $id]);
-                $pdo->commit();
-                echo json_encode(['ok' => true, 'msg' => 'تم تأكيد الفاتورة وخصم المخزون ⚠ بدون ترحيل محاسبي (مؤقت)']);
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-        }
-
-        // ── إلغاء فاتورة ──
-        elseif ($act === 'cancel_invoice') {
-            requirePermission('sales.invoices', 'edit');
-            $id = (int) $_POST['id'];
-            $pSt = $pdo->prepare("SELECT * FROM `{$TI}` WHERE id=?");
-            $pSt->execute([$id]);
-            $inv = $pSt->fetch();
-            if (!$inv)
-                throw new Exception('الفاتورة غير موجودة');
-            if ($inv['status'] === 'cancelled')
-                throw new Exception('الفاتورة ملغاة مسبقاً');
-
-            // إعادة المخزون إذا كانت مؤكدة
-            if ($inv['status'] === 'confirmed') {
-                $items = $pdo->prepare("SELECT * FROM `{$TII}` WHERE invoice_id=?");
-                $items->execute([$id]);
-                foreach ($items->fetchAll() as $row) {
-                    if (!$row['variant_id'] || !$inv['warehouse_id'])
-                        continue;
-                    $pdo->prepare("UPDATE `{$TWI}` SET quantity=quantity+? WHERE variant_id=? AND warehouse_id=?")
-                        ->execute([$row['quantity'], $row['variant_id'], $inv['warehouse_id']]);
-                }
-            }
-            $pdo->prepare("UPDATE `{$TI}` SET status='cancelled', updated_by=?, updated_at=NOW() WHERE id=?")
-                ->execute([$_SESSION['user_id'], $id]);
-            echo json_encode(['ok' => true, 'msg' => 'تم إلغاء الفاتورة']);
-        } else
+        // ⚠ إلغاء الفاتورة — لازم يمرّ حصراً عبر api/confirm_sale_invoice.php
+        // (action=cancel)، مش معالج محلي هون، وإلا القيود المحاسبية
+        // ما بتنعكس إطلاقاً (نفس نمط الباگ التاريخي الموثّق بالمشروع —
+        // كان موجود فعلياً هون كمعالج حي، مش كود ميت، وبيرجّع المخزون
+        // بس بلا أي عكس محاسبي). حذفناه بالكامل، الزر صار يستدعي الـAPI
+        // مباشرة (راجع cancelInvoice() بالجافاسكربت).
+        else
             throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
         echo json_encode(['ok' => false, 'msg' => $e->getMessage()]);
@@ -560,16 +498,15 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
 
 <body>
     <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
-    <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+    <?php
+    require_once __DIR__ . '/../../../includes/breadcrumb.php';
+    require_once __DIR__ . '/../../../includes/sidebar.php';
+    ?>
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
         <span class="tb-title"><i class="bi bi-receipt me-1 text-success"></i>فواتير البيع</span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
-        <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
-            <span>المبيعات</span>
-            <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
-            <span class="text-success fw-600">فواتير البيع</span>
-        </nav>
+        <?= renderBreadcrumb() ?>
     </header>
     <main class="main-content">
         <div class="content-body">
@@ -579,7 +516,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                 <li class="nav-item">
                     <a class="nav-link fw-600 active" href="sales_index.php"
-                        style="border:none;border-bottom:2px solid #16a34a;color:#16a34a;font-size:.83rem;margin-bottom:-2px">
+                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
                         <i class="bi bi-receipt me-1"></i>فواتير المبيعات
                     </a>
                 </li>
@@ -609,7 +546,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             <div class="row g-3 mb-4">
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-receipt text-success"></i>
+                        <div class="stat-icon" style="background:#eff6ff"><i class="bi bi-receipt text-primary"></i>
                         </div>
                         <div>
                             <div class="stat-val"><?= $stats['total'] ?></div>
@@ -657,7 +594,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             <div class="tbl-wrap">
                 <div class="tbl-hdr">
                     <span style="font-size:.88rem;font-weight:700;color:#1e293b;white-space:nowrap">
-                        <i class="bi bi-receipt me-1"></i>سجل فواتير المبيعات
+                        <i class="bi bi-receipt me-1 text-success"></i>سجل فواتير المبيعات
                     </span>
                     <form method="get" class="d-flex gap-2 flex-wrap align-items-center ms-auto">
                         <input type="text" name="q" value="<?= htmlspecialchars($search) ?>"
@@ -740,10 +677,10 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                                 $sym = $pur['currency_symbol'] ?? '$';
                                 ?>
                                 <tr style="<?= invoiceRowStyle($inv['status'], $inv['payment_status']) ?>">
-                                    <td class="n fw-600" style="direction:rtl;color:#16a34a">
-                                        <a href="invoice_view.php?id=<?= $inv['id'] ?>"
-                                            style="color:#1e3a8a;text-decoration:none">
-                                            <?= htmlspecialchars($inv['sale_number']) ?>
+                                    <td class="n fw-600" style="direction:rtl">
+                                        <a href="javascript:void(0)" onclick="viewInvoice(<?= $inv['id'] ?>)"
+                                            style="color:#1e3a8a;text-decoration:none;cursor:pointer">
+                                            <?= htmlspecialchars($inv['invoice_number']) ?>
                                         </a>
                                     </td>
                                     <td class="text-muted" style="direction:rtl"><?= $inv['invoice_date'] ?></td>
@@ -1232,6 +1169,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
         function sbOpen() {sb.classList.add('open'); ov.classList.add('show');}
@@ -2068,9 +2006,13 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
 
         // ── إلغاء ──
         function cancelInvoice(id, no) {
-            if (!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المؤكدة سيتم إعادة كمياتها للمخزون.`)) return;
-            post({_action: 'cancel_invoice', id}).then(d => {
-                if (d.ok) {toast(d.msg); setTimeout(() => location.reload(), 700);}
+            if (!confirm(`إلغاء الفاتورة "${no}"؟\nالفواتير المؤكدة سيتم إعادة كمياتها للمخزون وعكس قيدها المحاسبي.`)) return;
+            const fd = new FormData();
+            fd.append('_action', 'cancel');
+            fd.append('invoice_id', id);
+            fetch('../../api/confirm_sale_invoice.php', {method: 'POST', body: fd})
+                .then(r => r.json()).then(d => {
+                if (d.ok) {toast('✅ ' + d.msg); setTimeout(() => location.reload(), 700);}
                 else toast(d.msg, 'danger');
             });
         }

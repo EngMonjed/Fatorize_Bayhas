@@ -37,8 +37,8 @@ try {
         echo json_encode(['ok' => false, 'msg' => 'غير مسجل']);
         exit;
     }
-    require_once __DIR__ . '/../config/database.php';
-    require_once __DIR__ . '/../config/auth.php';
+    require_once __DIR__ . '/../../config/database.php';
+    require_once __DIR__ . '/../../config/auth.php';
 
     $pdo = getConnection();
     requirePermission('purchases.returns', 'confirm');
@@ -349,9 +349,13 @@ try {
                 ->execute([$returnBase, $returnBase, $accInventory['id']]);
 
             // ── تحديث حالة المرتجع ──
-            $pdo->prepare("UPDATE `{$TR}` SET status='confirmed', journal_entry_id=?, updated_by=?, updated_at=NOW()
+            // ⚠ purchase_returns_{TS} بدون عمودي updated_by/updated_at
+            // (بعكس purchases_{TS}) — نفس أعمدة UPDATE المستخدمة فعلياً
+            // بمعالج save_return الأصلي بـreturns.php (السطر ٢٤٧)، بلا
+            // أي منهما.
+            $pdo->prepare("UPDATE `{$TR}` SET status='posted', journal_entry_id=?
                 WHERE id=?")
-                ->execute([$jeId, $_SESSION['user_id'], $retId]);
+                ->execute([$jeId, $retId]);
 
             $pdo->commit();
             ob_get_clean();
@@ -360,7 +364,7 @@ try {
                 'msg' => 'تم تأكيد المرتجع، تنزيل المخزون، وترحيل القيد المحاسبي',
                 'je_no' => $jeNo,
                 'movement' => $movNo,
-                'status' => 'confirmed',
+                'status' => 'posted',
             ]);
 
         } catch (Exception $e) {
@@ -384,7 +388,7 @@ try {
 
         $pdo->beginTransaction();
         try {
-            if ($ret['status'] === 'confirmed') {
+            if ($ret['status'] === 'posted') {
                 // إعادة الكمية للمخزون (عكس النقصان)
                 $stItems = $pdo->prepare("SELECT * FROM `{$TRI}` WHERE return_id=?");
                 $stItems->execute([$retId]);
@@ -410,9 +414,9 @@ try {
                 }
             }
             $pdo->prepare("UPDATE `{$TR}` SET status='cancelled',
-                notes=CONCAT(COALESCE(notes,''),' | إلغاء: {$reason}'),
-                updated_by=? WHERE id=?")
-                ->execute([$_SESSION['user_id'], $retId]);
+                notes=CONCAT(COALESCE(notes,''),' | إلغاء: {$reason}')
+                WHERE id=?")
+                ->execute([$retId]);
             $pdo->commit();
             ob_get_clean();
             echo json_encode(['ok' => true, 'msg' => 'تم إلغاء المرتجع وعكس جميع التأثيرات']);

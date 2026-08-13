@@ -1516,20 +1516,42 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             post({ _action: 'search_product', q }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
                 if (d.type === 'barcode') {
-                    // وجد مباشرة بالباركود — نمرّره لنفس مودال المراجعة (بكل
-                    // المتغيرات المشاركة بنفس الباركود، لو الباركود مشترك
-                    // بين مقاسات الكروب كله) بدل الإضافة الصامتة المباشرة،
-                    // ليقدر المستخدم يراجع/يعدّل سعر الصرف قبل الإضافة،
-                    // بالضبط متل نتائج البحث المتعددة. هذا يوحّد التجربة،
-                    // ويلغي الحاجة لمسار "إضافة بدون مراجعة" كان بيتجاوز
-                    // فحص سعر الصرف بالكامل.
-                    showSearchResults(d.group && d.group.length ? d.group : [d.data]);
+                    // ⚠ قرار نهائي (يعكس القرار السابق): مطابقة الباركود
+                    // مؤكدة ١٠٠٪ (رقم فريد، لا احتمال التباس زي البحث
+                    // بالاسم/الموديل) — تُضاف مباشرة لبنود الفاتورة بلا
+                    // مودال مراجعة، ولو الصنف موجود أصلاً بنفس السطر
+                    // (نفس الكروب) بتزيد الكمية تلقائياً (addLine() أصلاً
+                    // فيها هالمنطق). البحث النصي (اسم/موديل جزئي) يضل
+                    // يفتح المودال — نتائج محتملة متعددة، لازم مراجعة.
+                    addBarcodeDirect(d.group && d.group.length ? d.group : [d.data]);
                     document.getElementById('scanInput').value = '';
                 } else {
                     // عرض نتائج البحث
                     showSearchResults(d.data);
                 }
             });
+        }
+
+        // إضافة مباشرة من مطابقة باركود مؤكدة — بلا مودال مراجعة. كل
+        // متغيّرات نفس الباركود (لو مشترك بين مقاسات الكروب) تُدمج بنفس
+        // السطر (أول متغيّر ينشئ السطر، الباقي يندمج فيه)، بالضبط نفس
+        // منطق confirmSelection() بس بدون خطوة المراجعة اليدوية والسعر
+        // المُدخَل بعملة الفاتورة — نعتمد cost_price مباشرة (بعملة الفرع
+        // أصلاً)، addLine() أصلاً بترجع لهالقيمة تلقائياً لو ما مرّرنا
+        // cost_base_direct صراحة (راجع المسار الاحتياطي جوا addLine).
+        function addBarcodeDirect(items) {
+            if (!items || !items.length) { toast('لم يتم العثور على الصنف', 'danger'); return; }
+            const gk = makeGrpKey({ ...items[0], cost_price: items[0].cost_price });
+            const wasExisting = lines.some(l => l.grp_key === gk);
+            items.forEach((v, vi) => {
+                if (vi === 0) addLine(v);
+                else mergeVariant(v);
+            });
+            calcTotals();
+            if (!wasExisting) toast(`تمت إضافة ${items[0].product_name || 'الصنف'} مباشرة من الباركود`);
+            // ⚠ حالة الزيادة (الصنف موجود أصلاً) — addLine() نفسها بتعرض
+            // toast('تمت زيادة الكمية') تلقائياً بمسارها الداخلي، ما بدنا
+            // نكرره هون.
         }
 
         function showSearchResults(items) {
