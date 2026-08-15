@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // ⚠ حماية صريحة: العملة الوظيفية للفرع مجمّدة بعد الإنشاء
             // (IAS 21) — أي محاولة تغييرها (حتى لو تجاوزت الـdisabled
             // بالواجهة) تُرفض هون صراحة بدل تجاهلها بصمت.
-            if (isset($_POST['base_currency'])) {
+            if (isset($_POST['base_currency']) || isset($_POST['base_currency_id'])) {
                 throw new Exception('العملة الوظيفية للفرع مجمّدة ولا يمكن تغييرها بعد الإنشاء');
             }
 
@@ -42,21 +42,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 'country',
                 'tax_number',
                 'factory_branch_id',
-                'local_currency',
-                // ⚠ base_currency عمداً مو بهالقائمة — العملة الوظيفية
-                // للفرع مجمّدة، ما لازم تتغيّر عبر هالفورم إطلاقاً حتى
-                // لو حدا حاول يبعتها يدوياً من devtools (حماية حقيقية
-                // بالسيرفر، مو بس disabled بالواجهة). base_currency_id/
-                // local_currency_id أُزيلا بالكامل — أعمدة غير موجودة
-                // إطلاقاً بجدول branches (كانت تُسقط كل عملية حفظ فرع
-                // بخطأ SQL "Unknown column").
+                // ⚠ local_currency/local_currency_id عمداً مو بهالقائمة —
+                // بيتعاملوا مع بعض يدوياً تحت (مصدر الحقيقة صار
+                // local_currency_id الحقيقي/FK، والعمود النصي القديم
+                // local_currency بينحسب ويتزامن تلقائياً منه، عشان كل
+                // الملفات القديمة يلي بتقرأه كنص تضل شغالة بدون تعديل).
+                // base_currency عمداً مو بهالقائمة — مجمّدة (راجع الفحص فوق).
                 'pricing_method',
                 'default_margin_pct',
                 'tax_rate_default',
                 'tax_input_recoverable',
                 'allow_negative_stock',
                 'notify_low_stock',
-                'low_stock_threshold',
                 'notify_new_invoice',
                 'notify_internal_order',
                 'notify_email',
@@ -85,6 +82,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $set[] = "`$f` = ?";
                 $params[] = $val;
             }
+
+            // ✅ مزامنة العملة المحلية: الواجهة بتبعت local_currency_id
+            // (id حقيقي)، والسيرفر هون بيحدّد الكود النصي المطابق تلقائياً
+            // ويحدّث العمودين مع بعض (local_currency_id الحقيقي +
+            // local_currency النصي للتوافق مع الملفات القديمة).
+            if (isset($_POST['local_currency_id']) && $_POST['local_currency_id'] !== '') {
+                $curId = (int) $_POST['local_currency_id'];
+                $curRow = $pdo->prepare("SELECT code FROM currencies WHERE id = ?");
+                $curRow->execute([$curId]);
+                $curCode = $curRow->fetchColumn();
+                if (!$curCode) {
+                    throw new Exception('عملة محلية غير صالحة');
+                }
+                $set[] = "`local_currency_id` = ?";
+                $params[] = $curId;
+                $set[] = "`local_currency` = ?";
+                $params[] = $curCode;
+            }
+
             $set[] = "`updated_by` = ?";
             $params[] = $_SESSION['user_id'];
             $params[] = $id;
@@ -148,11 +164,14 @@ $branchTypes = [
 // جلب العملات من DB بالـ id
 $currencies_db = $pdo->query("SELECT id,code,name,symbol FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
 $currencies = []; // id => label
-// ⚠ مفتاح المصفوفة صار كود العملة (مثل 'USD')، مو الـid الرقمي —
-// عمودا branches.base_currency/local_currency الحقيقيان نصيان (varchar(3))
-// وما بيقبلوا رقم id. كان الفورم يبعت الـid كقيمة، فيتخزن غلط.
+// ✅ مفتاح المصفوفة صار الـid الرقمي الحقيقي (FK) — العمود الحقيقي
+// base_currency_id/local_currency_id هو مصدر الحقيقة هلق. عمودا
+// base_currency/local_currency النصيان (varchar) بيضلوا موجودين
+// لتوافق كل الملفات القديمة يلي بتقرأهم كنص، بس بيتحدّثوا تلقائياً
+// من السيرفر عند كل حفظ (راجع معالج 'save' تحت) — الواجهة نفسها ما
+// بتبعت أي قيمة نصية يدوياً.
 foreach ($currencies_db as $cur) {
-    $currencies[$cur['code']] = $cur['code'] . ' — ' . $cur['name'] . ' ' . $cur['symbol'];
+    $currencies[$cur['id']] = $cur['code'] . ' — ' . $cur['name'] . ' ' . $cur['symbol'];
 }
 $pricingMethods = [
     'cost_plus' => 'تكلفة + هامش ربح',
@@ -633,8 +652,8 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                                          غير موجودة أصلاً هون). هالصفحة تعديل فرع موجود مسبقاً بس —
                                          لا يوجد مسار "إنشاء فرع جديد" بهالملف إطلاقاً. -->
                                     <select id="f_base_currency" class="form-select" disabled>
-                                        <?php foreach ($currencies as $code => $label): ?>
-                                            <option value="<?= htmlspecialchars($code) ?>"><?= htmlspecialchars($label) ?></option>
+                                        <?php foreach ($currencies as $id => $label): ?>
+                                            <option value="<?= $id ?>"><?= htmlspecialchars($label) ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                     <div class="form-text">مجمّدة منذ إنشاء الفرع — للتغيير تواصل مع الدعم الفني</div>
@@ -642,8 +661,8 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                                 <div class="col-md-6">
                                     <label class="form-label-sm">العملة المحلية (المعاملات اليومية)</label>
                                     <select id="f_local_currency" class="form-select">
-                                        <?php foreach ($currencies as $code => $label): ?>
-                                            <option value="<?= htmlspecialchars($code) ?>"><?= htmlspecialchars($label) ?></option>
+                                        <?php foreach ($currencies as $id => $label): ?>
+                                            <option value="<?= $id ?>"><?= htmlspecialchars($label) ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
@@ -746,7 +765,7 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                                 <i class="bi bi-bell"></i> الإشعارات
                             </div>
                             <div class="row g-2">
-                                <div class="col-md-6">
+                                <div class="col-md-12">
                                     <label class="sw-wrap">
                                         <input type="checkbox" id="f_notify_low_stock" value="1">
                                         <span class="sw-track"></span>
@@ -754,11 +773,6 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                                             <div class="sw-label">إشعار عند انخفاض المخزون</div>
                                         </div>
                                     </label>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label-sm">حد المخزون المنخفض (كمية)</label>
-                                    <input type="number" id="f_low_stock_threshold" class="form-control" min="0"
-                                        dir="ltr">
                                 </div>
                                 <div class="col-md-6">
                                     <label class="sw-wrap">
@@ -906,8 +920,8 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
             setVal('f_email', b.email);
             setVal('f_address', b.address);
             setVal('f_city', b.city);
-            setVal('f_base_currency', b.base_currency || 'USD');
-            setVal('f_local_currency', b.local_currency || 'SYP');
+            setVal('f_base_currency', b.base_currency_id || '');
+            setVal('f_local_currency', b.local_currency_id || '');
             setVal('f_pricing_method', b.pricing_method || 'cost_plus');
             setVal('f_default_margin_pct', b.default_margin_pct || 20);
             setVal('f_tax_rate_default', b.tax_rate_default || 0);
@@ -916,7 +930,6 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
             setVal('f_fiscal_year_start', b.fiscal_year_start || 1);
             setVal('f_week_start_day', b.week_start_day ?? 1);
             setVal('f_default_payment_terms', b.default_payment_terms || 30);
-            setVal('f_low_stock_threshold', b.low_stock_threshold || 5);
             setVal('f_notify_email', b.notify_email);
             setVal('f_icon', b.icon || 'bi-building');
             setVal('f_color', b.color || '#3b82f6');
@@ -992,14 +1005,13 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                 factory_branch_id: g('f_factory_branch_id') || '',
                 // ⚠ base_currency غير مُرسلة عمداً — الحقل مقفول (disabled)
                 // ومجمّد، ما لازم ينبعت أو يتغيّر من هالفورم إطلاقاً.
-                local_currency: g('f_local_currency'),
+                local_currency_id: g('f_local_currency'),
                 pricing_method: g('f_pricing_method'),
                 default_margin_pct: g('f_default_margin_pct'),
                 tax_rate_default: g('f_tax_rate_default'),
                 tax_input_recoverable: g('f_tax_input_recoverable'),
                 allow_negative_stock: gck('f_allow_negative_stock') ? '1' : '0',
                 notify_low_stock: gck('f_notify_low_stock') ? '1' : '0',
-                low_stock_threshold: g('f_low_stock_threshold'),
                 notify_new_invoice: gck('f_notify_new_invoice') ? '1' : '0',
                 notify_internal_order: gck('f_notify_internal_order') ? '1' : '0',
                 notify_email: g('f_notify_email'),

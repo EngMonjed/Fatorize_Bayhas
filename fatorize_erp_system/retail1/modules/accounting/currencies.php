@@ -12,6 +12,8 @@ checkLogin($pdo);
 requirePermission('finance.currencies', 'view');
 $currentModule = 'finance.currencies';
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
+$TS = $_SESSION['table_suffix'];
+$TAC = "account_charts_{$TS}";
 
 // ── ترتيب تبويبات قسم المالية ──
 // ⚠ ميزة السحب والإفلات (Drag & Drop) معطَّلة مؤقتاً بطلب صريح — التبويبات
@@ -124,6 +126,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                                 "بنك {$name}"
                             ]);
                     }
+                    // ── ربط عرض إضافي بجدول currencies نفسه (رابط راحة —
+                    // المصدر الحقيقي المعتمد يضل invoice_account_settings
+                    // فوق، مش هالعمودين) ──
+                    if ($cashParent && $bankParent) {
+                        $pdo->prepare("UPDATE currencies SET cash_account_id=?, bank_account_id=? WHERE id=?")
+                            ->execute([$cashId, $bankId, $id]);
+                    }
                     $pdo->commit();
                     // 🔴 كانت الرسالة ثابتة تدّعي دايماً إنشاء حسابات الصندوق
                     // والبنك، حتى لو الحسابين الأب (1.1.1/1.1.2) مش موجودين
@@ -154,15 +163,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         elseif ($act === 'delete_currency') {
             requirePermission('finance.currencies', 'delete');
             $id = (int) $_POST['id'];
-            $st = $pdo->prepare("SELECT is_base FROM currencies WHERE id=?");
+            $st = $pdo->prepare("SELECT * FROM currencies WHERE id=?");
             $st->execute([$id]);
             $cur = $st->fetch();
             if (!$cur)
                 throw new Exception('العملة غير موجودة');
             if ($cur['is_base'])
                 throw new Exception('لا يمكن حذف العملة الأساسية');
-            $pdo->prepare("DELETE FROM currencies WHERE id=?")->execute([$id]);
-            echo json_encode(['ok' => true]);
+
+            $TS3 = $_SESSION['table_suffix'];
+            $TAC3 = "account_charts_{$TS3}";
+            $TIAS3 = "invoice_account_settings_{$TS3}";
+
+            // 🔴 لازم نتحقق من الحسابين (صندوق/بنك) المرتبطين بهالعملة —
+            // نفس مبدأ منع حذف حساب برصيد غير صفري (accounts.php) — قبل
+            // أي حذف، وإلا الرصيد بيضل بقاعدة البيانات بعملة "يتيمة" بلا
+            // مرجع بجدول currencies.
+            $linkedAccIds = array_filter([$cur['cash_account_id'], $cur['bank_account_id']]);
+            if ($linkedAccIds) {
+                $placeholders = implode(',', array_fill(0, count($linkedAccIds), '?'));
+                $balCheck = $pdo->prepare("SELECT code, name, balance, base_balance FROM `{$TAC3}`
+                    WHERE id IN ({$placeholders}) AND (ABS(balance) > 0.0001 OR ABS(base_balance) > 0.0001)");
+                $balCheck->execute(array_values($linkedAccIds));
+                $withBalance = $balCheck->fetchAll();
+                if ($withBalance) {
+                    $names = implode('، ', array_map(fn($a) => "{$a['code']} — {$a['name']}", $withBalance));
+                    throw new Exception("لا يمكن حذف العملة — الحساب/الحسابات التالية عليها رصيد غير صفري: {$names}. صفّر الرصيد أولاً");
+                }
+            }
+
+            $pdo->beginTransaction();
+            try {
+                // تعطيل (مش حذف) حسابات الصندوق/البنك — الحذف الفعلي خطر
+                // لو الحساب مرتبط بقيود تاريخية (حتى لو رصيده صفر حالياً)
+                if ($linkedAccIds) {
+                    $placeholders = implode(',', array_fill(0, count($linkedAccIds), '?'));
+                    $pdo->prepare("UPDATE `{$TAC3}` SET is_active=0, updated_at=NOW() WHERE id IN ({$placeholders})")
+                        ->execute(array_values($linkedAccIds));
+                }
+                // حذف صفوف الربط (cash_xxx/bank_xxx) — آمنة للحذف، مجرد روابط إعدادات
+                $lcode = strtolower($cur['code']);
+                $pdo->prepare("DELETE FROM `{$TIAS3}` WHERE setting_key IN (?, ?)")
+                    ->execute(["cash_{$lcode}", "bank_{$lcode}"]);
+
+                $pdo->prepare("DELETE FROM currencies WHERE id=?")->execute([$id]);
+                $pdo->commit();
+                echo json_encode(['ok' => true, 'msg' => 'تم حذف العملة، وتعطيل حسابات الصندوق/البنك المرتبطة، وإزالة إعدادات الربط']);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
         } else
             throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
@@ -192,7 +242,12 @@ try {
 
 
 // ── بيانات الصفحة ──
-$currencies = $pdo->query("SELECT * FROM currencies ORDER BY is_base DESC,id")->fetchAll();
+$currencies = $pdo->query("SELECT cur.*, cash.code AS cash_code, cash.name AS cash_name,
+    bank.code AS bank_code, bank.name AS bank_name
+    FROM currencies cur
+    LEFT JOIN `{$TAC}` cash ON cash.id = cur.cash_account_id
+    LEFT JOIN `{$TAC}` bank ON bank.id = cur.bank_account_id
+    ORDER BY cur.is_base DESC, cur.id")->fetchAll();
 $baseCur = array_filter($currencies, function ($c) {
     return $c['is_base'];
 });
@@ -494,6 +549,7 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                 <th>الرمز</th>
                                 <th>سعر الصرف مقابل <?= htmlspecialchars($baseCur['symbol']) ?></th>
                                 <th>السعر العكسي</th>
+                                <th>حساب الصندوق / البنك</th>
                                 <th>آخر تحديث</th>
                                 <th>الحالة</th>
                                 <th style="text-align:center">إجراءات</th>
@@ -557,6 +613,24 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                             1 <?= htmlspecialchars($cur['code']) ?> = <?= number_format($inverse, 6) ?>
                                             <?= htmlspecialchars($baseCur['code']) ?>
                                         <?php else: ?>—<?php endif; ?>
+                                    </td>
+                                    <td style="font-size:.72rem">
+                                        <?php if ($cur['cash_code'] || $cur['bank_code']): ?>
+                                            <?php if ($cur['cash_code']): ?>
+                                                <div><i class="bi bi-cash-coin me-1 text-success"></i>
+                                                    <span class="n" dir="ltr"><?= htmlspecialchars($cur['cash_code']) ?></span>
+                                                    <?= htmlspecialchars($cur['cash_name']) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if ($cur['bank_code']): ?>
+                                                <div><i class="bi bi-bank me-1 text-primary"></i>
+                                                    <span class="n" dir="ltr"><?= htmlspecialchars($cur['bank_code']) ?></span>
+                                                    <?= htmlspecialchars($cur['bank_name']) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted">—</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <?php if ($isBase): ?>
@@ -872,7 +946,7 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
         function deleteCur(id, name) {
             if (!confirm(`حذف العملة "${name}"؟\nتأكد أنها غير مستخدمة في الحسابات.`)) return;
             post({ _action: 'delete_currency', id }).then(d => {
-                if (d.ok) { toast('تم الحذف'); setTimeout(() => location.reload(), 700); }
+                if (d.ok) { toast(d.msg || 'تم الحذف'); setTimeout(() => location.reload(), 900); }
                 else toast(d.msg, 'danger');
             });
         }
