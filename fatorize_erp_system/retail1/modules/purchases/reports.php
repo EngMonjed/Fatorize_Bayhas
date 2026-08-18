@@ -909,6 +909,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         })();
         loadReport();
     </script>
+    <!-- ✅ كانت مفقودة بالكامل — هي سبب البق (toggleGroup غير معرّفة).
+         نفس السطر الموجود بـ returns.php وباقي الصفحات الشغالة صح. -->
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
 </body>
 
 </html>

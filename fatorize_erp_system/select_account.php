@@ -36,6 +36,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['branch_id'])) {
         $_SESSION['branch_name']   = $branch['name'];
         $_SESSION['table_suffix']  = $branch['table_suffix'] ?? '';
         $_SESSION['dashboard_path']= $branch['dashboard_path'];
+        // ✅ جديد — لازمة لتمييز فرع بيع/تصنيع بمنطق موثوق بـ sidebar.php
+        // (بدل مقارنة قيمة table_suffix الحرفية، يلي بتنكسر مع أي فرع
+        // ثاني بنفس النوع لكن بلاحقة مختلفة، مثال: 'ret2').
+        $_SESSION['branch_type']   = $branch['branch_type'] ?? 'retail';
 
         header('Location: ' . $branch['dashboard_path']);
         exit;

@@ -146,9 +146,11 @@ $baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
 if ($type === 'consumables') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(cs.quantity),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT cs.item_id) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id AND cs.quantity > 0)";
-    // قيمة المستودع = الكمية × متوسط التكلفة المرجّح (avg_cost_usd —
-    // رغم الاسم، مخزّن فعلياً بعملة الفرع الأساسية بهذا النظام)
-    $statsSubqueryValue   = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_usd),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
+    // ⚠ قيمة المستودع = الكمية × متوسط التكلفة المرجّح — العمود اسمه
+    // avg_cost_base فعلياً (تأكدنا مباشرة من قاعدة البيانات)، مش
+    // avg_cost_usd كما كان مكتوب هون سابقاً — ترحيل _usd→_base صار
+    // فعلياً على هذا الجدول تحديداً
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_base),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
 } elseif ($type === 'raw_materials') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(rms.quantity),0) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT rms.material_id) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id AND rms.quantity > 0)";

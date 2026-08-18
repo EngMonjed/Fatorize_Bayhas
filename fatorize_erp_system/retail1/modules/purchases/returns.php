@@ -1658,6 +1658,8 @@ $retStats = [
             })();
         <?php endif; ?>
     </script>
+    <!-- ✅ كانت مفقودة — نفس بق reports.php/orders.php بالضبط -->
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
 </body>
 
 </html>

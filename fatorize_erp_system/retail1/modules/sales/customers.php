@@ -614,22 +614,23 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>اسم العميل</th>
-                                <th>الشخص المسؤول</th>
+                                <th>العميل</th>
                                 <th>النوع</th>
-                                <th>الحد الائتماني</th>
-                                <th>نسبة الخصم</th>
-                                <th title="عدد الفواتير المؤكدة — المسودات تظهر كشارة منفصلة">عدد الفواتير</th>
-                                <th>المستحق</th>
+                                <th>الهاتف</th>
+                                <th>شركة الشحن</th>
+                                <th>حساب الذمة</th>
+                                <th>حساب الدفعات المقدمة</th>
+                                <th title="عدد الفواتير المؤكدة — المسودات تظهر كشارة منفصلة">الفواتير</th>
                                 <th>إجمالي المبيعات</th>
+                                <th>المستحق</th>
                                 <th>الحالة</th>
-                                <th style="text-align:center">الإجراءات</th>
+                                <th style="text-align:center">إجراءات</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if (empty($customers)): ?>
                                 <tr>
-                                    <td colspan="11" class="text-center text-muted py-5">
+                                    <td colspan="12" class="text-center text-muted py-5">
                                         <i class="bi bi-people d-block mb-2" style="font-size:2rem;opacity:.2"></i>
                                         لا يوجد عملاء<?= $search ? " يطابقون \"{$search}\"" : '' ?>
                                     </td>
@@ -644,11 +645,16 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                                     <td>
                                         <div class="d-flex align-items-center gap-2">
                                             <div class="avatar <?= $isCompany ? 'company' : '' ?>"><?= $init ?></div>
-                                            <div class="fw-600"><?= htmlspecialchars($c['name']) ?></div>
+                                            <div>
+                                                <div class="fw-600"><?= htmlspecialchars($c['name']) ?></div>
+                                                <?php if ($c['contact_person']): ?>
+                                                    <div class="text-muted" style="font-size:.72rem">
+                                                        <i
+                                                            class="bi bi-person me-1"></i><?= htmlspecialchars($c['contact_person']) ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
                                         </div>
-                                    </td>
-                                    <td style="font-size:.8rem;color:#475569">
-                                        <?= $c['contact_person'] ? htmlspecialchars($c['contact_person']) : '—' ?>
                                     </td>
                                     <td>
                                         <span
@@ -658,11 +664,41 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                                                 class="bi bi-<?= $isCompany ? 'building' : 'person' ?> me-1"></i><?= $TYPE_MAP[$c['type']] ?>
                                         </span>
                                     </td>
-                                    <td class="n" style="font-size:.78rem">
-                                        <?= (float) ($c['credit_limit'] ?? 0) > 0 ? number_format((float) $c['credit_limit'], 2) . ' ' . htmlspecialchars($baseCurrencySymbol) : '—' ?>
+                                    <td dir="ltr" style="font-size:.8rem;color:#475569">
+                                        <?= $c['phone'] ? htmlspecialchars($c['phone']) : '—' ?>
                                     </td>
-                                    <td class="n" style="font-size:.78rem">
-                                        <?= (float) ($c['discount_percentage'] ?? 0) > 0 ? number_format((float) $c['discount_percentage'], 2) . '%' : '—' ?>
+                                    <td style="font-size:.78rem;color:#64748b">
+                                        <?php if ($c['shipping_company']): ?>
+                                            <div><?= htmlspecialchars($c['shipping_company']) ?></div>
+                                            <?php if ($c['shipping_code']): ?>
+                                                <div dir="ltr" style="font-size:.7rem;color:#94a3b8">
+                                                    <?= htmlspecialchars($c['shipping_code']) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php else:
+                                            echo '—';
+                                        endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($c['rec_code']): ?>
+                                            <span class="acc-badge"><?= htmlspecialchars($c['rec_code']) ?></span>
+                                            <div style="font-size:.7rem;color:#64748b;margin-top:2px">
+                                                <?= htmlspecialchars($c['rec_name']) ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="text-danger" style="font-size:.75rem"><i
+                                                    class="bi bi-exclamation-circle me-1"></i>غير محدد</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($c['adv_code']): ?>
+                                            <span class="acc-badge"><?= htmlspecialchars($c['adv_code']) ?></span>
+                                            <div style="font-size:.7rem;color:#64748b;margin-top:2px">
+                                                <?= htmlspecialchars($c['adv_name']) ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="text-muted" style="font-size:.75rem">—</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="text-center">
                                         <span class="badge bg-secondary-subtle text-secondary"
@@ -672,12 +708,12 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                                                 style="font-size:.68rem">+<?= $c['draft_cnt'] ?> مسودة</span>
                                         <?php endif; ?>
                                     </td>
+                                    <td class="n fw-600" style="font-size:.78rem">
+                                        <?= $c['total_base'] > 0 ? number_format($c['total_base'], 2) . ' ' . htmlspecialchars($baseCurrencySymbol) : '—' ?>
+                                    </td>
                                     <td class="n <?= $c['balance_base'] > 0 ? 'text-danger fw-600' : '' ?>"
                                         style="font-size:.78rem">
                                         <?= $c['balance_base'] > 0 ? number_format($c['balance_base'], 2) . ' ' . htmlspecialchars($baseCurrencySymbol) : '—' ?>
-                                    </td>
-                                    <td class="n fw-600" style="font-size:.78rem">
-                                        <?= $c['total_base'] > 0 ? number_format($c['total_base'], 2) . ' ' . htmlspecialchars($baseCurrencySymbol) : '—' ?>
                                     </td>
                                     <td>
                                         <?php if ($c['status'] === 'active'): ?>

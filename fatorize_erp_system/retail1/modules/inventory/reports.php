@@ -13,6 +13,9 @@ require_once __DIR__ . '/../../../config/auth.php';
 $pdo = getConnection();
 checkLogin($pdo);
 requirePermission('inventory.reports', 'view');
+$currentModule = 'inventory.reports'; // ✅ كانت غير معرّفة — الشريط الجانبي
+                                      // بيقرا هالمتغيّر ليعرف أي عنصر يفعّل،
+                                      // وبدونها ما بينفعّل ولا عنصر إطلاقاً
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $TS   = $_SESSION['table_suffix'];

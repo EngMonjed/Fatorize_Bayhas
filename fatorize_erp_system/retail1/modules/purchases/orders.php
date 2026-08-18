@@ -157,6 +157,8 @@ $branchName = $_SESSION['branch_name'] ?? 'الفرع';
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- ✅ كانت مفقودة — نفس بق reports.php بالضبط -->
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
 </body>
 
 </html>
