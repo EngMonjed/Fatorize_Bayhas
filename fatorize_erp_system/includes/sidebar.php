@@ -317,6 +317,7 @@ function moduleUrl(string $key): string
     'admin.permissions' => 'admin/permissions.php',
     'admin.branches' => 'admin/branches.php',
     'admin.section_colors' => 'admin/section_colors.php', // ✅ جديد — صفحة إعدادات ألوان الأقسام
+    'admin.opening_balances' => 'admin/opening_balances.php', // ✅ كانت مفقودة
     // admin.settings أُزيل — لا صفحة settings/index.php فعلية بعد
     ];
     // قراءة base_path من session حسب الفرع
