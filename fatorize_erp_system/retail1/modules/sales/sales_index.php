@@ -115,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // بس)، وs.packet_qty = عدد القطع بالباكيت (إعلامي بس كمان،
             // لا علاقة له بحساب الكمية الفعلية بالفاتورة).
             $items = $pdo->prepare("SELECT ii.*, p.name AS item_name, p.model_number,
-                v.color_id, s.size, s.age_type, c.name AS color, s.cost_price AS cost_price_base,
+                v.color_id, s.size, s.age_type, s.group_key, c.name AS color, s.cost_price AS cost_price_base,
                 s.selling_price AS catalog_selling_price, s.packet_qty AS packet_qty
                 FROM `{$TII}` ii
                 LEFT JOIN `{$TPROD}` p ON p.id=ii.product_id
@@ -1234,7 +1234,10 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 // استثناء: بتختلف فعلياً حسب تكلفة كل مقاس بذاته، فتضل تُجمع.
                 const grpMap = {};
                 (inv.items || []).forEach(it => {
-                    const k = `${it.product_id || it.item_name}_${it.unit_price}_${it.color || ''}`;
+                    // ⚠ group_key مصدر الحقيقة الوحيد للتجميع (مخزَّن
+                    // فعلياً بجدول product_sizes) — راجع تسليم "الكروب
+                    // صار حقيقة مخزَّنة، مش مُستنتَجة".
+                    const k = `${it.product_id || it.item_name}_${it.group_key}_${it.color || ''}`;
                     if (!grpMap[k]) grpMap[k] = {
                         item_name: it.item_name, model_number: it.model_number || '',
                         unit_price: parseFloat(it.unit_price), color: it.color || '—',
@@ -1384,15 +1387,12 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 document.getElementById('cWarehouseName').textContent = p.warehouse_name || 'المستودع الرئيسي';
                 document.getElementById('cWarehouse').value = p.warehouse_id || '';
 
-                // بنود مجمَّعة حسب الكروب (منتج × سعر × لون) — نفس منطق
-                // مودال التفاصيل بالضبط. كل مقاس بنفس اللون مخزّن بنفس
-                // qty/unit_price (كروب واحد = قطعة من كل مقاس، والسعر مو
-                // مقسوم) — فمجموع qty/total_price عبر المقاسات بيضخّم
-                // الرقم غلط. الإجمالي الصحيح = qty × سعر القطعة × عدد
-                // المقاسات الفعلي بهالكروب.
+                // بنود مجمَّعة حسب الكروب (منتج × group_key × لون) — نفس
+                // منطق مودال التفاصيل بالضبط. group_key مصدر الحقيقة
+                // الوحيد للتجميع (مخزَّن فعلياً بجدول product_sizes).
                 const groups = {};
                 (p.items || []).forEach(it => {
-                    const key = (it.product_id || it.item_name || it.id) + '_' + it.unit_price + '_' + (it.color || '');
+                    const key = (it.product_id || it.item_name || it.id) + '_' + it.group_key + '_' + (it.color || '');
                     if (!groups[key]) groups[key] = {
                         name: it.item_name || ('بند #' + it.id), color: it.color || '—',
                         sizes: [], qty: parseFloat(it.quantity), unit: parseFloat(it.unit_price), total: 0
@@ -1721,7 +1721,10 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             const items = p.items || [];
             const grpMap = {};
             items.forEach(it => {
-                const key = (it.product_id || it.item_name) + '_' + it.unit_price;
+                // ⚠ group_key مصدر الحقيقة الوحيد للتجميع — بلا اللون
+                // هون بالذات (القرار: الألوان المختلفة بنفس الكروب
+                // تندمج بسطر واحد بالطباعة).
+                const key = (it.product_id || it.item_name) + '_' + it.group_key;
                 if (!grpMap[key]) grpMap[key] = {
                     item_name: it.item_name, model_number: it.model_number || '',
                     sizes: [], colors: [], age_type: it.age_type || '',

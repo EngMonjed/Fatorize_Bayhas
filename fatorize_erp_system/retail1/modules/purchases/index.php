@@ -111,6 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 pr.model_number AS model_number,
                 psz.size AS size,
                 psz.age_type AS age_type,
+                psz.group_key AS group_key,
                 pcl.name AS color,
                 pv.barcode AS barcode
                 FROM `{$TPI}` pi
@@ -1251,15 +1252,14 @@ $PAY_MAP = [
                 // (سعر التكلفة بعد الخصم) دائماً بعملة الفرع بحسب التصميم
                 // المعتمد بـinvoice_new.php.
                 //
-                // ⚠ مفتاح التجميع = السعر الافتراضي (قبل الخصم)، لا السعر
-                // الصافي بعد الخصم — لأنه "الكروب" مُعرَّف فعلياً بالسعر
-                // المرجعي (product_sizes.cost_price)، والخصم الإفرادي
-                // تعديل على مستوى السطر فوقه، ممكن يخلي كروبين مختلفين
-                // (سعر افتراضي مختلف، خصم مختلف) يطلع صافيهم نفس الرقم
-                // بالصدفة (مثال حقيقي: 8.8−0.3=8.5 و9.9−1.4=8.5 — نفس
-                // الصافي، كروبين مختلفين تماماً). ما في عمود default_price
-                // مباشر بـpurchase_items، فبنعيد بناءه من unit_price_base_
-                // currency وdiscount_percentage المخزَّنين أصلاً.
+                // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+                // group_key الحقيقي المخزَّن على product_sizes صار مصدر
+                // الحقيقة الوحيد للتجميع — بدل إعادة بناء السعر الافتراضي
+                // من unit_price_base_currency/discount_percentage (كانت
+                // طريقة هشة، بالضبط المثال يلي وقعنا فيه: 8.8−0.3=8.5
+                // و9.9−1.4=8.5 نفس الصافي بالصدفة، كروبين مختلفين تماماً).
+                // احتياط بسيط لبيانات قديمة بلا group_key (بند اتحفظ قبل
+                // إضافة العمود): نرجع لنفس منطق إعادة البناء القديم.
                 const GRP_COLORS = [['#eff6ff', '#dc2626', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'],
                 ['#fff7ed', '#7c2d12', '#fed7aa'], ['#f5f3ff', '#4c1d95', '#ddd6fe']];
                 const grpMap = {};
@@ -1267,14 +1267,12 @@ $PAY_MAP = [
                     const priceBase = parseFloat(it.unit_price_base_currency ?? it.unit_price);
                     const discPct = parseFloat(it.discount_percentage) || 0;
                     const defaultPriceBase = discPct > 0 ? priceBase / (1 - discPct / 100) : priceBase;
-                    // نقرّب لـ4 خانات عشرية عند بناء المفتاح فقط — حتى ما
-                    // يفرّق تجميعين متطابقين فعلياً بسبب شوائب الفاصلة
-                    // العائمة (floating point) بعد القسمة.
-                    const k = `${it.product_id || it.product_name || it.id}_${defaultPriceBase.toFixed(4)}`;
+                    const groupKey = it.group_key || defaultPriceBase.toFixed(4); // احتياط لبيانات قديمة
+                    const k = `${it.product_id || it.product_name || it.id}_${groupKey}`;
                     if (!grpMap[k]) {
                         grpMap[k] = {
                             product_name: it.product_name || '—', model_number: it.model_number || '',
-                            unit_price_base: priceBase, default_price_base: defaultPriceBase,
+                            unit_price_base: priceBase, default_price_base: defaultPriceBase, group_key: groupKey,
                             qty: 0, total: 0, sizes: [], colors: [], ageType: it.age_type || '', _colorQty: {}
                         };
                     }
@@ -1530,21 +1528,21 @@ $PAY_MAP = [
                 // whole invoice) instead of purchase_items_{TS} — see get_purchase.
                 document.getElementById('cWarehouseName').textContent = p.warehouse_name || 'المستودع الرئيسي';
                 document.getElementById('cWarehouse').value = p.warehouse_id || '';
-                // بنود — مجمعة حسب الكروب (منتج × السعر الافتراضي)، مع
+                // بنود — مجمعة حسب الكروب (منتج × group_key الحقيقي)، مع
                 // تجميع كل الألوان ضمن نفس الكروب بعمود واحد بدل صف منفصل
                 // لكل لون.
-                // ⚠ مفتاح التجميع = السعر الافتراضي (قبل الخصم) المُعاد
-                // بناؤه من unit_price_base_currency/discount_percentage —
-                // لا net_price ولا unit_price مباشرة. نفس إصلاح مودال
-                // التفاصيل بالضبط: كروبين مختلفين (سعر افتراضي وخصم
-                // مختلفين) ممكن يطلع صافيهم نفس الرقم بالصدفة، فيتجمّعوا
-                // غلط لو اعتمدنا الصافي كمفتاح.
+                // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+                // group_key المخزَّن على product_sizes صار مصدر الحقيقة —
+                // بدل إعادة بناء السعر الافتراضي، يلي كان بيفشل لو كروبين
+                // مختلفين (سعر افتراضي وخصم مختلفين) صادف طلع صافيهم نفس
+                // الرقم. احتياط بسيط لبيانات قديمة بلا group_key.
                 const groups = {};
                 (p.items || []).forEach(it => {
                     const priceBase = parseFloat(it.unit_price_base_currency ?? it.unit_price);
                     const discPct = parseFloat(it.discount_percentage) || 0;
                     const defaultPriceBase = discPct > 0 ? priceBase / (1 - discPct / 100) : priceBase;
-                    const key = (it.product_id || it.product_name || it.id) + '_' + defaultPriceBase.toFixed(4);
+                    const groupKey = it.group_key || defaultPriceBase.toFixed(4);
+                    const key = (it.product_id || it.product_name || it.id) + '_' + groupKey;
                     if (!groups[key]) groups[key] = {
                         name: it.product_name || ('بند #' + it.id), colors: [], sizes: [], ageType: it.age_type || '',
                         qty: 0, unit: priceBase, total: 0, _colorQty: {}
@@ -1939,14 +1937,17 @@ $PAY_MAP = [
             // التفاصيل والتأكيد سابقاً.
             const fmt = n => BASE_CUR_SYM + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
 
-            // ⚠ تجميع بمفتاح السعر الافتراضي (قبل الخصم) المُعاد بناؤه —
-            // لا الصافي مباشرة (نفس إصلاح تصادم الكروبات بمودال التفاصيل).
+            // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+            // group_key الحقيقي المخزَّن على product_sizes، لا السعر
+            // الافتراضي المُعاد بناؤه (نفس إصلاح تصادم الكروبات بمودالي
+            // التفاصيل والتأكيد). احتياط بسيط لبيانات قديمة بلا group_key.
             const grpMap = {};
             (p.items || []).forEach(it => {
                 const priceBase = parseFloat(it.unit_price_base_currency ?? it.unit_price);
                 const discPct = parseFloat(it.discount_percentage) || 0;
                 const defaultPriceBase = discPct > 0 ? priceBase / (1 - discPct / 100) : priceBase;
-                const key = (it.product_id || it.product_name) + '_' + defaultPriceBase.toFixed(4);
+                const groupKey = it.group_key || defaultPriceBase.toFixed(4);
+                const key = (it.product_id || it.product_name) + '_' + groupKey;
                 if (!grpMap[key]) grpMap[key] = {
                     name: it.product_name || '—', model: it.model_number || '',
                     sizes: [], colors: [], ageType: it.age_type || '',

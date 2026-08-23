@@ -126,7 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st = $pdo->prepare("
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
-                    s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
+                    s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                     c.name AS color_name, c.hex_code AS color_hex
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id=v.product_id
@@ -145,7 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st2 = $pdo->prepare("
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
-                        s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
+                        s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                         c.name AS color_name, c.hex_code AS color_hex
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id=v.product_id
@@ -1168,10 +1168,13 @@ $existingTaxPct = $afterDisc > 0
             _selItems = items;
             const rows = {};
             items.forEach(it => {
-                const key = `${it.product_id}_${it.selling_price}_${it.age_type || 'سنة'}_${it.color_id || 0}`;
+                // ⚠ group_key مصدر الحقيقة الوحيد للتجميع (مخزَّن فعلياً
+                // بجدول product_sizes) — راجع تسليم "الكروب صار حقيقة
+                // مخزَّنة، مش مُستنتَجة".
+                const key = `${it.product_id}_${it.group_key}_${it.color_id || 0}`;
                 if (!rows[key]) rows[key] = {
                     key, product_id: it.product_id, product_name: it.product_name,
-                    model_number: it.model_number, selling_price: it.selling_price, age_type: it.age_type || 'سنة',
+                    model_number: it.model_number, selling_price: it.selling_price, group_key: it.group_key, age_type: it.age_type || 'سنة',
                     color_id: it.color_id || 0, color_name: it.color_name || '', color_hex: it.color_hex || '',
                     variants: [], sizes: [], cost_price: it.cost_price
                 };
@@ -1277,7 +1280,9 @@ $existingTaxPct = $afterDisc > 0
         }
 
         // ── إدارة البنود ──
-        function makeGrpKey(item) { return `${item.product_id}_${item.selling_price || item.default_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`; }
+        // ⚠ group_key مصدر الحقيقة الوحيد للتجميع — مخزَّن فعلياً
+        // بجدول product_sizes، مو مُستنتَج من مطابقة السعر/نوع العمر.
+        function makeGrpKey(item) { return `${item.product_id}_${item.group_key}_${item.color_id || 0}`; }
 
         function addLine(item) {
             const gk = makeGrpKey(item);
@@ -1298,6 +1303,7 @@ $existingTaxPct = $afterDisc > 0
                 grp_key: gk, row_id: 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_'),
                 variants: [item], product_id: item.product_id, product_name: item.product_name,
                 model_number: item.model_number || '', selling_price: parseFloat(item.selling_price || 0),
+                group_key: item.group_key,
                 age_type: item.age_type || 'سنة', color_id: item.color_id || 0,
                 color_name: item.color_name || '', color_hex: item.color_hex || '',
                 sizes: [item.size || ''],
@@ -1312,8 +1318,10 @@ $existingTaxPct = $afterDisc > 0
             lines.push(line);
             document.getElementById('emptyRow').style.display = 'none';
 
-            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id && (l.age_type || 'سنة') === (line.age_type || 'سنة')).map(l => l.selling_price))];
-            const grpIdx = pricesForProd.indexOf(line.selling_price);
+            // ⚠ التجميع اللوني بالـgroup_key، مو السعر — نفس إصلاح
+            // invoice_new.php بالضبط.
+            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id).map(l => l.group_key))];
+            const grpIdx = pricesForProd.indexOf(line.group_key);
             const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
             const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>`;
             const colorDot = line.color_hex ? `<span class="clr-dot" style="background:${line.color_hex}"></span>` : '';

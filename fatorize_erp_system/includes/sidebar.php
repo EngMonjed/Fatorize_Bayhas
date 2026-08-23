@@ -271,6 +271,7 @@ function moduleUrl(string $key): string
     'inventory.internal_orders' => 'inventory/internal_orders.php',
     'inventory.reports' => 'inventory/reports.php', // ✅ جديد — تقارير المنتجات (حركة/أسعار/ربح)
     'inventory.consumables' => 'expenses_and_consumables/consumables.php', // ✅ نُقلت فيزيائياً من inventory/ — المفتاح بدون تغيير (parent_key بجدول modules صار 'expenses')
+    'inventory.import_products' => 'inventory/import_products.php', // ✅ جديد
     // inventory.raw_materials / inventory.operations أُزيلا — لا ملفات فعلية بعد (مواد أولية/تصنيع)
 
     // المصاريف والمستهلكات — ✅ مجموعة أُعيد بناؤها بالكامل بجدول modules

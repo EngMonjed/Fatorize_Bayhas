@@ -90,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st = $pdo->prepare("
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
-                    s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
+                    s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                     s.base_currency_id AS price_base_currency_id,
                     c.name AS color_name, c.hex_code AS color_hex
                 FROM `{$TV}` v
@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st2 = $pdo->prepare("
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
-                        s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty,
+                        s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                         s.base_currency_id AS price_base_currency_id,
                         c.name AS color_name, c.hex_code AS color_hex
                     FROM `{$TV}` v
@@ -1571,7 +1571,11 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             _selItems = items;
             _selModal = _selModal || new bootstrap.Modal(document.getElementById('selectModal'));
 
-            // تجميع بالمنتج ثم بالكروب (cost_price)
+            // ⚠ تجميع بالمنتج ثم بالكروب — بـgroup_key الحقيقي المخزَّن
+            // على product_sizes (تسليم من المحادثة العامة: راجع
+            // handoff_group_key_purchases.md)، لا إعادة استنتاج هش من
+            // (cost_price+age_type) — كان بيفشل لو نفس المنتج عنده نفس
+            // اللون متكرر بأكتر من كروب سعري.
             const GRP_COLORS = [
                 ['#eff6ff', '#1e3a8a', '#bfdbfe'],
                 ['#f0fdf4', '#065f46', '#bbf7d0'],
@@ -1583,19 +1587,18 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             items.forEach(it => {
                 const pid = it.product_id;
                 if (!grouped[pid]) grouped[pid] = { name: it.product_name, model: it.model_number, grps: {} };
-                // مفتاح الكروب: cost_price + age_type معاً
-                const gk = (it.cost_price || '0') + '_' + (it.age_type || 'سنة');
+                const gk = it.group_key || `${it.cost_price || '0'}_${it.age_type || 'سنة'}`; // احتياط لبيانات قديمة بلا group_key
                 if (!grouped[pid].grps[gk]) grouped[pid].grps[gk] = { price: it.cost_price, age_type: it.age_type || 'سنة', variants: [] };
                 grouped[pid].grps[gk].variants.push(it);
             });
 
             // بناء الجدول — كروب × لون = سطر واحد
             // نجمع أولاً: لكل (product × grp × color) → سطر
-            // نبني مفتاح فريد: product_id + cost_price + color_id
+            // نبني مفتاح فريد: product_id + group_key + color_id
             const rows = {};
             items.forEach(it => {
-                // مفتاح فريد: منتج × سعر × نوع العمر × لون
-                const key = `${it.product_id}_${it.cost_price}_${it.age_type || 'سنة'}_${it.color_id || 0}`;
+                const groupKey = it.group_key || `${it.cost_price}_${it.age_type || 'سنة'}`;
+                const key = `${it.product_id}_${groupKey}_${it.color_id || 0}`;
                 if (!rows[key]) {
                     rows[key] = {
                         key,
@@ -1603,6 +1606,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         product_name: it.product_name,
                         model_number: it.model_number,
                         cost_price: it.cost_price,
+                        group_key: groupKey,
                         age_type: it.age_type || 'سنة',
                         color_id: it.color_id,
                         color_name: it.color_name,
@@ -1616,7 +1620,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 if (!rows[key].sizes.includes(it.size)) rows[key].sizes.push(it.size);
             });
 
-            // ترتيب: بالمنتج ثم بالسعر ثم باللون
+            // ترتيب: بالمنتج ثم بالسعر (للعرض بس، مش للتجميع) ثم باللون
             const sortedRows = Object.values(rows).sort((a, b) => {
                 if (a.product_id !== b.product_id) return a.product_id - b.product_id;
                 if (a.cost_price !== b.cost_price) return parseFloat(a.cost_price) - parseFloat(b.cost_price);
@@ -1624,14 +1628,13 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 return (a.color_name || '').localeCompare(b.color_name || '');
             });
 
-            // تحديد ألوان الكروبات لكل منتج
+            // تحديد ألوان الكروبات لكل منتج — بـgroup_key
             const prodGrpColor = {};
             sortedRows.forEach(r => {
                 if (!prodGrpColor[r.product_id]) prodGrpColor[r.product_id] = {};
                 const pk = r.product_id;
-                const gk = `${r.cost_price}_${r.age_type || 'سنة'}`;
-                if (prodGrpColor[pk][gk] === undefined) {
-                    prodGrpColor[pk][gk] = Object.keys(prodGrpColor[pk]).length;
+                if (prodGrpColor[pk][r.group_key] === undefined) {
+                    prodGrpColor[pk][r.group_key] = Object.keys(prodGrpColor[pk]).length;
                 }
             });
 
@@ -1648,7 +1651,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
             let lastProd = null;
             sortedRows.forEach(r => {
-                const grpIdx = prodGrpColor[r.product_id][`${r.cost_price}_${r.age_type || 'سنة'}`];
+                const grpIdx = prodGrpColor[r.product_id][r.group_key];
                 const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
                 const grpLabel = `<span class="grp-badge" style="background:${bg};color:${clr};border-color:${br}">
             كروب ${grpIdx + 1}
@@ -1776,14 +1779,14 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     // (المرجع الثابت) قبل تمريره لـ addLine، بدل تركه يُعاد تفسيره
                     // كأنه بعملة الفرع أصلاً (كان هذا يسبب تحويلاً مضاعفاً خاطئاً).
                     const costBaseDirect = exRate > 0 ? pr / exRate : pr;
-                    const lineItem = { ...v, cost_base_direct: costBaseDirect, cost_price: rowDef.cost_price };
+                    const lineItem = { ...v, cost_base_direct: costBaseDirect, cost_price: rowDef.cost_price, group_key: rowDef.group_key };
                     if (vi === 0) addLine(lineItem);
                     else mergeVariant(lineItem);
                     added++;
                 });
                 // تعديل الكمية بعد الدمج
                 if (qty > 1) {
-                    const gk = makeGrpKey({ ...rowDef.variants[0], cost_price: rowDef.cost_price });
+                    const gk = makeGrpKey({ ...rowDef.variants[0], cost_price: rowDef.cost_price, group_key: rowDef.group_key });
                     const line = lines.find(l => l.grp_key === gk);
                     if (line) {
                         line.qty = qty;
@@ -1800,8 +1803,15 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
         // ── إضافة سطر (كروب×لون) ──
         // grp_key = product_id + cost_price + color_id
+        // grp_key = product_id + group_key (المخزَّن على product_sizes) + color_id
+        // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+        // group_key هو مصدر الحقيقة الموثوق لتحديد "نفس الكروب"، بدل
+        // إعادة استنتاجه من (cost_price+age_type) — كان بيفشل لو نفس
+        // المنتج عنده نفس اللون متكرر بأكتر من كروب سعري. احتياط بسيط
+        // لبيانات قديمة بلا group_key: نرجع للسلوك القديم بس لهالحالة.
         function makeGrpKey(item) {
-            return `${item.product_id}_${item.cost_price || item.default_price || 0}_${item.age_type || 'سنة'}_${item.color_id || 0}`;
+            const gk = item.group_key || `${item.cost_price || item.default_price || 0}_${item.age_type || 'سنة'}`;
+            return `${item.product_id}_${gk}_${item.color_id || 0}`;
         }
 
         function addLine(item) {
@@ -1845,6 +1855,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 product_name: item.product_name,
                 model_number: item.model_number || '',
                 cost_price: parseFloat(item.cost_price || 0),
+                group_key: item.group_key || `${item.cost_price || 0}_${item.age_type || 'سنة'}`, // ⚠ للاستخدام بتلوين/ترقيم الكروبات — لا لأي حساب مبلغ
                 age_type: item.age_type || '',
                 color_id: item.color_id || 0,
                 color_name: item.color_name || '',
@@ -1867,9 +1878,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 ['#fff7ed', '#7c2d12', '#fed7aa'],
                 ['#f5f3ff', '#4c1d95', '#ddd6fe'],
             ];
-            // تحديد لون الكروب بناءً على cost_price
-            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id).map(l => l.cost_price))];
-            const grpIdx = pricesForProd.indexOf(line.cost_price);
+            // تحديد لون الكروب بناءً على group_key (لا cost_price)
+            const pricesForProd = [...new Set(lines.filter(l => l.product_id === item.product_id).map(l => l.group_key))];
+            const grpIdx = pricesForProd.indexOf(line.group_key);
             const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
             const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">
         كروب ${grpIdx + 1}
@@ -2281,8 +2292,8 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         const tr = document.createElement('tr');
                         tr.id = l.row_id;
                         const GRP_COLORS = [['#eff6ff', '#1e3a8a', '#bfdbfe'], ['#f0fdf4', '#065f46', '#bbf7d0'], ['#fff7ed', '#7c2d12', '#fed7aa'], ['#f5f3ff', '#4c1d95', '#ddd6fe']];
-                        const pricesForProd = [...new Set(s.lines.filter(x => x.product_id === l.product_id).map(x => x.cost_price))];
-                        const grpIdx = pricesForProd.indexOf(l.cost_price);
+                        const pricesForProd = [...new Set(s.lines.filter(x => x.product_id === l.product_id).map(x => x.group_key))];
+                        const grpIdx = pricesForProd.indexOf(l.group_key);
                         const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
                         tr.style.setProperty('--grp-c', clr);
                         const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';

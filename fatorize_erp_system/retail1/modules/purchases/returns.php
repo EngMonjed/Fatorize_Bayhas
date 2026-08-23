@@ -101,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     pi.id AS purchase_item_id, pi.product_id, pi.variant_id,
                     pi.quantity, pi.unit_price AS gross_unit_price, pi.total_price, pi.discount_percentage,
                     pr.name AS product_name, pr.model_number AS model_number,
-                    sz.size AS size, sz.age_type AS age_type, cl.name AS color,
+                    sz.size AS size, sz.age_type AS age_type, sz.group_key AS group_key, cl.name AS color,
                     COALESCE((
                         SELECT SUM(ri.quantity_returned)
                         FROM `{$TRI}` ri
@@ -323,7 +323,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // نفسها، بس لازمة لإعادة بناء "سعر الشراء الافتراضي" للعرض.
             $items = $pdo->prepare("SELECT tri.*,
                     pr.model_number AS model_number,
-                    psz.size AS size, psz.age_type AS age_type,
+                    psz.size AS size, psz.age_type AS age_type, psz.group_key AS group_key,
                     pcl.name AS color,
                     pi.discount_percentage AS discount_percentage
                 FROM `{$TRI}` tri
@@ -1165,11 +1165,12 @@ $retStats = [
         function buildGroups() {
             const map = {};
             rItems.forEach((it, idx) => {
-                // ⚠ مفتاح التجميع = السعر الافتراضي (قبل الخصم)، لا الصافي
-                // بعد الخصم — نفس إصلاح index.php بالضبط: كروبين مختلفين
-                // (سعر افتراضي وخصم مختلفين) ممكن يطلع صافيهم نفس الرقم
-                // بالصدفة، فيتجمّعوا غلط لو اعتمدنا الصافي كمفتاح.
-                const key = (it.product_id || it.product_name) + '_' + (it.default_price ?? it.unit_price);
+                // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+                // group_key الحقيقي المخزَّن على product_sizes، بدل السعر
+                // الافتراضي المُعاد بناؤه — نفس إصلاح index.php بالضبط.
+                // احتياط بسيط لبيانات قديمة بلا group_key.
+                const groupKey = it.group_key || (it.default_price ?? it.unit_price);
+                const key = (it.product_id || it.product_name) + '_' + groupKey;
                 if (!map[key]) map[key] = {
                     name: it.product_name || ('بند #' + it.purchase_item_id),
                     model: it.model_number || '', sizes: [], colors: [], ageType: it.age_type || '',
@@ -1354,11 +1355,14 @@ $retStats = [
                 }
 
                 // ⚠ تجميع البنود بنفس مبدأ viewInvoice — بمفتاح (منتج ×
-                // سعر الوحدة الصافي)، مع دمج الألوان/المقاسات بصف واحد.
-                // default_price مُعاد بناؤه بجانب السيرفر (عبر discount_
-                // percentage الأصلية من purchase_items) — للعرض المعلوماتي
-                // فقط، البند بالمرتجع مسجَّل بسعره الصافي التاريخي مباشرة،
-                // بلا أي خصم إفرادي جديد يُطبَّق وقت الإرجاع نفسه.
+                // group_key الحقيقي)، مع دمج الألوان/المقاسات بصف واحد.
+                // ⚠ تسليم من المحادثة العامة (handoff_group_key_purchases.md):
+                // كان المفتاح هون أصلاً السعر الصافي مباشرة (أضعف حتى من
+                // السعر الافتراضي المُعاد بناؤه المستخدم بمكان تاني) —
+                // احتياط بسيط لبيانات قديمة بلا group_key. default_price
+                // مُعاد بناؤه بجانب السيرفر — للعرض المعلوماتي فقط، البند
+                // بالمرتجع مسجَّل بسعره الصافي التاريخي مباشرة، بلا أي
+                // خصم إفرادي جديد يُطبَّق وقت الإرجاع نفسه.
                 // ⚠ عدد الكروبات ≠ عدد المنتجات: quantity_returned لكل
                 // صف مقاس بمفرده = عدد الكروبات (مكرَّر على كل مقاسات
                 // نفس اللون، نفس اتفاقية purchase_items) — لازم يُجمع
@@ -1368,7 +1372,8 @@ $retStats = [
                 // المستخدم بمودال الإنشاء (buildGroups/_colorQty).
                 const grpMap = {};
                 items.forEach(it => {
-                    const k = `${it.product_id || it.product_name}_${parseFloat(it.unit_price).toFixed(4)}`;
+                    const groupKey = it.group_key || parseFloat(it.unit_price).toFixed(4);
+                    const k = `${it.product_id || it.product_name}_${groupKey}`;
                     if (!grpMap[k]) grpMap[k] = {
                         product_name: it.product_name || '—', model_number: it.model_number || '',
                         unit_price: parseFloat(it.unit_price), default_price: parseFloat(it.default_price ?? it.unit_price),
@@ -1658,8 +1663,6 @@ $retStats = [
             })();
         <?php endif; ?>
     </script>
-    <!-- ✅ كانت مفقودة — نفس بق reports.php/orders.php بالضبط -->
-    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
 </body>
 
 </html>

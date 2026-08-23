@@ -105,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     ii.id AS invoice_item_id, ii.product_id, ii.variant_id,
                     ii.quantity, ii.unit_price AS gross_unit_price, ii.total_price, ii.discount_percentage,
                     pr.name AS product_name, pr.model_number AS model_number,
-                    sz.size AS size, sz.age_type AS age_type, cl.name AS color,
+                    sz.size AS size, sz.age_type AS age_type, sz.group_key AS group_key, cl.name AS color,
                     COALESCE((
                         SELECT SUM(ri.quantity_returned)
                         FROM `{$TRI}` ri
@@ -981,7 +981,10 @@ $retStats = [
         function renderItemsTable() {
             const map = {};
             rItems.forEach(it => {
-                const key = (it.product_id || it.item_name) + '_' + it.unit_price + '_' + (it.color || '');
+                // ⚠ group_key مصدر الحقيقة الوحيد للتجميع (مخزَّن فعلياً
+                // بجدول product_sizes) — راجع تسليم "الكروب صار حقيقة
+                // مخزَّنة، مش مُستنتَجة".
+                const key = (it.product_id || it.item_name) + '_' + it.group_key + '_' + (it.color || '');
                 if (!map[key]) map[key] = {
                     product_name: it.product_name, model_number: it.model_number || '',
                     color: it.color || '—', unit_price: parseFloat(it.unit_price),

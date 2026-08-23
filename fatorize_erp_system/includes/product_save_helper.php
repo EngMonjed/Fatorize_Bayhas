@@ -3,6 +3,12 @@
  * includes/product_save_helper.php
  * حفظ مقاسات ومتغيرات المنتج (UPSERT) — يُستخدم من product_add / product_edit
  * كما يُستخدم من inventory/barcode.php لتوليد باركودات للعناصر الناقصة.
+ *
+ * ✅ تحديث (أغسطس ٢٠٢٦): "الكروب" صار حقيقة مخزَّنة فعلياً بعمود
+ * product_sizes.group_key، مو مُعاد استنتاجه من (السعر+packet_qty) بكل
+ * مكان لحاله. هالتغيير بيلغي فئة كاملة من البقات (تجميع غلط بمودال
+ * الفاتورة، باركود غير مشترك صح) كانت ناتجة عن اعتماد كل ملف على
+ * إعادة استنتاج هش بدل قراءة مصدر حقيقة واحد.
  */
 
 function productSizeKey(string $ageType, string $size): string
@@ -56,7 +62,9 @@ function resolveGroupPricing(array $pricing, string $grpKey, int $baseCurId): ar
 
 /**
  * حفظ المقاسات بـ UPSERT (يحافظ على id المقاسات الموجودة)
- * @return array قائمة المقاسات النشطة [{id, size, age_type}, ...]
+ * ✅ يخزّن group_key الحقيقي (مفتاح الكروب من الواجهة) مباشرة بكل صف —
+ * مصدر الحقيقة الوحيد لأي تجميع كروب لاحق بأي ملف.
+ * @return array قائمة المقاسات النشطة [{id, size, age_type, group_key}, ...]
  */
 function saveProductSizes(
     PDO $pdo,
@@ -99,7 +107,7 @@ function saveProductSizes(
                 $pdo->prepare("UPDATE `{$table}` SET
                     sort_order=?, selling_price=?, cost_price=?,
                     base_currency_id=?, currency_id=?, exchange_rate=?,
-                    margin_pct=?, packet_qty=?, is_active=1,
+                    margin_pct=?, packet_qty=?, group_key=?, is_active=1,
                     updated_by=?, updated_at=NOW()
                     WHERE id=?")
                     ->execute([
@@ -111,19 +119,16 @@ function saveProductSizes(
                         $exRate,
                         $marginPct,
                         $packetQty,
+                        $grpKey,
                         $userId,
                         $rowId,
                     ]);
             } else {
-                // (تحقّقنا من CREATE TABLE الفعلي — فيه updated_by بس).
-                // النسخة السابقة كانت تحاول تدرج created_by فسبّبت خطأ
-                // SQL يوقف كل عملية إضافة منتج بمنتصفها (المقاسات
-                // والمتغيرات ما كانت تُحفظ أبداً بسبب توقف التنفيذ هنا).
                 $pdo->prepare("INSERT INTO `{$table}`
                     (product_id, size, age_type, sort_order, selling_price, cost_price,
                      base_currency_id, currency_id, exchange_rate, margin_pct, packet_qty,
-                     is_active, updated_by, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,NOW())")
+                     group_key, is_active, updated_by, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,NOW())")
                     ->execute([
                         $productId,
                         $szLabel,
@@ -136,6 +141,7 @@ function saveProductSizes(
                         $exRate,
                         $marginPct,
                         $packetQty,
+                        $grpKey,
                         $userId,
                     ]);
             }
@@ -148,7 +154,9 @@ function saveProductSizes(
         }
     }
 
-    $st = $pdo->prepare("SELECT id, size, age_type FROM `{$table}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+    // ✅ group_key مُضاف للـSELECT — بيرجع مع كل صف من هون فصاعداً،
+    // عشان syncProductVariants() تقرأه مباشرة بدل ما تعيد استنتاجه
+    $st = $pdo->prepare("SELECT id, size, age_type, group_key FROM `{$table}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
     $st->execute([$productId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
@@ -193,12 +201,15 @@ function generateFallbackBarcode(string $modelNumber, int $variantId, ?PDO $pdo 
 /**
  * مزامنة متغيرات المنتج (لون × مقاس)
  *
- * ⚠ محدَّثة: الباركود صار مشترك لكل (كروب سعري × لون) — بقرار صريح:
- * الشغل بالنظام كله قائم على إدخال/تخريج بالكروب (باكيت)، مو بالقطعة
- * المفردة، فالباركود لازم يعكس نفس المنطق. يعني كروب "٢-٥ سنة" أحمر =
- * باركود واحد يغطي كل مقاساته، مختلف عن نفس الكروب أخضر، ومختلف عن
- * كروب "٦-٩ سنة" أحمر. (تمييز القطعة المفردة بالضبط — مؤجّل لحد ما
- * تُبنى نقطة بيع مفرّق مستقبلاً، مو مطلوب هلق.)
+ * ✅ محدَّثة (أغسطس ٢٠٢٦): تجميع الباركود المشترك صار بالاعتماد على
+ * group_key **المخزَّن فعلياً** بكل صف مقاس (مُمرَّر عبر $allSizes من
+ * saveProductSizes())، بدل إعادة بنائه من قيمة المقاس النصية عبر
+ * $sizeValueToGroupKey (الطريقة القديمة الهشة — كانت بتفشل لو نفس قيمة
+ * المقاس تكررت بمنتجات/سياقات مختلفة).
+ *
+ * ⚠ محدَّثة سابقاً: الباركود صار مشترك لكل (كروب سعري × لون) — بقرار
+ * صريح: الشغل بالنظام كله قائم على إدخال/تخريج بالكروب (باكيت)، مو
+ * بالقطعة المفردة.
  *
  * ملاحظة محفوظة من الإصلاح الأصلي: عمود barcode لا يُلمس إطلاقاً عند
  * التحديث لمتغيّر موجود مسبقاً — يُدرَج/يُولَّد فقط للمتغيرات الجديدة
@@ -244,17 +255,11 @@ function syncProductVariants(
         }
     }
 
-    // ── خريطة "قيمة المقاس" → مفتاح الكروب الذي ينتمي له ──
-    $sizeValueToGroupKey = [];
-    foreach ($groups as $grp) {
-        $grpKey = $grp['key'] ?? '';
-        foreach ($grp['sizes'] ?? [] as $szVal) {
-            $sizeValueToGroupKey[(string) $szVal] = $grpKey;
-        }
-    }
-    $sizeIdToValue = [];
+    // ✅ خريطة "size_id" → "group_key" — من group_key المخزَّن فعلياً
+    // بكل صف مقاس (مصدر الحقيقة)، مو إعادة استنتاج من قيمة المقاس النصية
+    $sizeIdToGroupKey = [];
     foreach ($allSizes as $sz) {
-        $sizeIdToValue[$sz['id']] = (string) ($sz['size'] ?? '');
+        $sizeIdToGroupKey[$sz['id']] = $sz['group_key'] ?? 'g0';
     }
 
     // توليد باركود لكل (كروب × لون) — فقط للمتغيرات الجديدة بلا باركود
@@ -264,8 +269,7 @@ function syncProductVariants(
 
     $groupColorBarcode = []; // "{group_key}|{color_id}" => الباركود المشترك
     foreach ($missing->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $sizeVal = $sizeIdToValue[$row['size_id']] ?? '';
-        $grpKey = $sizeValueToGroupKey[$sizeVal] ?? 'g0';
+        $grpKey = $sizeIdToGroupKey[$row['size_id']] ?? 'g0';
         $mapKey = $grpKey . '|' . $row['color_id'];
 
         if (!isset($groupColorBarcode[$mapKey])) {
