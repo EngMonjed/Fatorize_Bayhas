@@ -1,30 +1,20 @@
-[24-Aug-2026 00:43:29 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
+[25-Aug-2026 12:35:11 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.product_categories_alpfac' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php:355
 Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php(355): PDO->query('SELECT * FROM `...')
 #1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
-[24-Aug-2026 00:43:31 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php on line 355
+[25-Aug-2026 12:35:14 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.product_categories_alpfac' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php:355
 Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php(355): PDO->query('SELECT * FROM `...')
 #1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
-[24-Aug-2026 00:43:55 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php on line 355
+[25-Aug-2026 12:35:15 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.product_categories_alpfac' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php:355
 Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php(355): PDO->query('SELECT * FROM `...')
 #1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
-[24-Aug-2026 00:43:56 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php on line 355
+[25-Aug-2026 12:35:16 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.product_categories_alpfac' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php:355
 Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php(355): PDO->query('SELECT * FROM `...')
 #1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
-[24-Aug-2026 00:43:58 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
-Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
-#1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
-[24-Aug-2026 00:43:59 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.branches' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php:23
-Stack trace:
-#0 D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php(23): PDO->prepare('SELECT base_cur...')
-#1 {main}
-  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\purchases\suppliers.php on line 23
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\products.php on line 355

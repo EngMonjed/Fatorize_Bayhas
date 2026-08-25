@@ -295,6 +295,18 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             font-weight: 600
         }
 
+        /* ✅ مقاس مختار بكروب تاني (مو الكروب النشط) — باهت وبحدود
+           متقطعة، عشان يتميّز بوضوح عن مقاسات الكروب النشط، ويضل واضح
+           إنه قابل للإضافة للكروب الحالي كمان */
+        .sz-btn.sz-other {
+            opacity: .45;
+            border-style: dashed
+        }
+
+        .sz-btn.sz-other:hover {
+            opacity: .85
+        }
+
         .sz-btn.grp1.sel {
             background: #1e3a8a;
             border-color: #1e3a8a
@@ -1187,22 +1199,46 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             if (ageType === 'سنة') {
                 lbl.textContent = 'سنوات (1–30) — انقر لتحديد:';
                 const nums = Array.from({ length: 30 }, (_, i) => i + 1);
-                grid.innerHTML = nums.map(n => {
-                    const grpIdx = getNumGrpIdx(n, 'سنة');
-                    const cls = grpIdx >= 0 ? `sz-btn sel grp${grpIdx + 1}` : 'sz-btn';
-                    const activeHint = grpIdx < 0 && sizeGroups[activeGrpIdx] ? ` title="أضف للكروب ${activeGrpIdx + 1}"` : '';
-                    return `<button class="${cls}"${activeHint} onclick="toggleSize(${n},'سنة')">${n}</button>`;
-                }).join('');
+                grid.innerHTML = nums.map(n => renderSizeBtn(n, 'سنة', `${n}`)).join('');
             } else {
                 lbl.textContent = 'أشهر (6–24، خطوة 6) — انقر لتحديد:';
                 const months = [6, 12, 18, 24];
-                grid.innerHTML = months.map(m => {
-                    const grpIdx = getNumGrpIdx(m, 'شهر');
-                    const cls = grpIdx >= 0 ? `sz-btn sel grp${grpIdx + 1}` : 'sz-btn';
-                    return `<button class="${cls}" style="width:40px" onclick="toggleSize(${m},'شهر')">${m}م</button>`;
-                }).join('');
+                grid.innerHTML = months.map(m => renderSizeBtn(m, 'شهر', `${m}م`, 'width:40px')).join('');
             }
             renderGrpPills();
+        }
+
+        // ✅ عرض زر المقاس — التمييز صار حسب **الكروب النشط** (يعني
+        // المستخدم يشوف بوضوح شو محدَّد بالكروب يلي عم يشتغل عليه)، مع
+        // إشارة إضافية (نقطة) للمقاس المشترك بأكتر من كروب.
+        function renderSizeBtn(num, type, label, extraStyle = '') {
+            const inGroups = getNumGrpIdxAll(num, type);
+            const inActive = sizeGroups[activeGrpIdx]
+                && sizeGroups[activeGrpIdx].type === type
+                && sizeGroups[activeGrpIdx].sizes.includes(num);
+
+            let cls = 'sz-btn';
+            let title = '';
+            if (inActive) {
+                cls += ` sel grp${activeGrpIdx + 1}`;
+                title = `بالكروب ${activeGrpIdx + 1} — انقر للإزالة منه`;
+            } else if (inGroups.length > 0) {
+                // موجود بكروب تاني (مش النشط) — نعرضه بتمييز خفيف
+                cls += ` sel grp${inGroups[0] + 1}`;
+                cls += ' sz-other';
+                title = `بالكروب ${inGroups.map(i => i + 1).join('، ')} — انقر لإضافته للكروب ${activeGrpIdx + 1} كمان`;
+            } else if (sizeGroups[activeGrpIdx]) {
+                title = `أضف للكروب ${activeGrpIdx + 1}`;
+            }
+
+            // مؤشّر المقاس المشترك بأكتر من كروب
+            const sharedDot = inGroups.length > 1
+                ? '<span style="position:absolute;top:1px;left:2px;width:5px;height:5px;border-radius:50%;background:#dc2626"></span>'
+                : '';
+
+            return `<button class="${cls}" title="${title}"
+                style="position:relative;${extraStyle}"
+                onclick="toggleSize(${num},'${type}')">${label}${sharedDot}</button>`;
         }
 
         function getNumGrpIdx(num, type) {
@@ -1212,16 +1248,31 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             return -1;
         }
 
+        // ✅ كل الكروبات يلي فيها هالمقاس (مو أول وحدة بس) — لازمة عشان
+        // نفس المقاس صار مسموح يتكرر بأكتر من كروب
+        function getNumGrpIdxAll(num, type) {
+            const out = [];
+            for (let i = 0; i < sizeGroups.length; i++) {
+                if (sizeGroups[i].type === type && sizeGroups[i].sizes.includes(num)) out.push(i);
+            }
+            return out;
+        }
+
         function toggleSize(num, type) {
             // نوع العمر الفعلي = من الكروب النشط
             if (sizeGroups[activeGrpIdx]) type = sizeGroups[activeGrpIdx].type;
-            // هل هو مختار في أي كروب؟
-            const existGrpIdx = getNumGrpIdx(num, type);
-            if (existGrpIdx >= 0) {
-                // إزالة من كروبه
-                sizeGroups[existGrpIdx].sizes = sizeGroups[existGrpIdx].sizes.filter(s => s !== num);
-                if (sizeGroups[existGrpIdx].sizes.length === 0) {
-                    sizeGroups.splice(existGrpIdx, 1);
+
+            // ✅ التبديل صار بالنسبة **للكروب النشط** بس — مو "أي كروب".
+            // قبل هالتعديل: الضغط على مقاس موجود بكروب تاني كان بيشيله
+            // منه، فكان مستحيل تحط نفس المقاس بكروبين. هلق: لو المقاس
+            // موجود بالكروب النشط بينشال منه، وإلا بينضاف له — حتى لو
+            // كان موجود بكروب تاني (حالة مشروعة: كروب 2-6 بسعر X،
+            // وكروب 6-9 بسعر Y، والنمرة 6 مكررة بالاثنين).
+            const activeGrp = sizeGroups[activeGrpIdx];
+            if (activeGrp && activeGrp.type === type && activeGrp.sizes.includes(num)) {
+                activeGrp.sizes = activeGrp.sizes.filter(s => s !== num);
+                if (activeGrp.sizes.length === 0) {
+                    sizeGroups.splice(activeGrpIdx, 1);
                     sizeGroups.forEach((g, i) => { g.grpIdx = i; });
                     activeGrpIdx = Math.max(0, sizeGroups.length - 1);
                 }

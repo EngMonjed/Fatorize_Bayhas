@@ -6,13 +6,15 @@ require_once __DIR__ . '/../../config/auth.php';
 $pdo = getConnection();
 checkLogin($pdo);
 
-// ⚠ مقصود: لسا مربوط بقيمة ثابتة 'ret' لحد ما يتبنى دعم أكتر من فرع بيع
-// واحد. لما يصير فيه أكتر من فرع retail، بدّل هالشرط ليتحقق من
-// branch_type === 'retail' بدل قيمة table_suffix الثابتة.
-if (($_SESSION['table_suffix'] ?? '') !== 'ret') {
+// ✅ مُصلح: كانت مربوطة بقيمة ثابتة 'ret' — أي فرع جديد (تصنيع أو
+// فرع بيع تاني بلاحقة مختلفة) كان يترفض فوراً ويرجع لـselect_account.php
+// بحلقة صامتة. الفحص الحقيقي المطلوب بس: هل فيه فرع مُختار أصلاً؟
+if (empty($_SESSION['branch_id'])) {
     header('Location: ' . BASE_PATH . '/select_account.php');
     exit;
 }
+
+$TS = $_SESSION['table_suffix'];
 
 $currentModule = 'dashboard';
 $user = getCurrentUser();
@@ -32,42 +34,42 @@ function q(PDO $p, string $sql, array $a = []): int|float|string
 
 $stats = [
     [
-        'value' => q($pdo, "SELECT COUNT(*) FROM sales_invoices_ret WHERE DATE(created_at)=?", [$today]),
+        'value' => q($pdo, "SELECT COUNT(*) FROM sales_invoices_{$TS} WHERE DATE(created_at)=?", [$today]),
         'label' => 'فواتير اليوم',
         'icon' => 'bi-receipt',
         'bg' => '#eff6ff',
         'ic' => '#3b82f6'
     ],
     [
-        'value' => '$' . number_format(q($pdo, "SELECT COALESCE(SUM(total_amount),0) FROM sales_invoices_ret WHERE DATE(created_at)=? AND status!='cancelled'", [$today]), 0),
+        'value' => '$' . number_format(q($pdo, "SELECT COALESCE(SUM(total_amount),0) FROM sales_invoices_{$TS} WHERE DATE(created_at)=? AND status!='cancelled'", [$today]), 0),
         'label' => 'مبيعات اليوم',
         'icon' => 'bi-currency-dollar',
         'bg' => '#f0fdf4',
         'ic' => '#16a34a'
     ],
     [
-        'value' => q($pdo, "SELECT COUNT(*) FROM sales_invoices_ret WHERE status IN ('draft','pending')"),
+        'value' => q($pdo, "SELECT COUNT(*) FROM sales_invoices_{$TS} WHERE status IN ('draft','pending')"),
         'label' => 'فواتير معلقة',
         'icon' => 'bi-hourglass-split',
         'bg' => '#fffbeb',
         'ic' => '#d97706'
     ],
     [
-        'value' => q($pdo, "SELECT COUNT(*) FROM products_ret WHERE is_active=1"),
+        'value' => q($pdo, "SELECT COUNT(*) FROM products_{$TS} WHERE is_active=1"),
         'label' => 'الموديلات',
         'icon' => 'bi-tags',
         'bg' => '#fdf4ff',
         'ic' => '#9333ea'
     ],
     [
-        'value' => q($pdo, "SELECT COUNT(*) FROM customers_ret WHERE status='active'"),
+        'value' => q($pdo, "SELECT COUNT(*) FROM customers_{$TS} WHERE status='active'"),
         'label' => 'العملاء',
         'icon' => 'bi-people',
         'bg' => '#f0fdfa',
         'ic' => '#0d9488'
     ],
     [
-        'value' => q($pdo, "SELECT COUNT(DISTINCT wi.variant_id) FROM warehouse_items_ret wi WHERE wi.quantity<=wi.min_quantity AND wi.status='active'"),
+        'value' => q($pdo, "SELECT COUNT(DISTINCT wi.variant_id) FROM warehouse_items_{$TS} wi WHERE wi.quantity<=wi.min_quantity AND wi.status='active'"),
         'label' => 'مخزون منخفض',
         'icon' => 'bi-exclamation-triangle',
         'bg' => '#fef2f2',
@@ -78,7 +80,7 @@ $stats = [
 try {
     $lastInvoices = $pdo->query("
         SELECT id, invoice_number, customer_name, total_amount, status, created_at
-        FROM sales_invoices_ret ORDER BY created_at DESC LIMIT 5
+        FROM sales_invoices_{$TS} ORDER BY created_at DESC LIMIT 5
     ")->fetchAll();
 } catch (Throwable $e) {
     $lastInvoices = [];

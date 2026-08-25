@@ -198,18 +198,25 @@ $szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1
 $szSt->execute([$editId]);
 $editSizes = $szSt->fetchAll(PDO::FETCH_ASSOC);
 
-// تجميع المقاسات بـ (selling_price + age_type) معاً للحفاظ على الكروبات
+// ✅ التجميع صار على group_key المخزَّن فعلياً (مصدر الحقيقة) — مو
+// إعادة استنتاج من (نوع العمر + السعر). الطريقة القديمة كان عندها
+// مشكلتان: (١) بتضيّع group_key المخزَّن وتولّد مفتاح جديد كل تعديل،
+// (٢) بتصهر كروبين منفصلين بنفس السعر ونوع العمر بكروب واحد بالغلط.
+// fallback للسعر موجود عمداً للصفوف القديمة يلي group_key فيها فاضي.
 $grpMap = [];
 foreach ($editSizes as $s) {
     $ageType = $s['age_type'] ?? 'سنة';
-    $key = $ageType . '_' . (string) $s['selling_price'];
+    $storedKey = trim((string) ($s['group_key'] ?? ''));
+    $key = $storedKey !== '' ? $storedKey : ($ageType . '_' . (string) $s['selling_price']);
     if (!isset($grpMap[$key])) {
         // الأسعار مخزّنة أصلاً بعملة الفرع الأساسية — تُعرض كما هي
         // بدون أي تحويل. (لم نعد نستخدم currency_id/exchange_rate
         // لعرض السعر؛ الحقول لا تزال موجودة بالجدول لاستخدام مستقبلي
         // محتمل، لكن واجهة المنتج لم تعد تعتمد عليها.)
         $grpMap[$key] = [
-            'key' => 'edit_' . md5($key),
+            // ✅ نعيد إرسال نفس المفتاح المخزَّن كما هو — عشان يضل ثابت
+            // عبر التعديلات، فما تنحذف المقاسات وتُعاد (وتضيع باركوداتها)
+            'key' => $storedKey !== '' ? $storedKey : ('edit_' . md5($key)),
             'type' => $ageType,
             'sizes' => [],
             'grpIdx' => count($grpMap),
@@ -376,6 +383,16 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             color: #fff;
             border-color: #1e3a8a;
             font-weight: 600
+        }
+
+        /* ✅ مقاس مختار بكروب تاني (مو النشط) — باهت وبحدود متقطعة */
+        .sz-btn.sz-other {
+            opacity: .45;
+            border-style: dashed
+        }
+
+        .sz-btn.sz-other:hover {
+            opacity: .85
         }
 
         .sz-btn.grp1.sel {
@@ -1241,22 +1258,42 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             if (ageType === 'سنة') {
                 lbl.textContent = 'سنوات (1–30) — انقر لتحديد:';
                 const nums = Array.from({ length: 30 }, (_, i) => i + 1);
-                grid.innerHTML = nums.map(n => {
-                    const grpIdx = getNumGrpIdx(n, 'سنة');
-                    const cls = grpIdx >= 0 ? `sz-btn sel grp${grpIdx + 1}` : 'sz-btn';
-                    const activeHint = grpIdx < 0 && sizeGroups[activeGrpIdx] ? ` title="أضف للكروب ${activeGrpIdx + 1}"` : '';
-                    return `<button class="${cls}"${activeHint} onclick="toggleSize(${n},'سنة')">${n}</button>`;
-                }).join('');
+                grid.innerHTML = nums.map(n => renderSizeBtn(n, 'سنة', `${n}`)).join('');
             } else {
                 lbl.textContent = 'أشهر (6–24، خطوة 6) — انقر لتحديد:';
                 const months = [6, 12, 18, 24];
-                grid.innerHTML = months.map(m => {
-                    const grpIdx = getNumGrpIdx(m, 'شهر');
-                    const cls = grpIdx >= 0 ? `sz-btn sel grp${grpIdx + 1}` : 'sz-btn';
-                    return `<button class="${cls}" style="width:40px" onclick="toggleSize(${m},'شهر')">${m}م</button>`;
-                }).join('');
+                grid.innerHTML = months.map(m => renderSizeBtn(m, 'شهر', `${m}م`, 'width:40px')).join('');
             }
             renderGrpPills();
+        }
+
+        // ✅ عرض زر المقاس — التمييز حسب **الكروب النشط**، مع إشارة
+        // للمقاس المشترك بأكتر من كروب (نفس منطق صفحة الإضافة بالضبط)
+        function renderSizeBtn(num, type, label, extraStyle = '') {
+            const inGroups = getNumGrpIdxAll(num, type);
+            const inActive = sizeGroups[activeGrpIdx]
+                && sizeGroups[activeGrpIdx].type === type
+                && sizeGroups[activeGrpIdx].sizes.includes(num);
+
+            let cls = 'sz-btn';
+            let title = '';
+            if (inActive) {
+                cls += ` sel grp${activeGrpIdx + 1}`;
+                title = `بالكروب ${activeGrpIdx + 1} — انقر للإزالة منه`;
+            } else if (inGroups.length > 0) {
+                cls += ` sel grp${inGroups[0] + 1} sz-other`;
+                title = `بالكروب ${inGroups.map(i => i + 1).join('، ')} — انقر لإضافته للكروب ${activeGrpIdx + 1} كمان`;
+            } else if (sizeGroups[activeGrpIdx]) {
+                title = `أضف للكروب ${activeGrpIdx + 1}`;
+            }
+
+            const sharedDot = inGroups.length > 1
+                ? '<span style="position:absolute;top:1px;left:2px;width:5px;height:5px;border-radius:50%;background:#dc2626"></span>'
+                : '';
+
+            return `<button class="${cls}" title="${title}"
+                style="position:relative;${extraStyle}"
+                onclick="toggleSize(${num},'${type}')">${label}${sharedDot}</button>`;
         }
 
         function getNumGrpIdx(num, type) {
@@ -1266,14 +1303,26 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
             return -1;
         }
 
+        // ✅ كل الكروبات يلي فيها هالمقاس (مو أول وحدة بس)
+        function getNumGrpIdxAll(num, type) {
+            const out = [];
+            for (let i = 0; i < sizeGroups.length; i++) {
+                if (sizeGroups[i].type === type && sizeGroups[i].sizes.includes(num)) out.push(i);
+            }
+            return out;
+        }
+
         function toggleSize(num, type) {
-            // هل هو مختار في أي كروب؟
-            const existGrpIdx = getNumGrpIdx(num, type);
-            if (existGrpIdx >= 0) {
-                // إزالة من كروبه
-                sizeGroups[existGrpIdx].sizes = sizeGroups[existGrpIdx].sizes.filter(s => s !== num);
-                if (sizeGroups[existGrpIdx].sizes.length === 0) {
-                    sizeGroups.splice(existGrpIdx, 1);
+            if (sizeGroups[activeGrpIdx]) type = sizeGroups[activeGrpIdx].type;
+
+            // ✅ التبديل بالنسبة **للكروب النشط** بس — عشان نفس المقاس
+            // يقدر ينوجد بأكتر من كروب (كروب 2-6 بسعر X، وكروب 6-9
+            // بسعر Y، والنمرة 6 مكررة شرعياً بالاثنين)
+            const activeGrp = sizeGroups[activeGrpIdx];
+            if (activeGrp && activeGrp.type === type && activeGrp.sizes.includes(num)) {
+                activeGrp.sizes = activeGrp.sizes.filter(s => s !== num);
+                if (activeGrp.sizes.length === 0) {
+                    sizeGroups.splice(activeGrpIdx, 1);
                     sizeGroups.forEach((g, i) => { g.grpIdx = i; });
                     activeGrpIdx = Math.max(0, sizeGroups.length - 1);
                 }

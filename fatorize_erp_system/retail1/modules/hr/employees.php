@@ -688,6 +688,11 @@ $salaryLabels = ['monthly' => 'شهري', 'weekly' => 'أسبوعي', 'daily' =>
                         <i class="bi bi-cash-stack me-1"></i>الرواتب والسلف والمكافآت
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-file-earmark-bar-graph me-1"></i>التقارير
+                    </a>
+                </li>
             </ul>
 
             <?php if ($missingAccountsCount > 0): ?>

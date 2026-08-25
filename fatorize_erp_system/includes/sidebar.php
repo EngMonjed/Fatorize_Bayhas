@@ -310,7 +310,7 @@ function moduleUrl(string $key): string
     'hr.employees' => 'hr/employees.php',
     'hr.attendance' => 'hr/attendance.php',
     'hr.payroll' => 'hr/payroll.php',
-    // hr.reports أُزيل — لا صفحة تقارير فعلية بعد
+    'hr.reports' => 'hr/reports.php', // ✅ رجّعت — الصفحة صارت موجودة فعلياً (كشف حساب موظف)
     // hr.holidays أُزيل — العطل مُدارة جوا attendance.php نفسها، لا صفحة مستقلة
 
     // الإدارة

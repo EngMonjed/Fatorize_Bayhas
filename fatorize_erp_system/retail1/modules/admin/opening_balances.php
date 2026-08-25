@@ -42,9 +42,12 @@ $TIAS = "invoice_account_settings_{$TS}";
 
 // ⚠ عملة الفرع الأساسية — لقيود الأرصدة الافتتاحية (لا تحويل عملة حقيقي)
 $branchBaseCurrency = 'USD';
-$bcStmt = $pdo->prepare("SELECT base_currency FROM branches WHERE id = ?");
+$branchCurrencyId = 1;
+$bcStmt = $pdo->prepare("SELECT base_currency, base_currency_id FROM branches WHERE id = ?");
 $bcStmt->execute([$branchId]);
-$branchBaseCurrency = $bcStmt->fetchColumn() ?: 'USD';
+$bcRow = $bcStmt->fetch(PDO::FETCH_ASSOC);
+$branchBaseCurrency = $bcRow['base_currency'] ?? 'USD';
+$branchCurrencyId = (int) ($bcRow['base_currency_id'] ?? 1);
 
 function getSettingAccount(PDO $pdo, string $tias, string $key, string $tac): ?array
 {
@@ -145,14 +148,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     ->execute([$entryNo, "رصيد افتتاحي مخزون — {$variant['product_name']}", $totalValue, $totalValue, 'opening_balance', $movId, $_SESSION['user_id'], $_SESSION['user_id']]);
                 $jeId = (int) $pdo->lastInsertId();
 
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,?,0,?,?,?,?,1)")
-                    ->execute([$jeId, $accInventory['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchBaseCurrency]);
+                    ->execute([$jeId, $accInventory['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $accInventory['id'], $totalValue);
 
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,0,?,?,?,?,?,1)")
-                    ->execute([$jeId, $accEquity['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchBaseCurrency]);
+                    ->execute([$jeId, $accEquity['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $accEquity['id'], -$totalValue);
             }
 
@@ -200,14 +203,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     ->execute([$entryNo, "رصيد افتتاحي مستهلكات — {$item['name']}", $totalValue, $totalValue, 'opening_balance', $_SESSION['user_id'], $_SESSION['user_id']]);
                 $jeId = (int) $pdo->lastInsertId();
 
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,?,0,?,?,?,?,1)")
-                    ->execute([$jeId, $accConsInv['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مستهلكات', $branchBaseCurrency]);
+                    ->execute([$jeId, $accConsInv['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مستهلكات', $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $accConsInv['id'], $totalValue);
 
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,0,?,?,?,?,?,1)")
-                    ->execute([$jeId, $accEquity['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مستهلكات', $branchBaseCurrency]);
+                    ->execute([$jeId, $accEquity['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مستهلكات', $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $accEquity['id'], -$totalValue);
             }
 
@@ -238,23 +241,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             if ($partyType === 'customer') {
                 // مدين: حساب العميل (علينا نستلم) / دائن: رصيد افتتاحي
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES (?,?,?,0,?,?,?,?,1)")
-                    ->execute([$jeId, $party['account_id'], $amount, $amount, $amount, $label, $branchBaseCurrency]);
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES (?,?,?,0,?,?,?,?,1)")
+                    ->execute([$jeId, $party['account_id'], $amount, $amount, $amount, $label, $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $party['account_id'], $amount);
             } else {
                 // مدين: رصيد افتتاحي / دائن: حساب المورد (علينا ندفع)
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES (?,?,0,?,?,?,?,?,1)")
-                    ->execute([$jeId, $party['account_id'], $amount, $amount, $amount, $label, $branchBaseCurrency]);
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES (?,?,0,?,?,?,?,?,1)")
+                    ->execute([$jeId, $party['account_id'], $amount, $amount, $amount, $label, $branchCurrencyId]);
                 bumpAccountBalance($pdo, $TAC, $party['account_id'], $amount);
             }
 
-            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                 VALUES (?,?,?,?,?,?,?,?,1)")
                 ->execute([
                     $jeId, $accEquity['id'],
                     $partyType === 'supplier' ? $amount : 0,
                     $partyType === 'customer' ? $amount : 0,
-                    $amount, $amount, $label, $branchBaseCurrency,
+                    $amount, $amount, $label, $branchCurrencyId,
                 ]);
             bumpAccountBalance($pdo, $TAC, $accEquity['id'], $partyType === 'customer' ? -$amount : $amount);
 
@@ -269,6 +272,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 ->execute([$_SESSION['user_id'], $branchId]);
             $pdo->commit();
             echo json_encode(['ok' => true, 'msg' => 'تم قفل الأرصدة الافتتاحية نهائياً لهذا الفرع']);
+        } elseif ($_POST['_action'] === 'save_cash') {
+            requirePermission('admin.opening_balances', 'create');
+            $accountId = (int) ($_POST['account_id'] ?? 0);
+            $amount = (float) ($_POST['amount'] ?? 0);
+            if ($amount <= 0) throw new Exception('المبلغ غير صالح');
+
+            $acc = $pdo->prepare("SELECT ac.*, c.code AS currency_code, c.exchange_rate AS currency_rate
+                FROM `{$TAC}` ac JOIN currencies c ON c.id = ac.currency_id WHERE ac.id = ?");
+            $acc->execute([$accountId]);
+            $acc = $acc->fetch(PDO::FETCH_ASSOC);
+            if (!$acc) throw new Exception('حساب غير موجود');
+
+            // ✅ سعر الصرف: 1 لو الحساب أصلاً بعملة الفرع الوظيفية، وإلا
+            // سعر currencies.exchange_rate (سعر الصرف المخزَّن لعملة
+            // الحساب مقابل عملة الفرع)
+            $exRate = ((int) $acc['currency_id'] === $branchCurrencyId) ? 1.0 : (float) $acc['currency_rate'];
+            $baseAmount = round($amount * $exRate, 2);
+
+            $accEquity = getOpeningEquityAccount($pdo, $TAC);
+            $entryNo = nextEntryNo($pdo, $TJE);
+            $label = "رصيد افتتاحي صندوق/بنك — {$acc['name']}";
+
+            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,created_by,posted_at,posted_by)
+                VALUES (?,CURDATE(),?,?,?,?,?,'posted',?,?,NOW(),?)")
+                ->execute([$entryNo, $label, $acc['currency_id'], $exRate, $baseAmount, $baseAmount, 'opening_balance', $_SESSION['user_id'], $_SESSION['user_id']]);
+            $jeId = (int) $pdo->lastInsertId();
+
+            // مدين: حساب الصندوق/البنك (بعملته الخاصة + المكافئ بعملة الفرع)
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES (?,?,?,0,?,?,?,?,?)")
+                ->execute([$jeId, $accountId, $amount, $amount, $baseAmount, $label, $acc['currency_id'], $exRate]);
+            $pdo->prepare("UPDATE `{$TAC}` SET balance = balance + ?, base_balance = base_balance + ? WHERE id = ?")
+                ->execute([$amount, $baseAmount, $accountId]);
+
+            // دائن: رصيد افتتاحي (بعملة الفرع دايماً)
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES (?,?,0,?,?,?,?,?,1)")
+                ->execute([$jeId, $accEquity['id'], $baseAmount, $baseAmount, $baseAmount, $label, $branchCurrencyId]);
+            bumpAccountBalance($pdo, $TAC, $accEquity['id'], -$baseAmount);
+
+            $pdo->commit();
+            echo json_encode(['ok' => true, 'msg' => 'تم تسجيل رصيد الصندوق/البنك الافتتاحي']);
         } else {
             $pdo->rollBack();
             echo json_encode(['ok' => false, 'msg' => 'إجراء غير معروف']);
@@ -281,6 +324,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ────────────────────────────────────────────────
+// ✅ حسابات الصناديق/البنوك — من invoice_account_settings مباشرة
+// (مفاتيح cash_%/bank_%)، نفس مبدأ treasury.php — مش تخمين بادئة كود
+$cashAccounts = $pdo->query("
+    SELECT ias.setting_key, ac.id AS account_id, ac.name, ac.balance, ac.base_balance,
+           c.code AS currency_code
+    FROM `{$TIAS}` ias
+    JOIN `{$TAC}` ac ON ac.id = ias.account_id
+    JOIN currencies c ON c.id = ac.currency_id
+    WHERE ias.setting_key LIKE 'cash\\_%' OR ias.setting_key LIKE 'bank\\_%'
+    ORDER BY ias.setting_key
+")->fetchAll(PDO::FETCH_ASSOC);
+
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='products' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 $consWarehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='consumables' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 // ✅ مُصلح: size/color مو أعمدة مباشرة على product_variants — لازم JOIN
@@ -352,6 +407,7 @@ require_once __DIR__ . '/../../../includes/breadcrumb.php';
         <li class="nav-item"><a class="nav-link fw-600" data-bs-toggle="tab" href="#tab-cons"><i class="bi bi-recycle me-1"></i>مخزون المستهلكات</a></li>
         <li class="nav-item"><a class="nav-link fw-600" data-bs-toggle="tab" href="#tab-cust"><i class="bi bi-person-lines-fill me-1"></i>أرصدة العملاء</a></li>
         <li class="nav-item"><a class="nav-link fw-600" data-bs-toggle="tab" href="#tab-sup"><i class="bi bi-truck me-1"></i>أرصدة الموردين</a></li>
+        <li class="nav-item"><a class="nav-link fw-600" data-bs-toggle="tab" href="#tab-cash"><i class="bi bi-cash-coin me-1"></i>الصندوق والبنوك</a></li>
     </ul>
 
     <div class="tab-content">
@@ -428,6 +484,26 @@ require_once __DIR__ . '/../../../includes/breadcrumb.php';
                 <?php endforeach; ?>
             </div>
         </div>
+
+        <!-- الصندوق والبنوك -->
+        <div class="tab-pane fade" id="tab-cash">
+            <div class="table-card p-3">
+                <div class="alert alert-info py-2" style="font-size:.8rem">
+                    الحسابات مسحوبة مباشرة من إعدادات الربط المحاسبي (<code>invoice_account_settings</code>) — مو تخمين. المبلغ بعملة الحساب نفسه، وبيتحوّل تلقائياً لعملة الفرع بسعر الصرف المسجَّل.
+                </div>
+                <?php if (empty($cashAccounts)): ?>
+                <div class="text-muted small">ما في حسابات صندوق/بنك مربوطة بعد بصفحة إعدادات الربط المحاسبي.</div>
+                <?php endif; ?>
+                <?php foreach ($cashAccounts as $ca): ?>
+                <div class="ob-row" style="grid-template-columns:2fr 1fr 1fr auto" data-account="<?= $ca['account_id'] ?>">
+                    <div><?= htmlspecialchars($ca['name']) ?> <span class="badge bg-light text-dark border"><?= htmlspecialchars($ca['currency_code']) ?></span></div>
+                    <div class="text-muted small">الرصيد الحالي: <?= number_format((float) $ca['balance'], 2) ?></div>
+                    <input type="number" step="0.01" class="form-control form-control-sm amount-input" placeholder="0.00" <?= $isLocked ? 'disabled' : '' ?>>
+                    <button class="btn btn-sm btn-outline-primary" onclick="saveCash(this)" <?= $isLocked ? 'disabled' : '' ?>><i class="bi bi-check-lg"></i></button>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
     </div>
 
 </div>
@@ -481,6 +557,17 @@ function saveParty(btn, type) {
         _action: 'save_party',
         party_type: type,
         party_id: row.dataset.party,
+        amount: row.querySelector('.amount-input').value,
+    }).then(d => {
+        if (d.ok) { toast(d.msg); row.style.opacity = '.5'; }
+        else toast(d.msg, 'danger');
+    });
+}
+function saveCash(btn) {
+    const row = btn.closest('.ob-row');
+    post({
+        _action: 'save_cash',
+        account_id: row.dataset.account,
         amount: row.querySelector('.amount-input').value,
     }).then(d => {
         if (d.ok) { toast(d.msg); row.style.opacity = '.5'; }

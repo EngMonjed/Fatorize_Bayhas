@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $perms = $_POST['perms'] ?? [];
 
         // جلب كل الأقسام
-        $allMods = $pdo->query("SELECT key FROM modules WHERE parent_key IS NOT NULL AND is_active=1")
+        $allMods = $pdo->query("SELECT `key` FROM modules WHERE parent_key IS NOT NULL AND is_active=1")
             ->fetchAll(PDO::FETCH_COLUMN);
 
         $pdo->beginTransaction();
@@ -82,8 +82,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         echo json_encode(['ok' => true, 'msg' => 'تم حفظ الصلاحيات بنجاح']);
-    } catch (Exception $e) {
-        $pdo->rollBack();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction())
+            $pdo->rollBack();
         echo json_encode(['ok' => false, 'msg' => $e->getMessage()]);
     }
     exit;
@@ -430,7 +431,8 @@ $sectionColors = [
                 <div class="u-avatar"><?= mb_substr($targetUser['full_name'], 0, 1) ?></div>
                 <div class="flex-grow-1">
                     <div style="font-size:1rem;font-weight:700;color:#1e293b">
-                        <?= htmlspecialchars($targetUser['full_name']) ?></div>
+                        <?= htmlspecialchars($targetUser['full_name']) ?>
+                    </div>
                     <div class="text-muted" style="font-size:.82rem">@<?= htmlspecialchars($targetUser['username']) ?>
                     </div>
                 </div>

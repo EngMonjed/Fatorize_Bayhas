@@ -1,3 +1,104 @@
+-- --------------------------------------------------------
+-- Host:                         127.0.0.1
+-- Server version:               8.4.3 - MySQL Community Server - GPL
+-- Server OS:                    Win64
+-- HeidiSQL Version:             12.8.0.6908
+-- --------------------------------------------------------
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET NAMES utf8 */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+
+-- Dumping database structure for tenant_1
+CREATE DATABASE IF NOT EXISTS `tenant_1` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;
+USE `tenant_1`;
+
+-- Dumping structure for table tenant_1.account_charts_alpfac
+CREATE TABLE IF NOT EXISTS `account_charts_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `parent_id` int DEFAULT NULL,
+  `account_type` enum('asset','liability','equity','revenue','expense') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `cash_flow_category` enum('operating','investing','financing','excluded','none') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none' COMMENT 'تصنيف صريح لتقرير التدفقات النقدية — مخزَّن، مش مُستنتَج من الكود',
+  `balance` decimal(15,2) NOT NULL DEFAULT '0.00' COMMENT 'الرصيد بعملة الحساب',
+  `base_balance` decimal(15,2) NOT NULL DEFAULT '0.00' COMMENT 'الرصيد بعملة الفرع الأساسية',
+  `currency_id` int NOT NULL DEFAULT '1' COMMENT 'مرجع جدول currencies',
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `level` tinyint NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `is_locked` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'حساب نظامي لا يُحذف',
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `code` (`code`),
+  KEY `idx_parent_id` (`parent_id`),
+  KEY `idx_account_type` (`account_type`),
+  KEY `idx_code` (`code`)
+) ENGINE=InnoDB AUTO_INCREMENT=51 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='شجرة الحسابات';
+
+-- Dumping data for table tenant_1.account_charts_alpfac: ~2 rows (approximately)
+INSERT INTO `account_charts_alpfac` (`id`, `code`, `name`, `description`, `parent_id`, `account_type`, `cash_flow_category`, `balance`, `base_balance`, `currency_id`, `exchange_rate`, `level`, `is_active`, `is_locked`, `created_by`, `updated_by`, `created_at`, `updated_at`) VALUES
+	(1, '1', 'الأصول', NULL, NULL, 'asset', 'none', 0.00, 0.00, 1, 1.0000, 1, 1, 1, NULL, NULL, '2026-08-24 14:35:26', NULL),
+	(2, '2', 'الالتزامات', NULL, NULL, 'liability', 'none', 0.00, 0.00, 1, 1.0000, 1, 1, 1, NULL, NULL, '2026-08-24 14:35:26', NULL),
+	(3, '3', 'حقوق الملكية', NULL, NULL, 'equity', 'financing', 0.00, 0.00, 1, 1.0000, 1, 1, 1, NULL, NULL, '2026-08-24 14:35:26', NULL),
+	(4, '4', 'الإيرادات', NULL, NULL, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 1, 1, 1, NULL, NULL, '2026-08-24 14:35:26', NULL),
+	(5, '5', 'المصاريف', NULL, NULL, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 1, 1, 1, NULL, NULL, '2026-08-24 14:35:26', NULL),
+	(6, '1.1', 'الأصول المتداولة', NULL, 1, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(7, '1.2', 'الأصول الثابتة', NULL, 1, 'asset', 'investing', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(8, '2.1', 'الالتزامات المتداولة', NULL, 2, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(9, '2.2', 'الالتزامات طويلة الأمد', NULL, 2, 'liability', 'financing', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(10, '3.1', 'رأس المال', NULL, 3, 'equity', 'financing', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(11, '3.2', 'الأرباح المبقاة', NULL, 3, 'equity', 'financing', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(12, '3.3', 'أرباح السنة الحالية', NULL, 3, 'equity', 'financing', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(13, '4.1', 'إيرادات المبيعات', NULL, 4, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(14, '4.2', 'إيرادات أخرى', NULL, 4, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(15, '5.1', 'تكلفة المبيعات', NULL, 5, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(16, '5.2', 'مصاريف التشغيل', NULL, 5, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(17, '5.3', 'مصاريف الموظفين', NULL, 5, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(18, '5.4', 'مصاريف إدارية وعمومية', NULL, 5, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(19, '1.1.1', 'النقدية والصناديق', NULL, 6, 'asset', 'excluded', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(20, '1.1.2', 'البنوك', NULL, 6, 'asset', 'excluded', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(21, '1.1.3', 'ذمم العملاء', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(22, '1.1.4', 'سلف الموظفين', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(23, '1.1.5', 'المخزون', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(24, '1.1.6', 'مخزون المستهلكات', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(25, '1.1.7', 'دفعات مقدمة للموردين', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(26, '1.1.8', 'ضريبة مشتريات قابلة للاسترداد', NULL, 6, 'asset', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(27, '2.1.1', 'ذمم الموردين', NULL, 8, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(28, '2.1.2', 'مستحقات الموظفين', NULL, 8, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(29, '2.1.3', 'ضرائب مستحقة', NULL, 8, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(30, '2.1.4', 'ضريبة مبيعات مستحقة', 'sales_tax_payable', 8, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(31, '2.1.5', 'الدفعات المقدمة من العملاء', NULL, 8, 'liability', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(32, '5.1.1', 'تكلفة البضاعة المباعة', NULL, 15, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(33, '5.2.1', 'مصاريف المستهلكات', NULL, 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(34, '5.2.2', 'إيجار المحل', NULL, 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(35, '5.2.3', 'كهرباء وماء', NULL, 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(36, '5.2.4', 'صيانة وإصلاح', NULL, 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(37, '5.2.5', 'شحن ونقل', NULL, 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(38, '5.2.6', 'خصومات مبيعات ممنوحة', 'sales_discount_given', 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(39, '5.2.7', 'خصم تعجيل استلام من العملاء المبيعات', 'settlement_discount_expense', 16, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(40, '5.3.1', 'رواتب وأجور', NULL, 17, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(41, '5.3.2', 'مكافآت وحوافز', NULL, 17, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(42, '5.4.1', 'مصاريف إدارية عامة', NULL, 18, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(43, '5.4.2', 'قرطاسية ومكتبية', NULL, 18, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(44, '5.4.3', 'فروقات أسعار صرف', NULL, 18, 'expense', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 1, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(45, '4.2.1', 'خصم مشتريات تجاري مكتسب', NULL, 14, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(46, '4.2.2', 'إيراد خصم تعجيل الدفع', NULL, 14, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(47, '4.2.3', 'أرباح فروقات الصرف', NULL, 14, 'revenue', 'operating', 0.00, 0.00, 1, 1.0000, 3, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(48, '3900', 'رصيد افتتاحي', NULL, 3, 'equity', 'none', 0.00, 0.00, 1, 1.0000, 2, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(49, '1.1.1.001', 'صندوق دولار أمريكي', NULL, 19, 'asset', 'excluded', 0.00, 0.00, 1, 1.0000, 4, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26'),
+	(50, '1.1.2.001', 'بنك دولار أمريكي', NULL, 20, 'asset', 'excluded', 0.00, 0.00, 1, 1.0000, 4, 1, 0, NULL, NULL, '2026-08-24 14:35:26', '2026-08-24 14:35:26');
+
 -- Dumping structure for table tenant_1.account_charts_ret
 CREATE TABLE IF NOT EXISTS `account_charts_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -174,11 +275,34 @@ CREATE TABLE IF NOT EXISTS `branches` (
   KEY `fk_branches_local_currency` (`local_currency_id`),
   CONSTRAINT `fk_branches_base_currency` FOREIGN KEY (`base_currency_id`) REFERENCES `currencies` (`id`),
   CONSTRAINT `fk_branches_local_currency` FOREIGN KEY (`local_currency_id`) REFERENCES `currencies` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='الفروع — كل فرع له table_suffix خاص به';
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='الفروع — كل فرع له table_suffix خاص به';
 
 -- Dumping data for table tenant_1.branches: ~0 rows (approximately)
 INSERT INTO `branches` (`id`, `name`, `name_en`, `tenant_slogan`, `branch_type`, `phone`, `email`, `address`, `city`, `country`, `tax_number`, `commercial_registration_number`, `factory_branch_id`, `base_currency`, `local_currency`, `pricing_method`, `default_margin_pct`, `costing_method`, `tax_rate_default`, `tax_input_recoverable`, `allow_negative_stock`, `notify_low_stock`, `notify_new_invoice`, `notify_internal_order`, `notify_email`, `invoice_prefix`, `invoice_counter`, `fiscal_year_start`, `week_start_day`, `default_payment_terms`, `code`, `table_suffix`, `dashboard_path`, `icon`, `color`, `sort_order`, `created_by`, `updated_by`, `status`, `created_at`, `updated_at`, `base_currency_id`, `local_currency_id`, `default_purchase_tax_pct`, `opening_balance_locked_at`, `opening_balance_locked_by`) VALUES
-	(1, 'فرع السبع بحرات', 'Retail Branch', 'لصناعة وتجارة ألبسة الأطفال الجاهزة', 'retail', '+963992326518', NULL, 'دوار السبع بحرات - باتجاه الجامع الكبير', 'حلب', 'Syria', '123456', '#############', NULL, 'USD', 'SYP', 'cost_plus', 10.00, 'last_cost', 0.00, 'non_recoverable', 0, 1, 1, 1, NULL, 'ret', 0, 1, 6, 30, 'ret', 'ret', 'retail1/modules/dashboard.php', 'bi-shop-window', '#f59e0b', 1, NULL, 1, 'active', '2026-05-20 11:51:25', '2026-08-22 17:22:16', 1, 4, 0.00, NULL, NULL);
+	(1, 'فرع السبع بحرات', 'Retail Branch', 'لصناعة وتجارة ألبسة الأطفال الجاهزة', 'retail', '+963992326518', NULL, 'دوار السبع بحرات - باتجاه الجامع الكبير', 'حلب', 'Syria', '123456', '#############', NULL, 'USD', 'SYP', 'cost_plus', 10.00, 'last_cost', 0.00, 'non_recoverable', 0, 1, 1, 1, NULL, 'ret', 0, 1, 6, 30, 'ret', 'ret', 'retail1/modules/dashboard.php', 'bi-shop-window', '#f59e0b', 1, NULL, 1, 'active', '2026-05-20 11:51:25', '2026-08-22 17:22:16', 1, 4, 0.00, NULL, NULL),
+	(2, 'معمل حلب', 'Aleppo Factory', NULL, 'factory', '+963 985 995 741', 'bayhasstarlink@gmail.com', 'المواصلات القديمة', 'حلب', 'Syria', 'xxxxxxxx', 'xxxxxxxx', NULL, 'USD', 'SYP', 'cost_plus', 10.00, 'last_cost', 0.00, 'recoverable', 1, 1, 1, 1, 'bayhasstarlink@gmail.com', 'alp-fac', 0, 1, 6, 30, 'ALP-FAC', 'alpfac', 'retail1/modules/dashboard.php', 'bi-gear-fill', '#10b981', 2, 1, NULL, 'active', '2026-08-24 14:35:25', NULL, 1, 2, 0.00, NULL, NULL);
+
+-- Dumping structure for table tenant_1.consumable_categories_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_categories_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `icon` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'bi-tag',
+  `color` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '#64748b',
+  `bg_color` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '#f1f5f9',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='فئات المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_categories_alpfac: ~4 rows (approximately)
+INSERT INTO `consumable_categories_alpfac` (`id`, `name`, `icon`, `color`, `bg_color`, `is_active`, `sort_order`, `created_by`, `created_at`) VALUES
+	(1, 'مواد غذائية', 'bi-lightning-charge', '#0891b2', '#e0f7fa', 1, 10, NULL, '2026-08-24 11:35:26'),
+	(2, 'قرطاسية', 'bi-pencil', '#7c3aed', '#f3e8ff', 1, 20, NULL, '2026-08-24 11:35:26'),
+	(3, 'منظفات', 'bi-cup-hot', '#d97706', '#fef3c7', 1, 30, NULL, '2026-08-24 11:35:26'),
+	(4, 'صيانة', 'bi-tools', '#dc2626', '#fee2e2', 1, 40, NULL, '2026-08-24 11:35:26');
 
 -- Dumping structure for table tenant_1.consumable_categories_ret
 CREATE TABLE IF NOT EXISTS `consumable_categories_ret` (
@@ -202,6 +326,19 @@ INSERT INTO `consumable_categories_ret` (`id`, `name`, `icon`, `color`, `bg_colo
 	(3, 'منظفات', 'bi-cup-hot', '#d97706', '#fef3c7', 1, 30, NULL, '2026-07-18 00:47:54'),
 	(4, 'صيانة', 'bi-tools', '#dc2626', '#fee2e2', 1, 40, NULL, '2026-07-18 00:47:54');
 
+-- Dumping structure for table tenant_1.consumable_departments_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_departments_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أقسام الجهات المستلمة للمستهلكات';
+
+-- Dumping data for table tenant_1.consumable_departments_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_departments_ret
 CREATE TABLE IF NOT EXISTS `consumable_departments_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -214,6 +351,29 @@ CREATE TABLE IF NOT EXISTS `consumable_departments_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أقسام الجهات المستلمة للمستهلكات';
 
 -- Dumping data for table tenant_1.consumable_departments_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_issues_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_issues_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `issue_no` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'ISS-2024-0001',
+  `warehouse_id` int NOT NULL COMMENT 'المستودع المصدر',
+  `department` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'القسم/الجهة المستلمة',
+  `department_id` int DEFAULT NULL,
+  `issue_date` date NOT NULL,
+  `status` enum('draft','confirmed','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `journal_entry_id` int DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT '0',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_issue_no` (`issue_no`),
+  KEY `idx_warehouse_id` (`warehouse_id`),
+  KEY `idx_date` (`issue_date`),
+  KEY `fk_ci_department_ret` (`department_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أوامر الصرف الداخلي للمستهلكات';
+
+-- Dumping data for table tenant_1.consumable_issues_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_issues_ret
 CREATE TABLE IF NOT EXISTS `consumable_issues_ret` (
@@ -240,6 +400,28 @@ CREATE TABLE IF NOT EXISTS `consumable_issues_ret` (
 
 -- Dumping data for table tenant_1.consumable_issues_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_issue_items_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_issue_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `issue_id` int NOT NULL COMMENT 'FK → consumable_issues_alp',
+  `item_id` int NOT NULL COMMENT 'FK → consumable_items_alp',
+  `packaging_id` int DEFAULT NULL,
+  `packaging_qty` decimal(14,4) DEFAULT NULL,
+  `quantity` decimal(12,3) NOT NULL,
+  `returned_qty` decimal(12,3) NOT NULL DEFAULT '0.000',
+  `unit_cost_base` decimal(12,4) DEFAULT '0.0000' COMMENT 'تكلفة الوحدة بعملة التقارير الموحّدة للشركة',
+  `total_cost_base` decimal(15,4) DEFAULT '0.0000' COMMENT 'إجمالي التكلفة بعملة التقارير الموحّدة للشركة',
+  `movement_id` int DEFAULT NULL COMMENT 'FK → consumable_movements_alp',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (`id`),
+  KEY `idx_issue_id` (`issue_id`),
+  KEY `idx_item_id` (`item_id`),
+  KEY `fk_cii_movement` (`movement_id`),
+  KEY `fk_cii_packaging_ret` (`packaging_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل أوامر الصرف الداخلي';
+
+-- Dumping data for table tenant_1.consumable_issue_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_issue_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_issue_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -265,6 +447,31 @@ CREATE TABLE IF NOT EXISTS `consumable_issue_items_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل أوامر الصرف الداخلي';
 
 -- Dumping data for table tenant_1.consumable_issue_items_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_items_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'قهوة، ماء، قرطاسية، كهربا',
+  `category` enum('utility','supplies','food','maintenance','other') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'other',
+  `category_id` int DEFAULT NULL,
+  `unit` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'قطعة',
+  `unit_id` int DEFAULT NULL,
+  `estimated_cost` decimal(10,8) NOT NULL DEFAULT '0.00000000' COMMENT 'تكلفة تقديرية للمقارنة',
+  `last_purchase_price_base` decimal(15,4) DEFAULT NULL COMMENT 'آخر سعر شراء بعملة التقارير الموحّدة للشركة',
+  `last_purchase_date` date DEFAULT NULL,
+  `currency_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `fk_ci_currency` (`currency_id`),
+  KEY `fk_consumable_items_category_ret` (`category_id`),
+  KEY `fk_consumable_items_unit_ret` (`unit_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_items_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_items_ret` (
@@ -294,6 +501,21 @@ CREATE TABLE IF NOT EXISTS `consumable_items_ret` (
 
 -- Dumping data for table tenant_1.consumable_items_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_item_packagings_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_item_packagings_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `item_id` int NOT NULL,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `qty_per_package` decimal(14,4) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_item_pkg` (`item_id`,`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='عبوات المستهلكات (عوامل التحويل)';
+
+-- Dumping data for table tenant_1.consumable_item_packagings_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_item_packagings_ret
 CREATE TABLE IF NOT EXISTS `consumable_item_packagings_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -309,6 +531,40 @@ CREATE TABLE IF NOT EXISTS `consumable_item_packagings_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='عبوات المستهلكات (عوامل التحويل)';
 
 -- Dumping data for table tenant_1.consumable_item_packagings_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_movements_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_movements_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `movement_no` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'رقم الحركة: MOV-2024-0001',
+  `item_id` int NOT NULL COMMENT 'FK → consumable_items_alp',
+  `warehouse_id` int NOT NULL COMMENT 'FK → warehouses_alp',
+  `movement_type` enum('receive','issue','return_in','return_out','transfer','adjust','waste','opening') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `direction` enum('in','out') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'داخل أو خارج المخزون',
+  `quantity` decimal(12,3) NOT NULL COMMENT 'الكمية الموجبة دائماً',
+  `unit_cost_base` decimal(12,4) DEFAULT '0.0000' COMMENT 'تكلفة الوحدة بعملة التقارير الموحّدة للشركة',
+  `total_cost_base` decimal(15,4) DEFAULT '0.0000' COMMENT 'إجمالي التكلفة بعملة التقارير الموحّدة للشركة',
+  `qty_before` decimal(12,3) DEFAULT '0.000' COMMENT 'الرصيد قبل الحركة',
+  `qty_after` decimal(12,3) DEFAULT '0.000' COMMENT 'الرصيد بعد الحركة',
+  `reference_type` enum('purchase','sale','issue','transfer','inventory','manual','consumable_return','opening_balance') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `reference_id` int DEFAULT NULL COMMENT 'id المصدر',
+  `to_warehouse_id` int DEFAULT NULL COMMENT 'للنقل: المستودع المستهدف',
+  `journal_entry_id` int DEFAULT NULL COMMENT 'FK → journal_entries',
+  `is_posted` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'هل رُحّل المحاسبياً؟',
+  `movement_date` date NOT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_movement_no` (`movement_no`),
+  KEY `idx_item_id` (`item_id`),
+  KEY `idx_warehouse_id` (`warehouse_id`),
+  KEY `idx_type` (`movement_type`),
+  KEY `idx_date` (`movement_date`),
+  KEY `idx_reference` (`reference_type`,`reference_id`),
+  KEY `fk_cm_to_warehouse` (`to_warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='حركات مخزون المستهلكات — مستقلة عن الفواتير';
+
+-- Dumping data for table tenant_1.consumable_movements_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_movements_ret
 CREATE TABLE IF NOT EXISTS `consumable_movements_ret` (
@@ -346,6 +602,50 @@ CREATE TABLE IF NOT EXISTS `consumable_movements_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='حركات مخزون المستهلكات — مستقلة عن الفواتير';
 
 -- Dumping data for table tenant_1.consumable_movements_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_purchases_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_purchases_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `invoice_no` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'رقم الفاتورة الداخلي: PUR-2024-0001',
+  `supplier_ref` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'رقم فاتورة المورد',
+  `supplier_id` int DEFAULT NULL COMMENT 'FK → product_suppliers_alp',
+  `warehouse_id` int NOT NULL COMMENT 'المستودع المستلِم',
+  `invoice_date` date NOT NULL,
+  `due_date` date DEFAULT NULL COMMENT 'تاريخ الاستحقاق',
+  `currency` varchar(3) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
+  `exchange_rate` decimal(14,6) NOT NULL DEFAULT '1.000000',
+  `subtotal_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `subtotal_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `discount_pct` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `discount_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `discount_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `tax_pct` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `tax_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `tax_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `total_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `total_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `paid_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `paid_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `balance_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `balance_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `status` enum('draft','confirmed','partial','paid','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `payment_method` enum('cash','bank','card','deferred') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'deferred',
+  `journal_entry_id` int DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT '0',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_invoice_no` (`invoice_no`),
+  KEY `idx_supplier_id` (`supplier_id`),
+  KEY `idx_warehouse_id` (`warehouse_id`),
+  KEY `idx_date` (`invoice_date`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='فواتير شراء المستهلكات — رأس الفاتورة';
+
+-- Dumping data for table tenant_1.consumable_purchases_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_purchases_ret
 CREATE TABLE IF NOT EXISTS `consumable_purchases_ret` (
@@ -393,6 +693,30 @@ CREATE TABLE IF NOT EXISTS `consumable_purchases_ret` (
 
 -- Dumping data for table tenant_1.consumable_purchases_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_purchase_items_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_purchase_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `purchase_id` int NOT NULL COMMENT 'FK → consumable_purchases_alp',
+  `item_id` int NOT NULL COMMENT 'FK → consumable_items_alp',
+  `packaging_id` int DEFAULT NULL,
+  `packaging_qty` decimal(14,4) DEFAULT NULL,
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_price_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `unit_price_base` decimal(12,4) NOT NULL DEFAULT '0.0000',
+  `total_orig` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `discount_pct` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `total_base` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `movement_id` int DEFAULT NULL COMMENT 'FK → consumable_movements_alp (حركة الاستلام)',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (`id`),
+  KEY `idx_purchase_id` (`purchase_id`),
+  KEY `idx_item_id` (`item_id`),
+  KEY `idx_movement_id` (`movement_id`),
+  KEY `fk_cpi_packaging_ret` (`packaging_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='تفاصيل فواتير شراء المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_purchase_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_purchase_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_purchase_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -421,6 +745,24 @@ CREATE TABLE IF NOT EXISTS `consumable_purchase_items_ret` (
 
 -- Dumping data for table tenant_1.consumable_purchase_items_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_returns_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_returns_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_no` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `issue_id` int NOT NULL,
+  `warehouse_id` int NOT NULL,
+  `return_date` date NOT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `journal_entry_id` int DEFAULT NULL,
+  `is_posted` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `fk_cr_issue_ret` (`issue_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='مرتجعات فواتير شراء المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_returns_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_returns_ret
 CREATE TABLE IF NOT EXISTS `consumable_returns_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -439,6 +781,24 @@ CREATE TABLE IF NOT EXISTS `consumable_returns_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='مرتجعات فواتير شراء المستهلكات';
 
 -- Dumping data for table tenant_1.consumable_returns_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_return_items_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_return_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_id` int NOT NULL,
+  `issue_item_id` int NOT NULL,
+  `item_id` int NOT NULL,
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_cost_base` decimal(12,4) NOT NULL,
+  `total_cost_base` decimal(15,4) NOT NULL,
+  `movement_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (`id`),
+  KEY `fk_cri_return_ret` (`return_id`),
+  KEY `fk_cri_issue_item_ret` (`issue_item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='بنود مرتجعات فواتير شراء المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_return_items_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_return_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_return_items_ret` (
@@ -460,6 +820,24 @@ CREATE TABLE IF NOT EXISTS `consumable_return_items_ret` (
 
 -- Dumping data for table tenant_1.consumable_return_items_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_stock_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_stock_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `item_id` int NOT NULL COMMENT 'FK → consumable_items_alp',
+  `warehouse_id` int NOT NULL COMMENT 'FK → warehouses_alp',
+  `quantity` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT 'الرصيد الحالي',
+  `min_quantity` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT 'حد التنبيه',
+  `avg_cost_base` decimal(12,4) NOT NULL DEFAULT '0.0000' COMMENT 'متوسط التكلفة (Weighted Average) بعملة التقارير الموحّدة للشركة',
+  `last_movement` datetime DEFAULT NULL COMMENT 'تاريخ آخر حركة',
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_item_warehouse` (`item_id`,`warehouse_id`),
+  KEY `idx_item_id` (`item_id`),
+  KEY `idx_warehouse_id` (`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أرصدة المستهلكات لكل مستودع';
+
+-- Dumping data for table tenant_1.consumable_stock_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_stock_ret
 CREATE TABLE IF NOT EXISTS `consumable_stock_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -479,6 +857,24 @@ CREATE TABLE IF NOT EXISTS `consumable_stock_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='أرصدة المستهلكات لكل مستودع';
 
 -- Dumping data for table tenant_1.consumable_stock_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_transfers_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_transfers_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `transfer_no` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `from_warehouse_id` int NOT NULL,
+  `to_warehouse_id` int NOT NULL,
+  `transfer_date` date NOT NULL,
+  `status` enum('draft','confirmed','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `fk_ctr_from_wh` (`from_warehouse_id`),
+  KEY `fk_ctr_to_wh` (`to_warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.consumable_transfers_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.consumable_transfers_ret
 CREATE TABLE IF NOT EXISTS `consumable_transfers_ret` (
@@ -500,6 +896,24 @@ CREATE TABLE IF NOT EXISTS `consumable_transfers_ret` (
 
 -- Dumping data for table tenant_1.consumable_transfers_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.consumable_transfer_items_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_transfer_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `transfer_id` int NOT NULL,
+  `item_id` int NOT NULL,
+  `packaging_id` int DEFAULT NULL,
+  `packaging_qty` decimal(14,4) DEFAULT NULL,
+  `quantity` decimal(12,3) NOT NULL,
+  `unit_cost_base` decimal(12,4) NOT NULL,
+  `movement_out_id` int DEFAULT NULL,
+  `movement_in_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (`id`),
+  KEY `fk_ctri_transfer` (`transfer_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.consumable_transfer_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.consumable_transfer_items_ret
 CREATE TABLE IF NOT EXISTS `consumable_transfer_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -518,6 +932,32 @@ CREATE TABLE IF NOT EXISTS `consumable_transfer_items_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.consumable_transfer_items_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.consumable_units_alpfac
+CREATE TABLE IF NOT EXISTS `consumable_units_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_name` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='واحدات قياس المستهلكات';
+
+-- Dumping data for table tenant_1.consumable_units_alpfac: ~0 rows (approximately)
+INSERT INTO `consumable_units_alpfac` (`id`, `name`, `is_active`, `created_by`, `created_at`) VALUES
+	(1, 'قطعة', 1, NULL, '2026-08-24 11:35:26'),
+	(2, 'كيلوغرام', 1, NULL, '2026-08-24 11:35:26'),
+	(3, 'غرام', 1, NULL, '2026-08-24 11:35:26'),
+	(4, 'لتر', 1, NULL, '2026-08-24 11:35:26'),
+	(5, 'مليلتر', 1, NULL, '2026-08-24 11:35:26'),
+	(6, 'متر', 1, NULL, '2026-08-24 11:35:26'),
+	(7, 'علبة', 1, NULL, '2026-08-24 11:35:26'),
+	(8, 'كيس', 1, NULL, '2026-08-24 11:35:26'),
+	(9, 'فاتورة', 1, NULL, '2026-08-24 11:35:26'),
+	(10, 'صندوق', 1, NULL, '2026-08-24 11:35:26'),
+	(11, 'كونة', 1, NULL, '2026-08-24 11:35:26'),
+	(12, 'ورقة', 1, NULL, '2026-08-24 11:35:26');
 
 -- Dumping structure for table tenant_1.consumable_units_ret
 CREATE TABLE IF NOT EXISTS `consumable_units_ret` (
@@ -566,6 +1006,34 @@ INSERT INTO `currencies` (`id`, `code`, `name`, `symbol`, `exchange_rate`, `cash
 	(1, 'USD', 'دولار أمريكي', '$', 1.0000, NULL, NULL, 1, 'active', NULL),
 	(2, 'SYP', 'ليرة سورية', 'ل.س', 133.0000, 1034, 1035, 0, 'active', '2026-08-23 14:25:08');
 
+-- Dumping structure for table tenant_1.customers_alpfac
+CREATE TABLE IF NOT EXISTS `customers_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `contact_person` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `type` enum('individual','company') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'individual',
+  `phone` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `email` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `address` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `tax_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` enum('active','inactive') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `shipping_company` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `shipping_code` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `credit_limit` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `discount_percentage` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `account_id` int DEFAULT NULL COMMENT 'حساب الذمم في شجرة الحسابات',
+  `prepaid_account_id` int DEFAULT NULL COMMENT 'حساب الدفعات المقدمة',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  `branch_relation` enum('internal','external') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'external' COMMENT 'هل العميل فرع داخلي بالشركة أو عميل خارجي عادي',
+  PRIMARY KEY (`id`),
+  KEY `idx_status` (`status`),
+  KEY `idx_account_id` (`account_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.customers_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.customers_ret
 CREATE TABLE IF NOT EXISTS `customers_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -600,6 +1068,23 @@ INSERT INTO `customers_ret` (`id`, `name`, `contact_person`, `type`, `phone`, `e
 	(4, 'هلال سليمان', 'هلال سليمان', 'individual', '+96170181172', '', 'لبنان طرابلس', '', 'active', 'العالمية', '', 0.00, 0.00, '', 1068, 1069, '2026-08-24 10:03:25', NULL, 'external'),
 	(5, 'حمزاوي فاشن', 'محمد عبداللطيف', 'individual', '0936666814', '', 'حماة', '', 'active', '', '', 3000.00, 0.00, '', 1070, 1071, '2026-08-24 10:03:49', NULL, 'external');
 
+-- Dumping structure for table tenant_1.exchange_rates_alpfac
+CREATE TABLE IF NOT EXISTS `exchange_rates_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `currency_from` varchar(3) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `currency_to` varchar(3) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
+  `rate` decimal(14,6) NOT NULL DEFAULT '1.000000',
+  `rate_date` date NOT NULL,
+  `source` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'manual',
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_currency_date` (`currency_from`,`currency_to`,`rate_date`),
+  KEY `idx_rate_date` (`rate_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.exchange_rates_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.exchange_rates_ret
 CREATE TABLE IF NOT EXISTS `exchange_rates_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -616,6 +1101,31 @@ CREATE TABLE IF NOT EXISTS `exchange_rates_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.exchange_rates_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.expenses_alpfac
+CREATE TABLE IF NOT EXISTS `expenses_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `expense_account_id` int NOT NULL,
+  `cash_account_id` int NOT NULL,
+  `amount_original` decimal(15,4) NOT NULL,
+  `currency` varchar(3) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
+  `exchange_rate` decimal(14,6) NOT NULL DEFAULT '1.000000',
+  `amount_base` decimal(15,4) NOT NULL COMMENT 'المبلغ بعملة التقارير الموحّدة للشركة',
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `expense_date` date NOT NULL,
+  `journal_entry_id` int DEFAULT NULL,
+  `status` enum('active','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `cancelled_at` datetime DEFAULT NULL,
+  `cancelled_by` int DEFAULT NULL,
+  `user_id` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_expense_date` (`expense_date`),
+  KEY `idx_expense_acct` (`expense_account_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.expenses_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.expenses_ret
 CREATE TABLE IF NOT EXISTS `expenses_ret` (
@@ -642,6 +1152,27 @@ CREATE TABLE IF NOT EXISTS `expenses_ret` (
 
 -- Dumping data for table tenant_1.expenses_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.hr_attendance_alpfac
+CREATE TABLE IF NOT EXISTS `hr_attendance_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `employee_id` int NOT NULL,
+  `attendance_date` date NOT NULL,
+  `check_in` time DEFAULT NULL,
+  `check_out` time DEFAULT NULL,
+  `hours_worked` decimal(5,2) DEFAULT '0.00',
+  `overtime_hours` decimal(5,2) DEFAULT '0.00',
+  `attendance_status` enum('present','absent','late','half_day','holiday') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'present',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_attendance` (`employee_id`,`attendance_date`),
+  KEY `idx_employee` (`employee_id`),
+  KEY `idx_date` (`attendance_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_attendance_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.hr_attendance_ret
 CREATE TABLE IF NOT EXISTS `hr_attendance_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -663,6 +1194,25 @@ CREATE TABLE IF NOT EXISTS `hr_attendance_ret` (
 
 -- Dumping data for table tenant_1.hr_attendance_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.hr_bonuses_alpfac
+CREATE TABLE IF NOT EXISTS `hr_bonuses_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `employee_id` int NOT NULL,
+  `bonus_date` date NOT NULL,
+  `bonus_type` enum('performance','holiday','commission','transport','housing','other') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `amount` decimal(12,2) NOT NULL,
+  `currency_id` int NOT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `status` enum('active','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  PRIMARY KEY (`id`),
+  KEY `idx_employee` (`employee_id`),
+  KEY `idx_date` (`bonus_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_bonuses_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.hr_bonuses_ret
 CREATE TABLE IF NOT EXISTS `hr_bonuses_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -681,6 +1231,51 @@ CREATE TABLE IF NOT EXISTS `hr_bonuses_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.hr_bonuses_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.hr_employees_alpfac
+CREATE TABLE IF NOT EXISTS `hr_employees_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `full_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `position` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `department` enum('sales','production','admin','logistics','accounting') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `email` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `hire_date` date NOT NULL,
+  `salary_type` enum('monthly','weekly','daily','hourly') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'monthly',
+  `basic_salary` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `currency_id` int DEFAULT NULL,
+  `payable_account_id` int DEFAULT NULL,
+  `loan_account_id` int DEFAULT NULL,
+  `bank_account` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `monday_from` tinyint DEFAULT '8' COMMENT 'ساعة بداية الإثنين  — NULL = عطلة',
+  `monday_to` tinyint DEFAULT '18',
+  `tuesday_from` tinyint DEFAULT '8',
+  `tuesday_to` tinyint DEFAULT '18',
+  `wednesday_from` tinyint DEFAULT '8',
+  `wednesday_to` tinyint DEFAULT '18',
+  `thursday_from` tinyint DEFAULT '8',
+  `thursday_to` tinyint DEFAULT '18',
+  `friday_from` tinyint DEFAULT NULL,
+  `friday_to` tinyint DEFAULT NULL,
+  `saturday_from` tinyint DEFAULT '8',
+  `saturday_to` tinyint DEFAULT '18',
+  `sunday_from` tinyint DEFAULT NULL,
+  `sunday_to` tinyint DEFAULT NULL,
+  `work_schedule` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'جدول الدوام الأسبوعي: {monday:{on:true,from:8,to:18},...}',
+  `overtime_multiplier` decimal(3,1) NOT NULL DEFAULT '1.5' COMMENT 'معامل الأوفرتايم: 1.5 = ساعة ونص، 2.0 = ضعف الساعة',
+  `status` enum('active','inactive','on_leave') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_department` (`department`),
+  KEY `idx_status` (`status`),
+  KEY `idx_currency_id` (`currency_id`),
+  CONSTRAINT `hr_employees_alpfac_chk_1` CHECK (json_valid(`work_schedule`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_employees_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.hr_employees_ret
 CREATE TABLE IF NOT EXISTS `hr_employees_ret` (
@@ -731,6 +1326,29 @@ INSERT INTO `hr_employees_ret` (`id`, `full_name`, `position`, `department`, `ph
 	(1, 'محمود المسلم', 'مدير مبيعات', 'sales', '', '', '2026-01-01', 'monthly', 700.00, 1, 1036, 1037, '6d44fa3043746da35823614cbb80dede', '', 9, 20, 9, 20, 9, 20, 9, 20, NULL, NULL, 9, 20, 9, 20, NULL, 1.5, 'active', 1, '2026-08-23 14:25:54', NULL),
 	(2, 'احمد كردي', 'بائع', 'sales', '', '', '2026-08-01', 'weekly', 9000.00, 2, 1038, 1039, '', '', 9, 20, 9, 20, 9, 20, 9, 20, NULL, NULL, 9, 20, 9, 20, NULL, 1.5, 'active', 1, '2026-08-23 14:26:29', NULL);
 
+-- Dumping structure for table tenant_1.hr_loans_alpfac
+CREATE TABLE IF NOT EXISTS `hr_loans_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `employee_id` int NOT NULL,
+  `loan_date` date NOT NULL,
+  `amount` decimal(12,2) NOT NULL,
+  `currency_id` int NOT NULL,
+  `installments` int NOT NULL DEFAULT '1' COMMENT 'عدد الأقساط',
+  `paid_installments` int NOT NULL DEFAULT '0',
+  `monthly_deduction` decimal(12,2) NOT NULL,
+  `reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `status` enum('active','completed','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `journal_entry_id` int DEFAULT NULL,
+  `cancel_entry_id` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_employee` (`employee_id`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_loans_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.hr_loans_ret
 CREATE TABLE IF NOT EXISTS `hr_loans_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -753,6 +1371,42 @@ CREATE TABLE IF NOT EXISTS `hr_loans_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.hr_loans_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.hr_payroll_alpfac
+CREATE TABLE IF NOT EXISTS `hr_payroll_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `employee_id` int NOT NULL,
+  `payroll_month` date NOT NULL COMMENT 'شهر الراتب (اول يوم في الشهر)',
+  `week_number` tinyint(1) DEFAULT '0' COMMENT '0=شهري، 1..4=أسبوع',
+  `period_from` date DEFAULT NULL,
+  `period_to` date DEFAULT NULL,
+  `basic_salary` decimal(12,2) NOT NULL,
+  `working_days` int NOT NULL DEFAULT '0',
+  `working_hours` decimal(6,2) NOT NULL DEFAULT '0.00',
+  `overtime_hours` decimal(6,2) NOT NULL DEFAULT '0.00',
+  `overtime_amount` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `bonus_total` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `loan_deduction` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `other_deductions` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `net_salary` decimal(12,2) NOT NULL,
+  `currency_id` int NOT NULL,
+  `payment_status` enum('pending','paid','cancelled','accrued') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `payment_date` date DEFAULT NULL,
+  `payment_method` enum('cash','bank_transfer') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `payment_entry_id` int DEFAULT NULL,
+  `cash_account_id` int DEFAULT NULL,
+  `exchange_rate` decimal(15,6) NOT NULL DEFAULT '1.000000',
+  `accrual_entry_id` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_emp_period` (`employee_id`,`period_from`),
+  KEY `idx_month` (`payroll_month`),
+  KEY `idx_status` (`payment_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_payroll_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.hr_payroll_ret
 CREATE TABLE IF NOT EXISTS `hr_payroll_ret` (
@@ -789,6 +1443,25 @@ CREATE TABLE IF NOT EXISTS `hr_payroll_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.hr_payroll_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.hr_promotions_alpfac
+CREATE TABLE IF NOT EXISTS `hr_promotions_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `employee_id` int NOT NULL,
+  `promotion_date` date NOT NULL,
+  `old_position` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `new_position` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `old_salary` decimal(12,2) NOT NULL,
+  `new_salary` decimal(12,2) NOT NULL,
+  `currency_id` int NOT NULL,
+  `reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_employee` (`employee_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.hr_promotions_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.hr_promotions_ret
 CREATE TABLE IF NOT EXISTS `hr_promotions_ret` (
@@ -864,6 +1537,30 @@ CREATE TABLE IF NOT EXISTS `internal_order_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='بنود الطلبات الداخلية';
 
 -- Dumping data for table tenant_1.internal_order_items: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.inventory_movements_alpfac
+CREATE TABLE IF NOT EXISTS `inventory_movements_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `movement_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `movement_type` enum('in','out','adjustment','transfer','opening') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `warehouse_id` int DEFAULT NULL,
+  `items_count` int NOT NULL DEFAULT '0',
+  `total_quantity` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `total_value_base` decimal(12,2) DEFAULT NULL,
+  `reference_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `reference_id` int DEFAULT NULL,
+  `reference_number` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `movement_number` (`movement_number`),
+  KEY `idx_movement_type` (`movement_type`),
+  KEY `idx_reference` (`reference_type`,`reference_id`),
+  KEY `idx_warehouse_id` (`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.inventory_movements_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.inventory_movements_ret
 CREATE TABLE IF NOT EXISTS `inventory_movements_ret` (
@@ -3474,6 +4171,27 @@ INSERT INTO `inventory_movements_ret` (`id`, `movement_number`, `movement_type`,
 	(2583, 'IMP-2026-2583', 'opening', 1, 1, 12.00, 0.00, 'opening_balance', NULL, 'IMP-2026-2583', NULL, 1, '2026-08-24 13:16:57'),
 	(2584, 'IMP-2026-2584', 'opening', 1, 1, 12.00, 0.00, 'opening_balance', NULL, 'IMP-2026-2584', NULL, 1, '2026-08-24 13:16:57');
 
+-- Dumping structure for table tenant_1.inventory_movement_details_alpfac
+CREATE TABLE IF NOT EXISTS `inventory_movement_details_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `movement_id` int NOT NULL,
+  `variant_id` int NOT NULL,
+  `product_id` int NOT NULL,
+  `quantity` decimal(10,2) NOT NULL,
+  `unit_price` decimal(10,4) DEFAULT NULL,
+  `cost_price` decimal(10,4) NOT NULL DEFAULT '0.0000' COMMENT 'سعر التكلفة بعملة التقارير الموحّدة للشركة',
+  `total_value` decimal(12,2) DEFAULT NULL,
+  `balance_before` decimal(10,2) DEFAULT NULL,
+  `balance_after` decimal(10,2) DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_movement_id` (`movement_id`),
+  KEY `idx_variant_id` (`variant_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.inventory_movement_details_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.inventory_movement_details_ret
 CREATE TABLE IF NOT EXISTS `inventory_movement_details_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6081,6 +6799,23 @@ INSERT INTO `inventory_movement_details_ret` (`id`, `movement_id`, `variant_id`,
 	(2583, 2583, 1291, 93, 12.00, 0.0000, 0.0000, 0.00, 12.00, 24.00, 'استيراد دفعي — رصيد افتتاحي', '2026-08-24 13:16:57'),
 	(2584, 2584, 1292, 93, 12.00, 0.0000, 0.0000, 0.00, 12.00, 24.00, 'استيراد دفعي — رصيد افتتاحي', '2026-08-24 13:16:57');
 
+-- Dumping structure for table tenant_1.invoice_account_settings_alpfac
+CREATE TABLE IF NOT EXISTS `invoice_account_settings_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `setting_key` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `account_id` int NOT NULL,
+  `account_code` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `account_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `setting_key` (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.invoice_account_settings_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.invoice_account_settings_ret
 CREATE TABLE IF NOT EXISTS `invoice_account_settings_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6127,6 +6862,37 @@ INSERT INTO `invoice_account_settings_ret` (`id`, `setting_key`, `account_id`, `
 	(27, 'cash_syp', 1034, '1.1.1.002', 'صندوق ليرة سورية', 'صندوق SYP', NULL, '2026-08-23 14:25:08', NULL),
 	(28, 'bank_syp', 1035, '1.1.2.002', 'بنك ليرة سورية', 'بنك SYP', NULL, '2026-08-23 14:25:08', NULL);
 
+-- Dumping structure for table tenant_1.journal_entries_alpfac
+CREATE TABLE IF NOT EXISTS `journal_entries_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `entry_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `entry_date` date NOT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `currency_id` int NOT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `total_debit` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `total_credit` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `status` enum('draft','posted','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `reference_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `reference_id` int DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `posted_at` datetime DEFAULT NULL,
+  `posted_by` int DEFAULT NULL,
+  `cancelled_at` datetime DEFAULT NULL,
+  `cancelled_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `entry_number` (`entry_number`),
+  KEY `idx_entry_date` (`entry_date`),
+  KEY `idx_status` (`status`),
+  KEY `idx_reference` (`reference_type`,`reference_id`),
+  KEY `fk_journal_entries_ret_currency` (`currency_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.journal_entries_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.journal_entries_ret
 CREATE TABLE IF NOT EXISTS `journal_entries_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6168,6 +6934,27 @@ INSERT INTO `journal_entries_ret` (`id`, `entry_number`, `entry_date`, `descript
 	(6, 'JE-OB-2026-0006', '2026-08-24', 'رصيد افتتاحي صندوق/بنك — صندوق دولار أمريكي', 1, 1.0000, 150.00, 150.00, 'posted', 'opening_balance', NULL, 1, NULL, '2026-08-24 10:19:58', 1, NULL, NULL, '2026-08-24 10:19:58', NULL),
 	(7, 'JE-OB-2026-0007', '2026-08-24', 'رصيد افتتاحي صندوق/بنك — صندوق ليرة سورية', 2, 133.0000, 164920.00, 164920.00, 'posted', 'opening_balance', NULL, 1, NULL, '2026-08-24 10:19:58', 1, NULL, NULL, '2026-08-24 10:19:58', NULL);
 
+-- Dumping structure for table tenant_1.journal_entry_items_alpfac
+CREATE TABLE IF NOT EXISTS `journal_entry_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `journal_entry_id` int NOT NULL,
+  `account_id` int NOT NULL,
+  `debit` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `credit` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `original_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `base_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `currency_id` int NOT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_journal_entry_id` (`journal_entry_id`),
+  KEY `idx_account_id` (`account_id`),
+  KEY `fk_ji_currency_id` (`currency_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.journal_entry_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.journal_entry_items_ret
 CREATE TABLE IF NOT EXISTS `journal_entry_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6205,6 +6992,23 @@ INSERT INTO `journal_entry_items_ret` (`id`, `journal_entry_id`, `account_id`, `
 	(12, 6, 1033, 0.00, 150.00, 150.00, 150.00, 'رصيد افتتاحي صندوق/بنك — صندوق دولار أمريكي', 1, 1.0000, '2026-08-24 10:19:58'),
 	(13, 7, 1034, 1240.00, 0.00, 1240.00, 164920.00, 'رصيد افتتاحي صندوق/بنك — صندوق ليرة سورية', 2, 133.0000, '2026-08-24 10:19:58'),
 	(14, 7, 1033, 0.00, 164920.00, 164920.00, 164920.00, 'رصيد افتتاحي صندوق/بنك — صندوق ليرة سورية', 1, 1.0000, '2026-08-24 10:19:58');
+
+-- Dumping structure for table tenant_1.manufacturing_bom_alpfac
+CREATE TABLE IF NOT EXISTS `manufacturing_bom_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `component_type` enum('raw_material','consumable','service') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'raw_material',
+  `component_id` int NOT NULL,
+  `quantity_required` decimal(10,4) NOT NULL,
+  `unit_cost` decimal(10,4) NOT NULL,
+  `is_variable` tinyint(1) NOT NULL DEFAULT '0',
+  `notes` text COLLATE utf8mb4_unicode_ci,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.manufacturing_bom_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.migration_alp_to_ret_log
 CREATE TABLE IF NOT EXISTS `migration_alp_to_ret_log` (
@@ -6298,6 +7102,22 @@ INSERT INTO `modules` (`id`, `key`, `parent_key`, `label`, `icon`, `sort_order`,
 	(84, 'admin.branch_add', 'admin', 'إنشاء فرع جديد', 'bi-building-add', 97, 1, '#3b82f6'),
 	(85, 'inventory.import_products', 'inventory', 'استيراد المنتجات', 'bi-upload', 50, 1, '#3b82f6');
 
+-- Dumping structure for table tenant_1.notifications_alpfac
+CREATE TABLE IF NOT EXISTS `notifications_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `message` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `icon` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'bi-bell',
+  `link` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_read` tinyint(1) NOT NULL DEFAULT '0',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_user_id` (`user_id`),
+  KEY `idx_is_read` (`is_read`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.notifications_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.notifications_ret
 CREATE TABLE IF NOT EXISTS `notifications_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6313,6 +7133,64 @@ CREATE TABLE IF NOT EXISTS `notifications_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.notifications_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.production_entries_alpfac
+CREATE TABLE IF NOT EXISTS `production_entries_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `operation_id` int NOT NULL,
+  `entry_date` date NOT NULL,
+  `quantity` decimal(10,2) NOT NULL,
+  `price_per_unit` decimal(10,4) NOT NULL,
+  `total_base` decimal(12,4) NOT NULL,
+  `product_id` int DEFAULT NULL,
+  `worker_id` int DEFAULT NULL,
+  `notes` text COLLATE utf8mb4_unicode_ci,
+  `created_by` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_entry_date` (`entry_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.production_entries_alpfac: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.production_operations_alpfac
+CREATE TABLE IF NOT EXISTS `production_operations_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'خياطة، تطريز، كحت',
+  `unit` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'piece',
+  `default_price_base` decimal(10,4) DEFAULT NULL,
+  `notes` text COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.production_operations_alpfac: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.products_alpfac
+CREATE TABLE IF NOT EXISTS `products_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `model_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'رقم الموديل — الكود الرئيسي',
+  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `category_id` int DEFAULT NULL,
+  `fabric_type` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `supplier_id` int DEFAULT NULL,
+  `image_path` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `model_number` (`model_number`),
+  KEY `idx_model_number` (`model_number`),
+  KEY `idx_category_id` (`category_id`),
+  KEY `idx_supplier_id` (`supplier_id`),
+  KEY `idx_is_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='الموديلات الأب — بيانات مشتركة';
+
+-- Dumping data for table tenant_1.products_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.products_ret
 CREATE TABLE IF NOT EXISTS `products_ret` (
@@ -6435,6 +7313,21 @@ INSERT INTO `products_ret` (`id`, `model_number`, `name`, `category_id`, `fabric
 	(92, '1201', 'طقم', 5, NULL, 7, NULL, 1, NULL, 1, NULL, '2026-08-24 13:16:57', NULL),
 	(93, '504', 'طقم', 1, NULL, 7, NULL, 1, NULL, 1, NULL, '2026-08-24 13:16:57', NULL);
 
+-- Dumping structure for table tenant_1.product_categories_alpfac
+CREATE TABLE IF NOT EXISTS `product_categories_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `parent_id` int DEFAULT NULL,
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`),
+  KEY `idx_parent_id` (`parent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.product_categories_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.product_categories_ret
 CREATE TABLE IF NOT EXISTS `product_categories_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -6459,6 +7352,18 @@ INSERT INTO `product_categories_ret` (`id`, `name`, `parent_id`, `description`, 
 	(7, 'بيجاما بناتي', 2, 'بيجاما بناتي', 1, '2026-06-11 11:44:44'),
 	(8, 'بلوزة بناتي', 2, 'بلوزة بناتي', 1, '2026-06-11 11:44:44'),
 	(9, 'فستان بناتي', 2, 'طقم قطعتين / طقم ثلاث قطع / توينز', 1, '2026-06-11 11:44:44');
+
+-- Dumping structure for table tenant_1.product_colors_alpfac
+CREATE TABLE IF NOT EXISTS `product_colors_alpfac` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `hex_code` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '#000000',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.product_colors_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.product_colors_ret
 CREATE TABLE IF NOT EXISTS `product_colors_ret` (
@@ -6507,6 +7412,32 @@ INSERT INTO `product_colors_ret` (`id`, `name`, `hex_code`, `is_active`, `create
 	(33, 'كرزي', '#991B1B', 1, '2026-06-14 08:59:05'),
 	(34, 'مشمشمي', '#FDBA74', 1, '2026-06-14 08:59:05'),
 	(35, 'موف', '#8B5CF6', 1, '2026-06-14 08:59:05');
+
+-- Dumping structure for table tenant_1.product_sizes_alpfac
+CREATE TABLE IF NOT EXISTS `product_sizes_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `size` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'القياس: 6,8,10,S,M,XL...',
+  `age_type` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'سنة',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `selling_price` decimal(14,4) NOT NULL DEFAULT '0.0000',
+  `cost_price` decimal(14,4) DEFAULT NULL,
+  `base_currency_id` int DEFAULT NULL COMMENT 'عملة الفرع الأساسية وقت تسجيل السعر',
+  `currency_id` int DEFAULT NULL COMMENT 'العملة المختارة عند إدخال السعر لأول مرة',
+  `exchange_rate` decimal(15,6) NOT NULL DEFAULT '1.000000' COMMENT 'سعر الصرف بين عملة الفرع والعملة المختارة وقت التسجيل',
+  `margin_pct` decimal(5,2) DEFAULT NULL,
+  `packet_qty` int DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  `group_key` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'مفتاح الكروب الحقيقي — نفس القيمة لكل مقاسات نفس الكروب. مصدر الحقيقة الوحيد لتجميع الكروبات بأي مكان بالنظام (فاتورة بيع/شراء، طباعة باركود، استيراد).',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_product_size` (`product_id`,`size`,`age_type`),
+  KEY `idx_product_id` (`product_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='قياسات كل موديل — سعر مستقل لكل قياس';
+
+-- Dumping data for table tenant_1.product_sizes_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.product_sizes_ret
 CREATE TABLE IF NOT EXISTS `product_sizes_ret` (
@@ -7206,6 +8137,33 @@ INSERT INTO `product_sizes_ret` (`id`, `product_id`, `size`, `age_type`, `sort_o
 	(669, 93, '14', 'سنة', 2, 15.5000, NULL, 1, 1, 1.000000, NULL, 3, 1, NULL, '2026-08-24 13:16:57', NULL, 'g_15.5_3'),
 	(670, 93, '16', 'سنة', 3, 15.5000, NULL, 1, 1, 1.000000, NULL, 3, 1, NULL, '2026-08-24 13:16:57', NULL, 'g_15.5_3');
 
+-- Dumping structure for table tenant_1.product_suppliers_alpfac
+CREATE TABLE IF NOT EXISTS `product_suppliers_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `account_id` int DEFAULT NULL COMMENT 'حساب ذمة المورد',
+  `prepaid_account_id` int DEFAULT NULL COMMENT 'حساب الدفعات المقدمة للمورد',
+  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `contact_person` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `phone` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `email` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `address` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `tax_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `type` enum('manufacturer','distributor','wholesaler','retailer') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'wholesaler',
+  `supplier_type` enum('product','consumable','both') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'product',
+  `status` enum('active','inactive') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `credit_limit` decimal(12,2) DEFAULT '0.00',
+  `discount_percentage` decimal(5,2) DEFAULT '0.00',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.product_suppliers_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.product_suppliers_ret
 CREATE TABLE IF NOT EXISTS `product_suppliers_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -7244,6 +8202,26 @@ INSERT INTO `product_suppliers_ret` (`id`, `account_id`, `prepaid_account_id`, `
 	(9, 1056, 1057, 'كربون', 'ياسر العويد', '944663993', '', 'حلب العرقوب', '', 'manufacturer', 'product', 'active', 0.00, 0.00, '', 1, NULL, '2026-08-23 14:29:19', NULL),
 	(10, 1058, 1059, 'كريم بدر', 'كريم بدر', '932505740', '', 'حلب الجابرية', '', 'manufacturer', 'product', 'active', 0.00, 0.00, '', 1, NULL, '2026-08-23 14:29:34', NULL),
 	(11, 1060, 1061, 'نور صباغ', 'نور صباغ', '944790985', '', 'حلب  رعاية الشباب', '', 'wholesaler', 'product', 'active', 0.00, 0.00, '', 1, NULL, '2026-08-23 14:29:48', NULL);
+
+-- Dumping structure for table tenant_1.product_variants_alpfac
+CREATE TABLE IF NOT EXISTS `product_variants_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `size_id` int NOT NULL,
+  `color_id` int DEFAULT NULL,
+  `barcode` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'باركود فريد لكل قياس+لون',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_size_color` (`size_id`,`color_id`),
+  KEY `idx_product_id` (`product_id`),
+  KEY `idx_barcode` (`barcode`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='كل قياس+لون = سطر — السعر مورث من product_sizes_alp';
+
+-- Dumping data for table tenant_1.product_variants_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.product_variants_ret
 CREATE TABLE IF NOT EXISTS `product_variants_ret` (
@@ -8560,6 +9538,23 @@ INSERT INTO `product_variants_ret` (`id`, `product_id`, `size_id`, `color_id`, `
 	(1291, 93, 669, 10, '990633730', 1, 1, NULL, '2026-08-24 13:16:57', NULL),
 	(1292, 93, 670, 10, '990633730', 1, 1, NULL, '2026-08-24 13:16:57', NULL);
 
+-- Dumping structure for table tenant_1.public_holidays_alpfac
+CREATE TABLE IF NOT EXISTS `public_holidays_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `holiday_date` date NOT NULL,
+  `name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'عيد الفطر، عيد الميلاد...',
+  `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `is_recurring` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = تتكرر كل سنة (نفس الشهر واليوم)',
+  `created_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_date` (`holiday_date`),
+  KEY `idx_recurring` (`is_recurring`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='العطل الرسمية';
+
+-- Dumping data for table tenant_1.public_holidays_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.public_holidays_ret
 CREATE TABLE IF NOT EXISTS `public_holidays_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8576,6 +9571,49 @@ CREATE TABLE IF NOT EXISTS `public_holidays_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='العطل الرسمية';
 
 -- Dumping data for table tenant_1.public_holidays_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.purchases_alpfac
+CREATE TABLE IF NOT EXISTS `purchases_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `purchase_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `supplier_id` int DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `purchase_date` date NOT NULL,
+  `due_date` date DEFAULT NULL,
+  `settlement_discount_pct` decimal(5,2) DEFAULT NULL,
+  `total_amount` decimal(15,2) NOT NULL DEFAULT '0.00' COMMENT 'بعملة الفاتورة',
+  `tax_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `discount_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `final_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `final_amount_base_currency` decimal(15,4) DEFAULT NULL COMMENT 'الإجمالي بعملة الفرع',
+  `paid_amount` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `balance_amount` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `invoice_currency_id` int DEFAULT NULL,
+  `base_currency_id` int DEFAULT NULL,
+  `warehouse_id` int DEFAULT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `payment_status` enum('pending','partial','paid') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `payment_method` enum('cash','bank_transfer','check','credit_card') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'cash',
+  `journal_entry_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `status` enum('draft','confirmed','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `user_id` int NOT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `purchase_number` (`purchase_number`),
+  KEY `idx_supplier_id` (`supplier_id`),
+  KEY `idx_purchase_date` (`purchase_date`),
+  KEY `idx_status` (`status`),
+  KEY `idx_journal_entry` (`journal_entry_id`),
+  KEY `fk_purchases_alp_created_by` (`created_by`),
+  KEY `fk_purchases_alp_invoice_currency` (`invoice_currency_id`),
+  KEY `fk_purchases_alp_base_currency` (`base_currency_id`),
+  KEY `fk_purchases_alp_warehouse` (`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchases_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.purchases_ret
 CREATE TABLE IF NOT EXISTS `purchases_ret` (
@@ -8624,6 +9662,32 @@ CREATE TABLE IF NOT EXISTS `purchases_ret` (
 
 -- Dumping data for table tenant_1.purchases_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.purchase_items_alpfac
+CREATE TABLE IF NOT EXISTS `purchase_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `purchase_id` int NOT NULL,
+  `product_id` int DEFAULT NULL,
+  `variant_id` int DEFAULT NULL,
+  `quantity` decimal(10,2) NOT NULL,
+  `unit_price` decimal(10,4) NOT NULL COMMENT 'بعملة فاتورة الشراء',
+  `unit_price_base_currency` decimal(10,4) DEFAULT NULL COMMENT 'بعملة الفرع الأساسية= unit_price / exchange_rate',
+  `total_price` decimal(12,2) NOT NULL,
+  `discount_amount` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `discount_percentage` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_purchase_id` (`purchase_id`),
+  KEY `idx_product_id` (`product_id`),
+  KEY `idx_variant_id` (`variant_id`),
+  KEY `fk_purchase_items_alp_created_by` (`created_by`),
+  KEY `fk_purchase_items_alp_updated_by` (`updated_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchase_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.purchase_items_ret
 CREATE TABLE IF NOT EXISTS `purchase_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8652,6 +9716,36 @@ CREATE TABLE IF NOT EXISTS `purchase_items_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.purchase_items_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.purchase_payments_alpfac
+CREATE TABLE IF NOT EXISTS `purchase_payments_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `payment_number` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `payment_date` date NOT NULL,
+  `supplier_id` int DEFAULT NULL,
+  `supplier_name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `amount` decimal(18,4) NOT NULL,
+  `currency` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `exchange_rate` decimal(18,6) NOT NULL DEFAULT '1.000000',
+  `amount_base` decimal(18,4) NOT NULL,
+  `payment_method` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'cash',
+  `cash_account_id` int DEFAULT NULL,
+  `debit_account_id` int DEFAULT NULL COMMENT 'للدفعة العامة بدون مورد — الحساب المدين المختار يدوياً',
+  `notes` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` enum('draft','posted','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `journal_entry_id` int DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `payment_number` (`payment_number`),
+  KEY `idx_supplier` (`supplier_id`),
+  KEY `idx_status` (`status`),
+  KEY `idx_date` (`payment_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchase_payments_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.purchase_payments_ret
 CREATE TABLE IF NOT EXISTS `purchase_payments_ret` (
@@ -8683,6 +9777,19 @@ CREATE TABLE IF NOT EXISTS `purchase_payments_ret` (
 
 -- Dumping data for table tenant_1.purchase_payments_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.purchase_payment_invoices_alpfac
+CREATE TABLE IF NOT EXISTS `purchase_payment_invoices_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `payment_id` int NOT NULL,
+  `purchase_id` int NOT NULL,
+  `allocated_amount` decimal(18,4) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_payment` (`payment_id`),
+  KEY `idx_purchase` (`purchase_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchase_payment_invoices_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.purchase_payment_invoices_ret
 CREATE TABLE IF NOT EXISTS `purchase_payment_invoices_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8696,6 +9803,45 @@ CREATE TABLE IF NOT EXISTS `purchase_payment_invoices_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.purchase_payment_invoices_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.purchase_returns_alpfac
+CREATE TABLE IF NOT EXISTS `purchase_returns_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `purchase_id` int NOT NULL,
+  `purchase_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `supplier_id` int NOT NULL,
+  `supplier_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `warehouse_id` int DEFAULT NULL,
+  `return_date` date NOT NULL,
+  `total_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `discount_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `tax_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `return_amount` decimal(15,2) DEFAULT NULL,
+  `discount_percentage` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `return_currency_id` int DEFAULT NULL,
+  `base_currency_id` int DEFAULT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `payment_handling` enum('not_paid','partial','paid_full') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'not_paid',
+  `refund_account_id` int DEFAULT NULL,
+  `target_account_type` enum('cash','supplier','advance') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `journal_entry_id` int DEFAULT NULL,
+  `status` enum('draft','posted','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `return_reason` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_id` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `return_number` (`return_number`),
+  KEY `idx_purchase_id` (`purchase_id`),
+  KEY `idx_supplier_id` (`supplier_id`),
+  KEY `fk_pr_currency` (`return_currency_id`),
+  KEY `fk_pr_base_currency` (`base_currency_id`),
+  KEY `fk_pr_warehouse` (`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchase_returns_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.purchase_returns_ret
 CREATE TABLE IF NOT EXISTS `purchase_returns_ret` (
@@ -8741,6 +9887,25 @@ CREATE TABLE IF NOT EXISTS `purchase_returns_ret` (
 
 -- Dumping data for table tenant_1.purchase_returns_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.purchase_return_items_alpfac
+CREATE TABLE IF NOT EXISTS `purchase_return_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_id` int NOT NULL,
+  `purchase_item_id` int NOT NULL,
+  `product_id` int DEFAULT NULL,
+  `variant_id` int DEFAULT NULL,
+  `product_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `quantity_returned` decimal(10,2) NOT NULL,
+  `unit_price` decimal(10,4) NOT NULL,
+  `total_price` decimal(12,2) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_return_id` (`return_id`),
+  KEY `idx_purchase_item_id` (`purchase_item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.purchase_return_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.purchase_return_items_ret
 CREATE TABLE IF NOT EXISTS `purchase_return_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8760,6 +9925,64 @@ CREATE TABLE IF NOT EXISTS `purchase_return_items_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.purchase_return_items_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.raw_materials_alpfac
+CREATE TABLE IF NOT EXISTS `raw_materials_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(150) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `unit` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'kg',
+  `category` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `notes` text COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.raw_materials_alpfac: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.raw_material_stock_alpfac
+CREATE TABLE IF NOT EXISTS `raw_material_stock_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `material_id` int NOT NULL,
+  `warehouse_id` int NOT NULL DEFAULT '1',
+  `quantity` decimal(12,3) NOT NULL DEFAULT '0.000',
+  `avg_cost_base` decimal(10,4) NOT NULL DEFAULT '0.0000',
+  `last_movement_at` datetime DEFAULT NULL,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_material_wh` (`material_id`,`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.raw_material_stock_alpfac: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.receipts_alpfac
+CREATE TABLE IF NOT EXISTS `receipts_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `receipt_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `receipt_date` date NOT NULL,
+  `customer_id` int NOT NULL,
+  `customer_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `amount` decimal(15,4) NOT NULL COMMENT 'المبلغ بعملة القبض',
+  `currency` varchar(3) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `amount_base` decimal(15,4) NOT NULL COMMENT 'المبلغ بعملة التقارير الموحّدة للشركة',
+  `payment_method` enum('cash','bank','card','check') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'cash',
+  `cash_account_id` int DEFAULT NULL,
+  `journal_entry_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `status` enum('draft','posted','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `created_by` int NOT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `receipt_number` (`receipt_number`),
+  KEY `idx_customer_id` (`customer_id`),
+  KEY `idx_receipt_date` (`receipt_date`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='سندات القبض — مستقلة عن الفواتير';
+
+-- Dumping data for table tenant_1.receipts_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.receipts_ret
 CREATE TABLE IF NOT EXISTS `receipts_ret` (
@@ -8790,6 +10013,20 @@ CREATE TABLE IF NOT EXISTS `receipts_ret` (
 
 -- Dumping data for table tenant_1.receipts_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.receipt_invoices_alpfac
+CREATE TABLE IF NOT EXISTS `receipt_invoices_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `receipt_id` int NOT NULL,
+  `invoice_id` int NOT NULL,
+  `allocated_amount` decimal(15,4) NOT NULL COMMENT 'المبلغ المُوزَّع بعملة التقارير الموحّدة للشركة',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_receipt_invoice` (`receipt_id`,`invoice_id`),
+  KEY `idx_invoice_id` (`invoice_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='توزيع سند القبض على فواتير متعددة';
+
+-- Dumping data for table tenant_1.receipt_invoices_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.receipt_invoices_ret
 CREATE TABLE IF NOT EXISTS `receipt_invoices_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8805,6 +10042,49 @@ CREATE TABLE IF NOT EXISTS `receipt_invoices_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='توزيع سند القبض على فواتير متعددة';
 
 -- Dumping data for table tenant_1.receipt_invoices_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.sales_invoices_alpfac
+CREATE TABLE IF NOT EXISTS `sales_invoices_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `invoice_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `customer_id` int DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `invoice_date` date NOT NULL,
+  `due_date` date DEFAULT NULL,
+  `settlement_discount_pct` decimal(5,2) DEFAULT NULL,
+  `total_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `tax_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `discount_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `final_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `final_amount_base_currency` decimal(15,4) DEFAULT NULL,
+  `paid_amount` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `balance_amount` decimal(15,4) NOT NULL DEFAULT '0.0000',
+  `invoice_currency_id` int DEFAULT NULL,
+  `base_currency_id` int DEFAULT NULL,
+  `warehouse_id` int DEFAULT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `payment_status` enum('pending','partial','paid') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `payment_method` enum('cash','bank_transfer','check','credit_card') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'cash',
+  `journal_entry_id` int DEFAULT NULL,
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `status` enum('draft','confirmed','received','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `user_id` int NOT NULL,
+  `updated_by` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_sales_invoices_ret_number` (`invoice_number`),
+  KEY `idx_sales_invoices_ret_customer` (`customer_id`),
+  KEY `idx_sales_invoices_ret_created_by` (`created_by`),
+  KEY `idx_sales_invoices_ret_date` (`invoice_date`),
+  KEY `idx_sales_invoices_ret_inv_currency` (`invoice_currency_id`),
+  KEY `idx_sales_invoices_ret_base_currency` (`base_currency_id`),
+  KEY `idx_sales_invoices_ret_warehouse` (`warehouse_id`),
+  KEY `idx_sales_invoices_ret_je` (`journal_entry_id`),
+  KEY `idx_sales_invoices_ret_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.sales_invoices_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.sales_invoices_ret
 CREATE TABLE IF NOT EXISTS `sales_invoices_ret` (
@@ -8854,6 +10134,32 @@ CREATE TABLE IF NOT EXISTS `sales_invoices_ret` (
 
 -- Dumping data for table tenant_1.sales_invoices_ret: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.sales_invoice_items_alpfac
+CREATE TABLE IF NOT EXISTS `sales_invoice_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `invoice_id` int NOT NULL,
+  `product_id` int DEFAULT NULL,
+  `variant_id` int DEFAULT NULL,
+  `quantity` decimal(10,2) NOT NULL,
+  `unit_price` decimal(10,4) NOT NULL,
+  `unit_price_base_currency` decimal(10,4) DEFAULT NULL,
+  `total_price` decimal(12,2) NOT NULL,
+  `discount_amount` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `discount_percentage` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `created_by` int DEFAULT NULL,
+  `updated_by` int DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_sales_invoice_items_ret_invoice` (`invoice_id`),
+  KEY `idx_sales_invoice_items_ret_product` (`product_id`),
+  KEY `idx_sales_invoice_items_ret_variant` (`variant_id`),
+  KEY `idx_sales_invoice_items_ret_created_by` (`created_by`),
+  KEY `idx_sales_invoice_items_ret_updated_by` (`updated_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.sales_invoice_items_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.sales_invoice_items_ret
 CREATE TABLE IF NOT EXISTS `sales_invoice_items_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -8882,6 +10188,45 @@ CREATE TABLE IF NOT EXISTS `sales_invoice_items_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.sales_invoice_items_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.sales_returns_alpfac
+CREATE TABLE IF NOT EXISTS `sales_returns_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `invoice_id` int NOT NULL,
+  `invoice_number` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `customer_id` int NOT NULL,
+  `customer_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `warehouse_id` int DEFAULT NULL,
+  `return_date` date NOT NULL,
+  `total_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `discount_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `tax_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `return_amount` decimal(15,2) DEFAULT NULL,
+  `discount_percentage` decimal(5,2) NOT NULL DEFAULT '0.00',
+  `return_currency_id` int DEFAULT NULL,
+  `base_currency_id` int DEFAULT NULL,
+  `exchange_rate` decimal(10,4) NOT NULL DEFAULT '1.0000',
+  `payment_handling` enum('not_paid','partial','paid_full') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'not_paid',
+  `target_account_type` enum('cash','receivable','prepaid') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `refund_account_id` int DEFAULT NULL,
+  `journal_entry_id` int DEFAULT NULL,
+  `status` enum('draft','posted','cancelled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  `notes` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `return_reason` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_id` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `return_number` (`return_number`),
+  KEY `idx_sr_invoice_id` (`invoice_id`),
+  KEY `idx_sr_customer_id` (`customer_id`),
+  KEY `fk_sr_currency` (`return_currency_id`),
+  KEY `fk_sr_base_currency` (`base_currency_id`),
+  KEY `fk_sr_warehouse` (`warehouse_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.sales_returns_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.sales_returns_ret
 CREATE TABLE IF NOT EXISTS `sales_returns_ret` (
@@ -8926,6 +10271,25 @@ CREATE TABLE IF NOT EXISTS `sales_returns_ret` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.sales_returns_ret: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.sales_return_items_alpfac
+CREATE TABLE IF NOT EXISTS `sales_return_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_id` int NOT NULL,
+  `invoice_item_id` int NOT NULL,
+  `product_id` int DEFAULT NULL,
+  `variant_id` int DEFAULT NULL,
+  `product_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `quantity_returned` decimal(10,2) NOT NULL,
+  `unit_price` decimal(10,4) NOT NULL,
+  `total_price` decimal(12,2) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_return_id` (`return_id`),
+  KEY `idx_invoice_item` (`invoice_item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.sales_return_items_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.sales_return_items_ret
 CREATE TABLE IF NOT EXISTS `sales_return_items_ret` (
@@ -8972,6 +10336,26 @@ CREATE TABLE IF NOT EXISTS `shipping_carriers` (
 
 -- Dumping data for table tenant_1.shipping_carriers: ~0 rows (approximately)
 
+-- Dumping structure for table tenant_1.tax_types_alpfac
+CREATE TABLE IF NOT EXISTS `tax_types_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tax_scope` enum('sales','purchase','withholding') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `calc_type` enum('percentage','fixed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'percentage',
+  `rate_value` decimal(10,4) NOT NULL DEFAULT '0.0000' COMMENT 'نسبة مئوية (مثلاً 16.0000) أو مبلغ ثابت حسب calc_type',
+  `account_id` int DEFAULT NULL COMMENT 'الحساب المحاسبي المرتبط — عادة من إعدادات الربط، بس يُسمح بتخصيص حساب مختلف لكل نوع ضريبة',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `notes` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_scope` (`tax_scope`),
+  KEY `idx_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.tax_types_alpfac: ~0 rows (approximately)
+
 -- Dumping structure for table tenant_1.tax_types_ret
 CREATE TABLE IF NOT EXISTS `tax_types_ret` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -9008,11 +10392,11 @@ CREATE TABLE IF NOT EXISTS `users` (
   UNIQUE KEY `username` (`username`),
   KEY `idx_username` (`username`),
   KEY `idx_is_active` (`is_active`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستخدمون';
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='المستخدمون';
 
 -- Dumping data for table tenant_1.users: ~0 rows (approximately)
 INSERT INTO `users` (`id`, `username`, `full_name`, `email`, `password`, `role`, `is_active`, `last_login`, `created_at`, `updated_at`) VALUES
-	(1, 'admin', 'مدير النظام-مهندس منجد', 'monjed.alhasan.tr@gmail.com', '$2y$10$.5AOpMJu2MAYJlz3RTQnVONC.nMgIKfyN51QtmGWbD3cSR.DwCw12', 'admin', 1, NULL, '2026-05-20 11:57:15', '2026-05-20 12:12:27'),
+	(1, 'admin', 'مدير النظام-مهندس منجد', 'admin@fatorize.com', '$2y$10$.5AOpMJu2MAYJlz3RTQnVONC.nMgIKfyN51QtmGWbD3cSR.DwCw12', 'admin', 1, NULL, '2026-05-20 11:57:15', '2026-05-20 12:12:27'),
 	(2, 'aleppo-admin', 'محمود المسلم', '', '$2y$12$PKyb2fQeEwatMqVCqzFlxeB/TrUuhOXzCmXCOiQfyiBxWJAByJwK.', 'user', 1, NULL, '2026-05-20 11:57:15', '2026-08-24 12:12:27'),
 	(3, 'alep-admin', 'ابو يوسف', '', '$2y$12$PKyb2fQeEwatMqVCqzFlxeB/TrUuhOXzCmXCOiQfyiBxWJAByJwK.', 'user', 1, NULL, '2026-05-20 11:57:15', '2026-08-24 12:12:27');
 
@@ -9043,9 +10427,12 @@ CREATE TABLE IF NOT EXISTS `user_branches` (
   CONSTRAINT `fk_ub_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='صلاحيات المستخدم على الفروع';
 
--- Dumping data for table tenant_1.user_branches: ~0 rows (approximately)
+-- Dumping data for table tenant_1.user_branches: ~4 rows (approximately)
 INSERT INTO `user_branches` (`user_id`, `branch_id`) VALUES
-	(1, 1);
+	(1, 1),
+	(2, 1),
+	(1, 2),
+	(3, 2);
 
 -- Dumping structure for table tenant_1.user_permissions
 CREATE TABLE IF NOT EXISTS `user_permissions` (
@@ -9069,9 +10456,9 @@ CREATE TABLE IF NOT EXISTS `user_permissions` (
   KEY `idx_branch_id` (`branch_id`),
   CONSTRAINT `fk_up_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_up_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=45 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='صلاحيات كل مستخدم في كل فرع على كل قسم';
+) ENGINE=InnoDB AUTO_INCREMENT=168 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='صلاحيات كل مستخدم في كل فرع على كل قسم';
 
--- Dumping data for table tenant_1.user_permissions: ~0 rows (approximately)
+-- Dumping data for table tenant_1.user_permissions: ~166 rows (approximately)
 INSERT INTO `user_permissions` (`id`, `user_id`, `branch_id`, `module_key`, `can_view`, `can_create`, `can_edit`, `can_delete`, `can_confirm`, `can_print`, `can_export`, `granted_by`, `created_at`, `updated_at`) VALUES
 	(1, 1, 1, 'admin', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
 	(2, 1, 1, 'admin.branches', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
@@ -9116,7 +10503,129 @@ INSERT INTO `user_permissions` (`id`, `user_id`, `branch_id`, `module_key`, `can
 	(41, 1, 1, 'finance.account_settings', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-24 12:04:33', NULL),
 	(42, 1, 1, 'finance.currencies', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-24 12:24:15', NULL),
 	(43, 1, 1, 'finance.shipping_carriers', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-28 09:39:11', NULL),
-	(44, 1, 1, 'inventory.reports', 1, 0, 0, 0, 0, 1, 1, NULL, '2026-08-05 08:30:39', NULL);
+	(44, 1, 1, 'inventory.reports', 1, 0, 0, 0, 0, 1, 1, NULL, '2026-08-05 08:30:39', NULL),
+	(45, 2, 1, 'crm', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(46, 2, 1, 'crm.customers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(47, 2, 1, 'crm.customers.statement', 0, 0, 0, 0, 0, 0, 0, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(48, 2, 1, 'crm.suppliers', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(49, 2, 1, 'crm.suppliers.statement', 0, 0, 0, 0, 0, 0, 0, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(50, 2, 1, 'finance', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(51, 2, 1, 'finance.accounts', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(52, 2, 1, 'finance.expenses', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(53, 2, 1, 'finance.journal', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(54, 2, 1, 'finance.receipts', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(55, 2, 1, 'finance.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(56, 2, 1, 'inventory', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(57, 2, 1, 'inventory.movements', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(58, 2, 1, 'inventory.products', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(59, 2, 1, 'inventory.warehouse', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(60, 2, 1, 'purchases', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(62, 2, 1, 'purchases.invoices', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(63, 2, 1, 'purchases.returns', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(64, 2, 1, 'sales', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(65, 2, 1, 'sales.invoices', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(66, 2, 1, 'sales.returns', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:24:33'),
+	(67, 2, 1, 'hr', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-21 10:53:38', NULL),
+	(68, 2, 1, 'hr.employees', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(69, 2, 1, 'hr.attendance', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(70, 2, 1, 'hr.payroll', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(71, 2, 1, 'hr.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(72, 2, 1, 'expenses', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-21 10:53:38', NULL),
+	(73, 2, 1, 'inventory.consumables', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(74, 2, 1, 'expenses.consumable_entries', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:24:33'),
+	(75, 2, 1, 'hr.holidays', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-08 13:00:47', '2026-08-24 18:24:33'),
+	(76, 2, 1, 'inventory.internal_orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-11 05:52:48', '2026-08-24 18:24:33'),
+	(77, 2, 1, 'sales.customers', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-17 12:44:53', NULL),
+	(78, 2, 1, 'purchases.suppliers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-17 12:44:53', '2026-08-24 18:24:33'),
+	(79, 2, 1, 'inventory.consumable_issues', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-21 05:53:36', NULL),
+	(80, 2, 1, 'inventory.consumable_purchases', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-21 06:17:59', NULL),
+	(81, 2, 1, 'finance.account_settings', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-24 12:04:33', '2026-08-24 18:24:33'),
+	(82, 2, 1, 'finance.currencies', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-24 12:24:15', '2026-08-24 18:24:33'),
+	(83, 2, 1, 'finance.shipping_carriers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-28 09:39:11', '2026-08-24 18:24:33'),
+	(84, 2, 1, 'inventory.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-05 08:30:39', '2026-08-24 18:24:33'),
+	(85, 3, 2, 'crm', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(86, 3, 2, 'crm.customers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(87, 3, 2, 'crm.customers.statement', 0, 0, 0, 0, 0, 0, 0, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(88, 3, 2, 'crm.suppliers', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(89, 3, 2, 'crm.suppliers.statement', 0, 0, 0, 0, 0, 0, 0, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(90, 3, 2, 'finance', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(91, 3, 2, 'finance.accounts', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(92, 3, 2, 'finance.expenses', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(93, 3, 2, 'finance.journal', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(94, 3, 2, 'finance.receipts', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(95, 3, 2, 'finance.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(96, 3, 2, 'inventory', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(97, 3, 2, 'inventory.movements', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(98, 3, 2, 'inventory.products', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(99, 3, 2, 'inventory.warehouse', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(100, 3, 2, 'purchases', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(101, 3, 2, 'purchases.invoices', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(102, 3, 2, 'purchases.returns', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(103, 3, 2, 'sales', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-20 12:42:02', NULL),
+	(104, 3, 2, 'sales.invoices', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(105, 3, 2, 'sales.returns', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-20 12:42:02', '2026-08-24 18:23:54'),
+	(106, 3, 2, 'hr', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-21 10:53:38', NULL),
+	(107, 3, 2, 'hr.employees', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(108, 3, 2, 'hr.attendance', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(109, 3, 2, 'hr.payroll', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(110, 3, 2, 'hr.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(111, 3, 2, 'expenses', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-05-21 10:53:38', NULL),
+	(112, 3, 2, 'inventory.consumables', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(113, 3, 2, 'expenses.consumable_entries', 1, 1, 1, 1, 1, 1, 1, 1, '2026-05-21 10:53:38', '2026-08-24 18:23:54'),
+	(114, 3, 2, 'hr.holidays', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-08 13:00:47', '2026-08-24 18:23:54'),
+	(115, 3, 2, 'inventory.internal_orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-11 05:52:48', '2026-08-24 18:23:54'),
+	(116, 3, 2, 'sales.customers', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-17 12:44:53', NULL),
+	(117, 3, 2, 'purchases.suppliers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-17 12:44:53', '2026-08-24 18:23:54'),
+	(118, 3, 2, 'inventory.consumable_issues', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-21 05:53:36', NULL),
+	(119, 3, 2, 'inventory.consumable_purchases', 1, 1, 1, 1, 1, 1, 1, NULL, '2026-06-21 06:17:59', NULL),
+	(120, 3, 2, 'finance.account_settings', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-24 12:04:33', '2026-08-24 18:23:54'),
+	(121, 3, 2, 'finance.currencies', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-24 12:24:15', '2026-08-24 18:23:54'),
+	(122, 3, 2, 'finance.shipping_carriers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-06-28 09:39:11', '2026-08-24 18:23:54'),
+	(123, 3, 2, 'inventory.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-05 08:30:39', '2026-08-24 18:23:54'),
+	(124, 3, 2, 'admin.users', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(125, 3, 2, 'admin.permissions', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(126, 3, 2, 'admin.settings', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(127, 3, 2, 'admin.branches', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(128, 3, 2, 'production.raw_materials', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(129, 3, 2, 'production.operations', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(130, 3, 2, 'production.entries', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(131, 3, 2, 'purchases.consumable_purchases', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(132, 3, 2, 'expenses.consumable_issues', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(133, 3, 2, 'expenses.warehouse', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(134, 3, 2, 'finance.payments', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(135, 3, 2, 'expenses.consumable_transfers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(136, 3, 2, 'purchases.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(137, 3, 2, 'purchases.orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(138, 3, 2, 'sales.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(139, 3, 2, 'sales.orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(140, 3, 2, 'finance.treasury', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(141, 3, 2, 'finance.taxes', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(142, 3, 2, 'admin.section_colors', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(143, 3, 2, 'admin.opening_balances', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(144, 3, 2, 'admin.branch_add', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(145, 3, 2, 'inventory.import_products', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:23:17', '2026-08-24 18:23:54'),
+	(146, 2, 1, 'admin.users', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(147, 2, 1, 'admin.permissions', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(148, 2, 1, 'admin.settings', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(149, 2, 1, 'admin.branches', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(150, 2, 1, 'production.raw_materials', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(151, 2, 1, 'production.operations', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(152, 2, 1, 'production.entries', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(153, 2, 1, 'purchases.consumable_purchases', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(154, 2, 1, 'expenses.consumable_issues', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(155, 2, 1, 'expenses.warehouse', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(156, 2, 1, 'finance.payments', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(157, 2, 1, 'expenses.consumable_transfers', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(158, 2, 1, 'purchases.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(159, 2, 1, 'purchases.orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(160, 2, 1, 'sales.reports', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(161, 2, 1, 'sales.orders', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(162, 2, 1, 'finance.treasury', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(163, 2, 1, 'finance.taxes', 1, 1, 1, 1, 1, 1, 1, 1, '2026-08-24 18:24:33', NULL),
+	(164, 2, 1, 'admin.section_colors', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(165, 2, 1, 'admin.opening_balances', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(166, 2, 1, 'admin.branch_add', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL),
+	(167, 2, 1, 'inventory.import_products', 0, 0, 0, 0, 0, 0, 0, 1, '2026-08-24 18:24:33', NULL);
 
 -- Dumping structure for table tenant_1.user_tab_order
 CREATE TABLE IF NOT EXISTS `user_tab_order` (
@@ -9131,6 +10640,25 @@ CREATE TABLE IF NOT EXISTS `user_tab_order` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Dumping data for table tenant_1.user_tab_order: ~0 rows (approximately)
+
+-- Dumping structure for table tenant_1.warehouses_alpfac
+CREATE TABLE IF NOT EXISTS `warehouses_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `warehouse_type` enum('products','consumables','raw_materials') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'products',
+  `address` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `manager_id` int DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `code` (`code`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dumping data for table tenant_1.warehouses_alpfac: ~2 rows (approximately)
+INSERT INTO `warehouses_alpfac` (`id`, `code`, `name`, `warehouse_type`, `address`, `manager_id`, `is_active`, `created_at`) VALUES
+	(1, 'ALPFAC-WH-01', 'المستودع الرئيسي', 'products', NULL, NULL, 1, '2026-08-24 14:35:26'),
+	(2, 'ALPFAC-WH-CONS', 'مستودع المستهلكات', 'consumables', NULL, NULL, 1, '2026-08-24 14:35:26');
 
 -- Dumping structure for table tenant_1.warehouses_ret
 CREATE TABLE IF NOT EXISTS `warehouses_ret` (
@@ -9149,6 +10677,27 @@ CREATE TABLE IF NOT EXISTS `warehouses_ret` (
 -- Dumping data for table tenant_1.warehouses_ret: ~0 rows (approximately)
 INSERT INTO `warehouses_ret` (`id`, `code`, `name`, `warehouse_type`, `address`, `manager_id`, `is_active`, `created_at`) VALUES
 	(1, 'RET-WH-01', 'مستودع المنتجات الرئيسي', 'products', 'حلب السبع بحرات', NULL, 1, '2026-08-23 13:17:03');
+
+-- Dumping structure for table tenant_1.warehouse_items_alpfac
+CREATE TABLE IF NOT EXISTS `warehouse_items_alpfac` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `warehouse_id` int NOT NULL,
+  `variant_id` int NOT NULL,
+  `product_id` int NOT NULL COMMENT 'الموديل الأب — للفلترة السريعة',
+  `quantity` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `current_cost` decimal(12,4) NOT NULL DEFAULT '0.0000',
+  `min_quantity` decimal(10,2) NOT NULL DEFAULT '0.00' COMMENT 'حد التنبيه',
+  `last_movement_at` datetime DEFAULT NULL,
+  `status` enum('active','inactive') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_wh_variant` (`warehouse_id`,`variant_id`),
+  KEY `idx_variant_id` (`variant_id`),
+  KEY `idx_product_id` (`product_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='مخزون كل Variant في كل مستودع';
+
+-- Dumping data for table tenant_1.warehouse_items_alpfac: ~0 rows (approximately)
 
 -- Dumping structure for table tenant_1.warehouse_items_ret
 CREATE TABLE IF NOT EXISTS `warehouse_items_ret` (

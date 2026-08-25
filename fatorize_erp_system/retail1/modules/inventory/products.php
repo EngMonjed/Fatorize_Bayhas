@@ -73,39 +73,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         // ── جلب تفاصيل منتج للعرض ──
         if ($act === 'get_product_detail') {
             $id = (int) $_POST['id'];
-            $st = $pdo->prepare("SELECT p.*, c.name AS cat_name, sp.name AS supplier_name
+            // ⚠ حقل المورد أُلغي من هذه البطاقة (بقرار صريح) — العمود
+            // supplier_id باقٍ بالجدول لاستخدام مستقبلي محتمل، بس الـJOIN
+            // معه انشال من هون لأنه ما عاد يُعرض.
+            $st = $pdo->prepare("SELECT p.*, c.name AS cat_name
                 FROM `{$TP}` p
                 LEFT JOIN `{$TC}` c ON c.id=p.category_id
-                LEFT JOIN `product_suppliers_{$TS}` sp ON sp.id=p.supplier_id
                 WHERE p.id=?");
             $st->execute([$id]);
             $prod = $st->fetch();
             if (!$prod)
                 throw new Exception('المنتج غير موجود');
 
+            // ── كمية المخزون لكل (مقاس × لون) ──
+            // الربط عبر المتغيّر لا عبر المنتج مباشرة، تفادياً لنفس
+            // الضرب الديكارتي (fan-out) المُصلَح سابقاً بالاستعلام الرئيسي.
+            // استعلام واحد بس (مجمَّع بالمقاس واللون) بدل استعلام لكل
+            // كروب — تفادياً لمشكلة N+1.
+            $qtySt = $pdo->prepare("SELECT v.size_id, v.color_id,
+                    pc.name AS color_name, pc.hex_code,
+                    COALESCE(SUM(wi.quantity),0) AS qty
+                FROM `{$TV}` v
+                LEFT JOIN `{$TWI}` wi ON wi.variant_id = v.id
+                LEFT JOIN `{$TCL}` pc ON pc.id = v.color_id
+                WHERE v.product_id=? AND v.is_active=1
+                GROUP BY v.size_id, v.color_id, pc.name, pc.hex_code");
+            $qtySt->execute([$id]);
+            $qtyBySizeId = [];      // إجمالي كل مقاس (لمجموع الكروب)
+            $rowsBySizeId = [];     // تفصيل الألوان لكل مقاس
+            foreach ($qtySt->fetchAll() as $q) {
+                $sid = (int) $q['size_id'];
+                $qtyBySizeId[$sid] = ($qtyBySizeId[$sid] ?? 0) + (float) $q['qty'];
+                $rowsBySizeId[$sid][] = $q;
+            }
+
             // المقاسات مجمّعة بكروبات (بحسب selling_price) — ⚠ إصلاح: عمود
             // price_group غير موجود فعلياً بالجدول ولا يُملأ أبداً من
             // product_add.php/product_edit.php، فتم إسقاط الاعتماد عليه
             // نهائياً والاكتفاء بمفتاح selling_price+currency_id الموثوق.
+            // ✅ التجميع على group_key المخزَّن (مصدر الحقيقة) مع fallback
+            // للسعر للصفوف القديمة يلي المفتاح فيها لسا فاضي. هيك كروبان
+            // بنفس السعر بيضلوا منفصلين صح، وبيدعم نفس المقاس بكروبين.
             $szSt = $pdo->prepare("SELECT * FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
             $szSt->execute([$id]);
             $sizes = $szSt->fetchAll();
             $grpMap = [];
             foreach ($sizes as $s) {
-                $key = (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
+                $storedKey = trim((string) ($s['group_key'] ?? ''));
+                $key = $storedKey !== '' ? $storedKey
+                    : ((string) $s['selling_price'] . '_' . ($s['currency_id'] ?? ''));
                 if (!isset($grpMap[$key]))
                     $grpMap[$key] = [
                         'sizes' => [],
                         'selling_price' => $s['selling_price'],
                         'cost_price' => $s['cost_price'],
                         'packet_qty' => 0,
+                        'stock_qty' => 0,
+                        'colors_qty' => [],   // [color_id => {name, hex, qty}]
                         'base_currency_id' => $s['base_currency_id'] ?? null,
                         'currency_id' => $s['currency_id'] ?? null,
                         'exchange_rate' => $s['exchange_rate'] ?? 1,
                     ];
                 $grpMap[$key]['sizes'][] = $s['size'];
                 $grpMap[$key]['packet_qty'] = count($grpMap[$key]['sizes']);
+                $grpMap[$key]['stock_qty'] += $qtyBySizeId[(int) $s['id']] ?? 0;
+
+                // تجميع كميات الألوان على مستوى الكروب (جمع كل مقاساته)
+                foreach ($rowsBySizeId[(int) $s['id']] ?? [] as $cr) {
+                    $cid = (int) $cr['color_id'];
+                    if (!$cid) continue;
+                    if (!isset($grpMap[$key]['colors_qty'][$cid])) {
+                        $grpMap[$key]['colors_qty'][$cid] = [
+                            'name' => $cr['color_name'] ?? '—',
+                            'hex' => $cr['hex_code'] ?? '#cccccc',
+                            'qty' => 0,
+                        ];
+                    }
+                    $grpMap[$key]['colors_qty'][$cid]['qty'] += (float) $cr['qty'];
+                }
             }
+            // تحويل خريطة الألوان لمصفوفة مرتّبة (الأكثر كمية أولاً)
+            foreach ($grpMap as &$g) {
+                $g['colors_qty'] = array_values($g['colors_qty']);
+                usort($g['colors_qty'], fn($a, $b) => $b['qty'] <=> $a['qty']);
+            }
+            unset($g);
             $prod['groups'] = array_values($grpMap);
             // عملة الفرع الحالية + خريطة العملات لحساب القيمة الحية بالواجهة
             $prod['current_base_currency_id'] = (int) $branchCurRow['id'];
@@ -966,11 +1018,14 @@ $catColors = [
                                 $maxSell = null;
                                 $priceCurInfo = null; // بيانات العملة المرتبطة بأقل سعر
                                 try {
-                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
+                                    $szSt = $pdo->prepare("SELECT size, selling_price, base_currency_id, currency_id, exchange_rate, group_key FROM `{$TSZ}` WHERE product_id=? AND is_active=1 ORDER BY sort_order");
                                     $szSt->execute([$prod['id']]);
                                     $pSizes = $szSt->fetchAll();
                                     foreach ($pSizes as $s) {
-                                        $k = (string) $s['selling_price'] . '_' . ($s['currency_id'] ?? '');
+                                        // ✅ نفس منطق التجميع المعتمد: group_key المخزَّن أولاً
+                                        $storedK = trim((string) ($s['group_key'] ?? ''));
+                                        $k = $storedK !== '' ? $storedK
+                                            : ((string) $s['selling_price'] . '_' . ($s['currency_id'] ?? ''));
                                         $grps[$k][] = $s['size'];
                                         $sp = (float) $s['selling_price'];
                                         if ($minSell === null || $sp < $minSell) {
@@ -1774,6 +1829,9 @@ $catColors = [
                             الكروب ${i + 1}
                         </span>
                         <span style="font-size:.74rem;color:#64748b">${g.sizes.length} قطعة بالباكيت</span>
+                        <span style="font-size:.74rem;font-weight:700;color:${(g.stock_qty || 0) > 0 ? '#16a34a' : '#dc2626'}">
+                            <i class="bi bi-box-seam me-1"></i>${g.stock_qty || 0} بالمخزون
+                        </span>
                         <div style="margin-right:auto;text-align:left">
                             <div style="font-size:.8rem;font-weight:700;color:#1e293b">
                                 ${sellVal.toFixed(2)} ${recCur.symbol}
@@ -1784,6 +1842,15 @@ $catColors = [
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-1">${szTags}</div>
+                    ${(g.colors_qty && g.colors_qty.length) ? `
+                        <div class="d-flex flex-wrap gap-2 mt-2 pt-2" style="border-top:1px dashed #e2e8f0">
+                            ${g.colors_qty.map(c => `
+                                <span class="d-flex align-items-center gap-1" style="font-size:.72rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:2px 8px">
+                                    <span style="width:10px;height:10px;border-radius:50%;background:${c.hex};border:1px solid rgba(0,0,0,.12);flex-shrink:0"></span>
+                                    <span style="color:#475569">${c.name}</span>
+                                    <b style="color:${c.qty > 0 ? '#16a34a' : '#dc2626'}">${c.qty}</b>
+                                </span>`).join('')}
+                        </div>` : ''}
                 </div>`;
                     }).join('') || '<div class="text-muted" style="font-size:.78rem">لا توجد قياسات</div>';
 
@@ -1804,7 +1871,6 @@ $catColors = [
                   <div class="det-sec-body">
                     <div class="det-row"><span>الفئة</span><span>${p.cat_name || '—'}</span></div>
                     <div class="det-row"><span>الخامة</span><span>${p.fabric_type || '—'}</span></div>
-                    <div class="det-row"><span>المورد</span><span>${p.supplier_name || '—'}</span></div>
                     <div class="det-row"><span>المخزون الكلي</span>
                       <span style="font-weight:700;color:${p.total_qty > p.min_qty ? '#16a34a' : p.total_qty > 0 ? '#d97706' : '#dc2626'}">
                         ${p.total_qty} قطعة

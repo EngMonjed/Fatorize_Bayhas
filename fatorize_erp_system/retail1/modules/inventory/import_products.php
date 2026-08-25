@@ -122,6 +122,18 @@ function parseCsvRows(string $tmpPath): array
         $header = fgetcsv($h);
         if ($header === false) { fclose($h); return []; }
         $header = array_map(fn($c) => trim(strtolower($c)), $header);
+
+        // ✅ أسماء أعمدة بديلة مقبولة — بدل ما نرجع نصلح كل مرة اسم
+        // مختلف شوي (صار مرتين: supplie_id/supplier، category_id/category)
+        $aliases = [
+            'category_id'  => 'category',
+            'supplier_id'  => 'supplier',
+            'supplie_id'   => 'supplier',
+            'warehouse'    => 'warehouse_code',
+            'qty'          => 'quantity',
+        ];
+        $header = array_map(fn($c) => $aliases[$c] ?? $c, $header);
+
         while (($line = fgetcsv($h)) !== false) {
             if (count($line) === 1 && trim($line[0]) === '') continue; // سطر فاضي
             $row = [];
@@ -167,7 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // بيانات مرجعية للتحقق
             $existingModels = $pdo->query("SELECT model_number FROM `{$TP}`")->fetchAll(PDO::FETCH_COLUMN);
             $existingWarehouses = $pdo->query("SELECT code FROM `{$TW}` WHERE is_active=1")->fetchAll(PDO::FETCH_COLUMN);
-            $seenBarcodes = [];
 
             // ✅ كشف مسبق: نفس (موديل, مقاس, نوع القياس) بسعر بيع مختلف
             // بأسطر مختلفة — بما إنه product_sizes عندها قيد فريد على
@@ -184,6 +195,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $conflictKeys = [];
             foreach ($priceByKey as $key => $prices) {
                 if (count($prices) > 1) $conflictKeys[$key] = array_keys($prices);
+            }
+
+            // ✅ كشف تعارض باركود حقيقي — الباركود المفروض يتكرر عمداً
+            // لكل مقاسات نفس (الكروب × اللون)، فهاد مو خطأ. الخطأ الحقيقي
+            // بس لو **نفس الباركود** انحط لـ**كروب/لون مختلف** بالغلط.
+            $barcodeToGroups = [];
+            foreach ($rows as $row) {
+                if (empty($row['barcode'])) continue;
+                $grpVal = !empty($row['group_no'])
+                    ? "g_{$row['model_number']}_{$row['group_no']}"
+                    : "g_{$row['selling_price']}_{$row['packet_qty']}";
+                $identity = ($row['model_number'] ?? '') . '|' . $grpVal . '|' . ($row['color'] ?? '');
+                $barcodeToGroups[$row['barcode']][$identity] = true;
+            }
+            $barcodeConflicts = [];
+            foreach ($barcodeToGroups as $bc => $groups) {
+                if (count($groups) > 1) $barcodeConflicts[$bc] = true;
             }
 
             $preview = [];
@@ -227,9 +255,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         if (!$catRow) $warnings[] = "فئة جديدة ستُنشأ: '{$row['category']}'";
                     }
                 }
-                if (!empty($row['barcode'])) {
-                    if (isset($seenBarcodes[$row['barcode']])) $errors[] = 'باركود مكرر بنفس الملف';
-                    $seenBarcodes[$row['barcode']] = true;
+                // ✅ المورد: يدعم ID رقمي أو اسم نصي — بعكس الفئة، ما بننشئ
+                // مورد جديد أبداً بالاستيراد (مورد جديد لازم ينضاف يدوياً
+                // من suppliers.php — بيانات إضافية وحساب محاسبي تلقائي)،
+                // فأي مورد غير موجود = خطأ يمنع الاستيراد، سواء ID أو اسم
+                if (!empty($row['supplier'])) {
+                    $supRow = resolveByIdOrName($pdo, $TSUP, $row['supplier'], 'name');
+                    if (!$supRow) {
+                        $errors[] = ctype_digit($row['supplier'])
+                            ? "مورد رقم '{$row['supplier']}' غير موجود"
+                            : "مورد '{$row['supplier']}' غير موجود — أضفه أول من صفحة إدارة الموردين";
+                    }
+                }
+                if (!empty($row['barcode']) && isset($barcodeConflicts[$row['barcode']])) {
+                    $errors[] = "باركود '{$row['barcode']}' مستخدَم لأكتر من كروب/لون مختلف بالملف — لازم يكون فريد لكل كروب×لون";
                 }
                 if (!empty($row['quantity']) && (float)$row['quantity'] > 0 && $openingLocked) {
                     $errors[] = 'الأرصدة الافتتاحية مقفولة لهذا الفرع — الكمية لن تُستورد';
@@ -313,21 +352,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         // لو رقم ID ومالقيناه: بيضل NULL — الصف أصلاً كان محظور بالمعاينة
                     }
 
+                    // ✅ المورد — بطلب صريح، بالاستيراد بس (product_add.php
+                    // العادية عمداً ما بتحفظ supplier_id — راجع القرار
+                    // المعماري بتعليقات §١ تحت؛ الاستيراد استثناء واعٍ)
+                    $supplierId = null;
+                    if (!empty($row['supplier'])) {
+                        $supRow = resolveByIdOrName($pdo, $TSUP, $row['supplier'], 'name');
+                        $supplierId = $supRow['id'] ?? null;
+                        // ⚠ ما ننشئ مورد جديد بالاستيراد (بعكس الفئة) —
+                        // مورد غير موجود لازم ينضاف يدوياً من suppliers.php
+                        // أول (فيها بيانات إضافية: هاتف، حساب محاسبي تلقائي...)
+                    }
+
                     if (!$pid) {
-                        // ⚠ supplier_id عمداً غير مُدرَج — راجع القرار
-                        // المعماري بـproduct_add.php (منتج واحد ما بينحصر
-                        // بمورد واحد)
-                        $pdo->prepare("INSERT INTO `{$TP}` (model_number, name, category_id, is_active, created_by, created_at)
-                            VALUES (?,?,?,1,?,NOW())")
-                            ->execute([$modelNo, $row['product_name'], $categoryId, $_SESSION['user_id']]);
+                        // ✅ supplier_id مُدرَج هلق بطلب صريح — استثناء واعٍ
+                        // عن سلوك product_add.php العادي (راجع الملاحظة فوق)
+                        $pdo->prepare("INSERT INTO `{$TP}` (model_number, name, category_id, supplier_id, is_active, created_by, created_at)
+                            VALUES (?,?,?,?,1,?,NOW())")
+                            ->execute([$modelNo, $row['product_name'], $categoryId, $supplierId, $_SESSION['user_id']]);
                         $pid = (int) $pdo->lastInsertId();
                         $created['products']++;
-                    } elseif ($categoryId !== null) {
-                        // ✅ منتج موجود أصلاً — حدّث category_id بس لو
-                        // الملف بيوفّر قيمة فعلية (ما نمسح فئة موجودة صح
-                        // بقيمة فاضية بالغلط)
-                        $pdo->prepare("UPDATE `{$TP}` SET category_id = ? WHERE id = ? AND category_id IS NULL")
-                            ->execute([$categoryId, $pid]);
+                    } else {
+                        // ✅ منتج موجود أصلاً — حدّث category_id/supplier_id
+                        // بس لو الملف بيوفّر قيمة فعلية ولسا فاضيين (ما
+                        // نمسح قيمة موجودة صح بقيمة فاضية بالغلط)
+                        if ($categoryId !== null) {
+                            $pdo->prepare("UPDATE `{$TP}` SET category_id = ? WHERE id = ? AND category_id IS NULL")
+                                ->execute([$categoryId, $pid]);
+                        }
+                        if ($supplierId !== null) {
+                            $pdo->prepare("UPDATE `{$TP}` SET supplier_id = ? WHERE id = ? AND supplier_id IS NULL")
+                                ->execute([$supplierId, $pid]);
+                        }
                     }
                     $productCache[$modelNo] = $pid;
                 }
@@ -526,8 +582,8 @@ require_once __DIR__ . '/../../../includes/breadcrumb.php';
     <div class="table-card p-3 mb-3">
         <h6 class="fw-bold mb-2"><i class="bi bi-info-circle me-1"></i>صيغة الملف المطلوبة (CSV)</h6>
         <p class="small text-muted mb-2">سطر واحد لكل متغيّر (مقاس×لون). نفس <code>model_number</code> بعدة أسطر = نفس المنتج.</p>
-        <code style="font-size:.72rem;word-break:break-all">model_number,product_name,category,size,age_type,selling_price,cost_price,packet_qty,color,barcode,warehouse_code,quantity</code>
-        <p class="small text-muted mt-2 mb-0">⚠ ما في عمود مورد — منتج واحد ما بينحصر بمورد واحد (نفس قرار صفحة "إضافة منتج" الحقيقية بالنظام).</p>
+        <code style="font-size:.72rem;word-break:break-all">model_number,product_name,category,supplier,size,age_type,selling_price,cost_price,packet_qty,group_no,color,barcode,warehouse_code,quantity</code>
+        <p class="small text-muted mt-2 mb-0">⚠ <code>supplier</code>: ID أو اسم — لازم يكون المورد موجود أصلاً بصفحة "إدارة الموردين" (ما بينشئ مورد جديد تلقائياً، بعكس الفئة). ملاحظة: صفحة "إضافة منتج" العادية ما بتحفظ مورد للمنتج بنفس الطريقة — الاستيراد استثناء بطلب صريح.</p>
         <div class="mt-2 small">
             <strong>المستودعات المتاحة:</strong>
             <?php foreach ($warehouses as $w): ?>
@@ -554,7 +610,7 @@ require_once __DIR__ . '/../../../includes/breadcrumb.php';
             <div style="overflow-x:auto;max-height:500px">
                 <table class="table table-sm preview-tbl mb-0">
                     <thead><tr>
-                        <th>#</th><th>الموديل</th><th>الاسم</th><th>مقاس</th><th>لون</th>
+                        <th>#</th><th>الموديل</th><th>الاسم</th><th>الفئة</th><th>المورد</th><th>مقاس</th><th>لون</th><th>باركود</th>
                         <th>سعر بيع</th><th>تكلفة</th><th>مستودع</th><th>كمية</th><th>ملاحظات</th>
                     </tr></thead>
                     <tbody id="previewBody"></tbody>
@@ -630,8 +686,11 @@ function renderPreview(preview, total, valid, colorMerges) {
             <td>${item.row}</td>
             <td>${d.model_number || ''} ${item.is_new_product ? '<span class="badge bg-info">جديد</span>' : ''}</td>
             <td>${d.product_name || ''}</td>
+            <td>${d.category || '-'}</td>
+            <td>${d.supplier || '-'}</td>
             <td>${d.size || ''}</td>
             <td>${d.color || '-'}</td>
+            <td>${d.barcode ? d.barcode : '<span class="text-muted">تلقائي</span>'}</td>
             <td>${d.selling_price || ''}</td>
             <td>${d.cost_price || '-'}</td>
             <td>${d.warehouse_code || '-'}</td>

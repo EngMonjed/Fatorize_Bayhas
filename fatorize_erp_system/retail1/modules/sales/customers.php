@@ -64,24 +64,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             //   المخزون والقيود المحاسبية فعلياً) — هاي "المبيعات الحقيقية".
             // - draft_cnt: عدد المسودات فقط (بدون مجموع مبلغ — مسودة لسا
             //   مش مستند مالي فعلي، مجموعها المالي مش له معنى محاسبي).
-            // - balance_base: يبقى مقصور على المؤكدة + pending/partial فقط
-            //   (نفس الإصلاح السابق).
             //
-            // ⚠ total_amount مخزّن بعملة كل فاتورة (currency_id) مو بعملة
-            // الفرع مباشرة، فلازم نحوّله لعملة الفرع قبل الجمع:
-            // total_amount ÷ exchange_rate (نفس اتفاقية invoice_new.php).
-            // الفواتير القديمة (قبل إضافة العملة) عندها exchange_rate=1
-            // افتراضياً، فالتحويل ما بيأثر عليها إطلاقاً.
+            // ⚠⚠ إصلاح جذري: "المستحق" ما عاد يُحسب بجمع فواتير غير
+            // مسدَّدة من جدول sales_invoices فقط — هالطريقة كانت تتجاهل
+            // كلياً أي رصيد افتتاحي أو قيد يدوي مباشر بحساب ذمة العميل
+            // (مثال حقيقي: عميل بصفر فواتير، بس عنده ٣٠$ رصيد افتتاحي
+            // بشجرة الحسابات — كانت "المستحق" تطلع صفر رغم إنه فعلياً
+            // مدين). الصح: "المستحق" = نفس رصيد حساب الذمة الحي مباشرة
+            // (rec_base_balance، مجلوب أصلاً بالاستعلام فوق) — مصدر
+            // الحقيقة الوحيد، يشمل الفواتير + الرصيد الافتتاحي + أي قيد
+            // يدوي، بلا استثناء.
+            //
+            // ⚠ إصلاح ثانوي منفصل: total_amount صار بعملة الفرع مباشرة
+            // (بعد قرار "عملة الفرع بالهيدر")، فالقسمة القديمة على
+            // exchange_rate كانت خاطئة — حتى لو ما ظهرت هون لأنها كانت
+            // بالعادة تُضرب بصفر.
             $stats = $pdo->prepare("SELECT
                 COUNT(CASE WHEN status='confirmed' THEN 1 END) AS confirmed_cnt,
                 COUNT(CASE WHEN status='draft' THEN 1 END) AS draft_cnt,
-                COALESCE(SUM(CASE WHEN status='confirmed'
-                    THEN total_amount / NULLIF(exchange_rate,0) END),0) AS confirmed_total_base,
-                COALESCE(SUM(CASE WHEN payment_status IN ('pending','partial') AND status='confirmed'
-                    THEN total_amount / NULLIF(exchange_rate,0) END),0) AS balance_base
+                COALESCE(SUM(CASE WHEN status='confirmed' THEN total_amount END),0) AS confirmed_total_base
                 FROM `{$TSI}` WHERE customer_id=? AND status!='cancelled'");
             $stats->execute([$id]);
             $cust['stats'] = $stats->fetch();
+            // المستحق = رصيد حساب الذمة الحي مباشرة (مصدر الحقيقة
+            // الوحيد) — لا حساب منفصل من الفواتير.
+            $cust['stats']['balance_base'] = (float) ($cust['rec_base_balance'] ?? 0);
             echo json_encode(['ok' => true, 'data' => $cust]);
         } elseif ($act === 'save_customer') {
             $id = (int) ($_POST['id'] ?? 0);
@@ -235,14 +242,12 @@ if ($statusF) {
 }
 
 $stmt = $pdo->prepare("SELECT c.*,
-    rec.code AS rec_code, rec.name AS rec_name,
+    rec.code AS rec_code, rec.name AS rec_name, rec.base_balance AS rec_base_balance,
     adv.code AS adv_code, adv.name AS adv_name,
     COUNT(DISTINCT CASE WHEN si.status='confirmed' THEN si.id END) AS confirmed_cnt,
     COUNT(DISTINCT CASE WHEN si.status='draft' THEN si.id END) AS draft_cnt,
     COALESCE(SUM(CASE WHEN si.status='confirmed'
-        THEN si.total_amount / NULLIF(si.exchange_rate,0) END),0) AS total_base,
-    COALESCE(SUM(CASE WHEN si.payment_status IN ('pending','partial') AND si.status='confirmed'
-        THEN si.total_amount / NULLIF(si.exchange_rate,0) END),0) AS balance_base
+        THEN si.total_amount END),0) AS total_base
     FROM `{$TC}` c
     LEFT JOIN `{$TAC}` rec ON rec.id=c.account_id
     LEFT JOIN `{$TAC}` adv ON adv.id=c.prepaid_account_id
@@ -251,6 +256,12 @@ $stmt = $pdo->prepare("SELECT c.*,
     GROUP BY c.id ORDER BY c.name");
 $stmt->execute($params);
 $customers = $stmt->fetchAll();
+// ⚠ المستحق = رصيد حساب الذمة الحي مباشرة (مصدر الحقيقة الوحيد) — نفس
+// إصلاح get_customer أعلاه، بلا حساب منفصل من الفواتير فقط.
+foreach ($customers as &$c) {
+    $c['balance_base'] = (float) ($c['rec_base_balance'] ?? 0);
+}
+unset($c);
 
 // حسابات الذمم (asset — ذمة العميل هي أصل بالنسبة إلنا) وحسابات
 // الدفعات المقدمة من العملاء (liability — دفعة مقدّمة منهم علينا
