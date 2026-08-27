@@ -267,8 +267,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $netPrice = isset($r['net_price']) && $r['net_price'] !== ''
                         ? (float) $r['net_price']
                         : $defaultPr;
-                    $discValuePerUnit = max(0, $defaultPr - $netPrice);
-                    $discPctForRecord = $defaultPr > 0 ? round($discValuePerUnit / $defaultPr * 100, 4) : 0;
+                    // ⚠ قيمة الفارق = تكلفة−بيع (سالب=ربح، موجب=خسارة) —
+                    // بلا Math.max، تقبل الإشارتين (بيع بخسارة قرار تجاري
+                    // صريح، مو خطأ إدخال).
+                    $discValuePerUnit = $defaultPr - $netPrice;
+                    // نسبة الفارق = (بيع−تكلفة)÷تكلفة×100 — عكس إشارة
+                    // القيمة أعلاه بالتصميم (موجبة=ربح).
+                    $discPctForRecord = $defaultPr > 0 ? round(($netPrice - $defaultPr) / $defaultPr * 100, 4) : 0;
                     $variantIds = array_values(array_filter(array_map('intval',
                         $r['variant_ids'] ?? [$r['variant_id'] ?? 0])));
                     $variantCount = count($variantIds);
@@ -350,18 +355,19 @@ $stExItems = $pdo->prepare("
 $stExItems->execute([$invId]);
 $exItemsRaw = $stExItems->fetchAll(PDO::FETCH_ASSOC);
 
-// ⚠ نظام التسعير الثلاثي (default_price/discount_value/net_price) +
-// packet_qty الحقيقي — مطابق لمنطق purchases/invoice_edit.php المرجعي
-// بالضبط، بس selling_price بدل cost_price. السعر الافتراضي هون **تاريخي**
-// (مُعاد بناؤه من unit_price_base_currency وdiscount_percentage المحفوظين
-// فعلياً وقت الإنشاء الأصلي) — لا يُعاد جلبه حياً من الكتالوج الحالي،
-// حتى لو تغيّر سعر المنتج منذ الفاتورة الأصلية.
+// ⚠ نظام "سعر تكلفة ثابت + سعر بيع حر + فارق ربح/خسارة" — السعر
+// التاريخي هون مُعاد بناؤه من unit_price_base_currency (=سعر البيع
+// الفعلي وقت الإنشاء) وdiscount_percentage (=نسبة الفارق المخزَّنة،
+// موجبة=ربح/سالبة=خسارة)، مو من الكتالوج الحي اليوم — حتى لو تغيّرت
+// تكلفة المنتج منذ الفاتورة الأصلية.
+// الصيغة: نسبة الفارق% = (بيع−تكلفة)÷تكلفة×100 ⇒ تكلفة = بيع÷(1+نسبة/100)
 $existingLineGroups = [];
 foreach ($exItemsRaw as $it) {
     $ageType = $it['age_type'] ?: 'سنة';
-    $netPrice = (float) $it['unit_price_base_currency'];
-    $discPctRow = (float) ($it['discount_percentage'] ?? 0);
-    $defaultPr = $discPctRow > 0 ? round($netPrice / (1 - $discPctRow / 100), 4) : $netPrice;
+    $netPrice = (float) $it['unit_price_base_currency']; // سعر البيع الفعلي وقت الإنشاء
+    $variancePctRow = (float) ($it['discount_percentage'] ?? 0);
+    $divisor = 1 + ($variancePctRow / 100);
+    $defaultPr = abs($divisor) > 0.0001 ? round($netPrice / $divisor, 4) : $netPrice;
     $key = $it['product_id'] . '_' . ($it['color_id'] ?: 0) . '_' . number_format($defaultPr, 4, '.', '');
     if (!isset($existingLineGroups[$key])) {
         $existingLineGroups[$key] = [
@@ -377,9 +383,9 @@ foreach ($exItemsRaw as $it) {
             'sizes' => [],
             'packet_qty' => (int) ($it['packet_qty'] ?? 1),
             'qty' => (float) $it['quantity'], // نفس القيمة على كل مقاسات الخط (موحَّدة)
-            'default_price' => $defaultPr,     // تاريخي — من الفاتورة الأصلية
-            'net_price' => $netPrice,
-            'discount_value' => round($defaultPr - $netPrice, 4),
+            'default_price' => $defaultPr,     // سعر التكلفة — تاريخي، من الفاتورة الأصلية
+            'net_price' => $netPrice,          // سعر البيع الفعلي
+            'variance_value' => round($defaultPr - $netPrice, 4), // موجب=خسارة، سالب=ربح
             'variants' => [],
         ];
     }
@@ -861,21 +867,21 @@ $existingTaxPct = $afterDisc > 0
                                             <th style="width:24px">#</th>
                                             <th>بيان المنتج</th>
                                             <th>الموديل</th>
-                                            <th>الكروب / القياس</th>
+                                            <th>القياس</th>
                                             <th class="text-center">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
                                             <th class="text-center">عدد الكروبات</th>
                                             <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر البيع الافتراضي</th>
-                                            <th class="text-center">قيمة الخصم الإفرادي</th>
-                                            <th class="text-center">سعر البيع بعد الخصم</th>
+                                            <th class="text-center">سعر التكلفة</th>
+                                            <th class="text-center">سعر البيع</th>
+                                            <th class="text-center">نسبة الفارق</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="linesBody">
                                         <tr id="emptyRow">
-                                            <td colspan="9" class="text-center text-muted py-4" style="font-size:.8rem">
+                                            <td colspan="13" class="text-center text-muted py-4" style="font-size:.8rem">
                                                 <i class="bi bi-barcode d-block mb-2"
                                                     style="font-size:1.5rem;opacity:.3"></i>
                                                 امسح باركود أو ابحث عن منتج
@@ -899,7 +905,11 @@ $existingTaxPct = $afterDisc > 0
                                         id="sumLines">0</span></div>
                                 <div class="tot-row"><span style="color:#64748b">إجمالي الكروبات</span><span id="sumQty"
                                         class="n">0</span></div>
-                                <div class="tot-row"><span style="color:#64748b">المجموع</span><span id="sumSubtotal"
+                                <div class="tot-row"><span style="color:#64748b">المبلغ الصافي <small>(بدون خصومات أو زيادات)</small></span><span id="sumSubtotal"
+                                        class="n">0.00</span></div>
+                                <div class="tot-row"><span style="color:#64748b">مجموع قيمة الفوارق <small>(سالب أو موجب)</small></span><span id="sumVariance"
+                                        class="n">-0.00</span></div>
+                                <div class="tot-row" style="font-weight:600"><span style="color:#334155">المبلغ بعد الفوارق</span><span id="sumAfterVariance"
                                         class="n">0.00</span></div>
                                 <div class="tot-row">
                                     <span style="color:#64748b">
@@ -910,6 +920,8 @@ $existingTaxPct = $afterDisc > 0
                                     </span>
                                     <span id="sumDisc" class="n text-danger">-0.00</span>
                                 </div>
+                                <div class="tot-row" style="font-weight:600"><span style="color:#334155">المبلغ الصافي بعد الخصوم والفوارق</span><span id="sumAfterAllDisc"
+                                        class="n">0.00</span></div>
                                 <div class="tot-row">
                                     <span style="color:#64748b">
                                         ضريبة %
@@ -1203,7 +1215,6 @@ $existingTaxPct = $afterDisc > 0
                 const grpIdx = prodGrp[r.product_id][`${r.selling_price}_${r.age_type || 'سنة'}`] || 0;
                 const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
                 const grpBadge = `<span class="grp-badge" style="background:${bg};color:${clr};border-color:${br}">كروب ${grpIdx + 1}</span>`;
-                const colorDot = r.color_hex ? `<span class="clr-dot" style="background:${r.color_hex};margin-left:4px"></span>` : '';
                 const sizesStr = r.sizes.join(' · ') + ` <span style="font-size:.68rem;color:#94a3b8">${r.age_type || ''}</span>`;
                 html += `<tr id="selrow_${r.key.replace(/[^a-z0-9]/gi, '_')}" onclick="toggleSelRow(this,'${r.key}')">
             <td><input type="checkbox" class="sel-chk" data-key="${r.key}" onchange="onSelChk(this)" onclick="event.stopPropagation()"></td>
@@ -1211,7 +1222,7 @@ $existingTaxPct = $afterDisc > 0
             <td><div class="fw-600" style="font-size:.8rem">${r.product_name}</div></td>
             <td>${grpBadge}</td>
             <td style="font-size:.8rem;font-weight:600">${sizesStr}</td>
-            <td><div class="d-flex align-items-center">${colorDot}<span style="font-size:.78rem">${r.color_name || '—'}</span></div></td>
+            <td><span style="font-size:.78rem">${r.color_name || '—'}</span></td>
             <td style="width:110px">
                 <input type="number" class="sel-price" data-key="${r.key}" min="0" step="0.0001" dir="ltr"
                     value="${(parseFloat(r.selling_price || 0) * exRate).toFixed(4)}"
@@ -1254,11 +1265,15 @@ $existingTaxPct = $afterDisc > 0
                 // يلغي ترقيع "net_price = pr بعد الإضافة" السابق):
                 // pr هو السعر كما راجعه/عدّله المستخدم بالمودال بعملة
                 // الفاتورة الحالية. نحوّله هون لعملة الفرع (المرجع الثابت)
-                // ونمرّره كـcost_base_direct — addLine() بتقرأه كسعر
+                // ونمرّره كـsell_price_direct — addLine() بتقرأه كسعر بيع
                 // افتراضي مباشرة (بدل الاعتماد على selling_price الخام).
-                const costBaseDirect = exRate > 0 ? pr / exRate : pr;
+                // ⚠ بعد التحول لنظام "سعر تكلفة ثابت + سعر بيع حر"،
+                // السعر المُراجَع بالمودال (pr) يمثّل سعر البيع
+                // (net_price) — سعر التكلفة (default_price) يجي حصراً
+                // من الكتالوج (rowDef.cost_price)، ما يتعدَّل هون إطلاقاً.
+                const sellPriceDirect = exRate > 0 ? pr / exRate : pr;
                 rowDef.variants.forEach((v, vi) => {
-                    const lineItem = { ...v, cost_base_direct: costBaseDirect, selling_price: rowDef.selling_price };
+                    const lineItem = { ...v, sell_price_direct: sellPriceDirect, selling_price: rowDef.selling_price, cost_price: rowDef.cost_price };
                     if (vi === 0) addLine(lineItem);
                     else mergeVariant(lineItem);
                     added++;
@@ -1289,15 +1304,15 @@ $existingTaxPct = $afterDisc > 0
             const exist = lines.find(l => l.grp_key === gk);
             if (exist) { exist.qty++; const row = document.getElementById(exist.row_id); if (row) { row.querySelector('.q-input').value = exist.qty; recalcLine(exist, row); } calcTotals(); toast('تمت زيادة الكمية'); return; }
 
-            // ⚠ نظام تسعير ٣ مستويات (مطابق حرفياً لـinvoice_new.php):
-            // سعر افتراضي (قراءة فقط، من الكتالوج) → قيمة خصم (محسوبة
-            // تلقائياً) → سعر صافي (تحريري). مصدران محتملان للسعر
-            // الافتراضي: cost_base_direct (من مودال الاختيار المتعدد —
-            // المستخدم راجع/عدّل السعر، وconfirmSelection() سبق حوّله
-            // لعملة الفرع) أو selling_price مباشرة (المطابقة بالباركود).
-            const defaultPrice = item.cost_base_direct !== undefined
-                ? parseFloat(item.cost_base_direct) || 0
-                : parseFloat(item.selling_price || 0);
+            // ⚠ سعر التكلفة (default_price) ثابت حصراً من الكتالوج
+            // (product_sizes.cost_price) — لا يتعدَّل عبر أي مسار.
+            // سعر البيع (net_price) يبدأ من sell_price_direct (لو
+            // المستخدم راجع/عدّل بمودال الاختيار)، وإلا selling_price
+            // كاقتراح ابتدائي.
+            const costBase = parseFloat(item.cost_price || 0);
+            const sellStart = item.sell_price_direct !== undefined
+                ? parseFloat(item.sell_price_direct) || 0
+                : parseFloat(item.selling_price || item.cost_price || 0);
             const idx = lines.length;
             const line = {
                 grp_key: gk, row_id: 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_'),
@@ -1309,9 +1324,10 @@ $existingTaxPct = $afterDisc > 0
                 sizes: [item.size || ''],
                 packet_qty: parseFloat(item.packet_qty) || 1,
                 qty: 1,
-                default_price: defaultPrice,
-                discount_value: 0,
-                net_price: defaultPrice,
+                default_price: costBase,
+                variance_value: 0,
+                variance_pct: 0,
+                net_price: sellStart,
                 piece_count: 0,
                 total: 0,
             };
@@ -1324,7 +1340,6 @@ $existingTaxPct = $afterDisc > 0
             const grpIdx = pricesForProd.indexOf(line.group_key);
             const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
             const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>`;
-            const colorDot = line.color_hex ? `<span class="clr-dot" style="background:${line.color_hex}"></span>` : '';
 
             const tbody = document.getElementById('linesBody');
             const tr = document.createElement('tr');
@@ -1340,19 +1355,17 @@ $existingTaxPct = $afterDisc > 0
             <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
                 title="من إعدادات المنتج — للقراءة فقط">
         </td>
-        <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${line.color_name || '—'}</span></div></td>
+        <td><span>${line.color_name || '—'}</span></td>
         <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
         <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
         <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
             value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
-            title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-        <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-            value="0" dir="ltr" readonly
-            title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+            title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
         <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
             value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
             onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
         <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
@@ -1381,8 +1394,8 @@ $existingTaxPct = $afterDisc > 0
             const line = lines.find(l => l.grp_key === gk);
             if (!line) return;
             if (field === 'qty') line.qty = Math.max(0.001, parseFloat(val) || 0);
-            // ⚠ سعر البيع الافتراضي وقيمة الخصم مقفلان — الحقل الوحيد
-            // يلي بيغيّر الخصم هو سعر البيع بعد الخصم نفسه.
+            // ⚠ سعر التكلفة ثابت (readonly) — سعر البيع يقبل أي قيمة
+            // موجبة (حتى لو أقل من التكلفة — بيع بخسارة قرار تجاري صريح).
             if (field === 'net_price') line.net_price = Math.max(0, parseFloat(val) || 0);
             const row = document.getElementById(line.row_id);
             recalcLine(line, row);
@@ -1390,16 +1403,27 @@ $existingTaxPct = $afterDisc > 0
         }
 
         function recalcLine(line, row) {
-            line.discount_value = Math.max(0, line.default_price - (line.net_price || 0));
-            // ⚠ عدد المنتجات = عدد الكروبات × عدد القطع بالباكيت فقط —
-            // الكمية الحقيقية يلي بتُحفظ بعمود quantity لكل متغيّر بمفرده.
+            // ⚠ قيمة الفارق = سعر التكلفة − سعر البيع — سالبة لما نبيع
+            // فوق التكلفة (ربح)، موجبة لما نبيع تحت التكلفة (خسارة).
+            line.variance_value = (line.default_price || 0) - (line.net_price || 0);
+            // ⚠ نسبة الفارق = (بيع−تكلفة)÷تكلفة×100 — موجبة=ربح (عكس
+            // إشارة القيمة أعلاه بالتصميم).
+            line.variance_pct = (line.default_price || 0) > 0
+                ? ((line.net_price || 0) - line.default_price) / line.default_price * 100
+                : 0;
+
             line.piece_count = (line.qty || 0) * (line.packet_qty || 1);
             line.total = line.piece_count * line.net_price;
 
             if (row) {
                 row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
-                row.querySelector('.dv-input').value = (line.discount_value || 0).toFixed(2);
                 row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
+                const vpLbl = row.querySelector('.vp-lbl');
+                if (vpLbl) {
+                    const pct = line.variance_pct || 0;
+                    vpLbl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(4) + '%';
+                    vpLbl.style.color = pct > 0 ? '#16a34a' : (pct < 0 ? '#dc2626' : '#64748b');
+                }
                 row.querySelector('.t-input').value = line.total > 0 ? line.total.toFixed(2) : '';
             }
         }
@@ -1416,22 +1440,28 @@ $existingTaxPct = $afterDisc > 0
         // ── الإجماليات — عملة الفرع فقط (مصدر الحقيقة الوحيد) ──
         function calcTotals() {
             const totalLines = lines.reduce((s, l) => s + (l.qty || 0), 0);
-            const gross = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
-            const lineDiscTotal = lines.reduce((s, l) => s + ((l.default_price || 0) - (l.net_price || 0)) * (l.piece_count || 0), 0);
-            const afterLineDisc = gross - lineDiscTotal;
+            // المبلغ الصافي بدون خصم/زيادة = سعر التكلفة × عدد المنتجات
+            const netNoVariance = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
+            // مجموع قيمة الفوارق (تكلفة−بيع)×عدد المنتجات — سالب أو موجب
+            const varianceTotal = lines.reduce((s, l) => s + (l.variance_value || 0) * (l.piece_count || 0), 0);
+            // المبلغ بعد الفوارق = الصافي − مجموع الفوارق (يساوي مجموع l.total أصلاً)
+            const afterVariance = netNoVariance - varianceTotal;
 
             const discPct = parseFloat(document.getElementById('discPct').value) || 0;
-            const afterAllDisc = afterLineDisc * (1 - discPct / 100);
+            const afterDisc = afterVariance * (1 - discPct / 100);
 
             const taxPct = parseFloat(document.getElementById('taxPct').value) || 0;
-            const taxAmt = afterAllDisc * taxPct / 100;
+            const taxAmt = afterDisc * taxPct / 100;
 
-            const grandTotal = afterAllDisc + taxAmt;
+            const grandTotal = afterDisc + taxAmt; // الضريبة تُضاف
 
             document.getElementById('sumLines').textContent = totalLines.toFixed(0);
             document.getElementById('sumQty').textContent = totalLines.toFixed(0);
-            document.getElementById('sumSubtotal').textContent = gross.toFixed(2) + ' ' + BASE_CUR_SYM;
-            document.getElementById('sumDisc').textContent = '-' + lineDiscTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumSubtotal').textContent = netNoVariance.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumVariance').textContent = (varianceTotal >= 0 ? '-' : '+') + Math.abs(varianceTotal).toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumAfterVariance').textContent = afterVariance.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumDisc').textContent = '-' + (afterVariance - afterDisc).toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumAfterAllDisc').textContent = afterDisc.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumTax').textContent = '+' + taxAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumTotal').textContent = grandTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
 
@@ -1542,7 +1572,6 @@ $existingTaxPct = $afterDisc > 0
             lines.push(l); document.getElementById('emptyRow').style.display = 'none';
             const pricesForProd = [...new Set(allLines.filter(x => x.product_id === l.product_id).map(x => x.default_price))];
             const grpIdx = pricesForProd.indexOf(l.default_price); const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
-            const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';
             const tbody = document.getElementById('linesBody'); const tr = document.createElement('tr'); tr.id = l.row_id;
             tr.innerHTML = `
                     <td class="text-center"><span class="row-num">${lines.length}</span></td>
@@ -1554,19 +1583,17 @@ $existingTaxPct = $afterDisc > 0
                         <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
                             title="من إعدادات المنتج — للقراءة فقط">
                     </td>
-                    <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
+                    <td><span>${l.color_name || '—'}</span></td>
                     <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
                         onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
                     <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
                     <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
                         value="${l.default_price || ''}" dir="ltr" readonly
-                        title="من الفاتورة الأصلية — للقراءة فقط" placeholder="0.00"></td>
-                    <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-                        value="${l.discount_value || 0}" dir="ltr" readonly
-                        title="محسوب تلقائياً: الافتراضي − سعر البيع بعد الخصم — للقراءة فقط"></td>
+                        title="من الفاتورة الأصلية (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
                     <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
                         value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
                         onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+                    <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
                     <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
                     <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);

@@ -190,7 +190,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 <li class="nav-item"><a class="nav-link fw-600" href="products.php"
                         style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a></li>
                 <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=products"
-                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>المستودعات</a></li>
+                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>مستودعات المنتجات</a></li>
                 <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
                         style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
                 <li class="nav-item"><a class="nav-link fw-600" href="internal_orders.php"

@@ -28,8 +28,8 @@ requirePermission($warehousePermKey, 'view');
 $currentModule = $warehousePermKey; // ✅ كانت غير معرّفة — الشريط الجانبي ما كان يبيّن هالصفحة كـ"نشطة" أبداً
 
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
-$TS = $_SESSION['table_suffix'];
-$TW = "warehouses_{$TS}";
+$TS  = $_SESSION['table_suffix'];
+$TW  = "warehouses_{$TS}";
 $TWI = "warehouse_items_{$TS}";
 $THR = "hr_employees_{$TS}";
 
@@ -40,16 +40,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         $act = $_POST['_action'];
 
         if ($act === 'save_warehouse') {
-            $id = (int) ($_POST['id'] ?? 0);
-            $code = trim($_POST['code'] ?? '');
-            $name = trim($_POST['name'] ?? '');
-            $address = trim($_POST['address'] ?? '');
-            $managerId = (int) ($_POST['manager_id'] ?? 0) ?: null;
+            $id        = (int)($_POST['id'] ?? 0);
+            $code      = trim($_POST['code'] ?? '');
+            $name      = trim($_POST['name'] ?? '');
+            $address   = trim($_POST['address'] ?? '');
+            $managerId = (int)($_POST['manager_id'] ?? 0) ?: null;
             // ⚠ نوع المستودع — يحدد فلترته بالصفحة (منتجات/مستهلكات/مواد
             // أولية مستقبلاً). القيمة تُقفل حسب أي تبويب كان المستخدم
             // فيه لما فتح نافذة "مستودع جديد"، مش قابلة للتعديل لاحقاً
             // (تفادي نقل مستودع فيه أرصدة فعلية بين نوعين بالغلط).
-            $whType = in_array($_POST['warehouse_type'] ?? '', ['products', 'consumables', 'raw_materials'], true)
+            $whType = in_array($_POST['warehouse_type'] ?? '', ['products','consumables','raw_materials'], true)
                 ? $_POST['warehouse_type'] : 'products';
 
             if ($code === '' || $name === '') {
@@ -69,21 +69,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $pdo->prepare("INSERT INTO `{$TW}` (code, name, warehouse_type, address, manager_id, is_active, created_at)
                     VALUES (?,?,?,?,?,1,NOW())")
                     ->execute([$code, $name, $whType, $address ?: null, $managerId]);
-                echo json_encode(['ok' => true, 'msg' => 'تمت إضافة المستودع', 'id' => (int) $pdo->lastInsertId()]);
+                echo json_encode(['ok' => true, 'msg' => 'تمت إضافة المستودع', 'id' => (int)$pdo->lastInsertId()]);
             }
-        } elseif ($act === 'toggle_warehouse') {
-            $id = (int) ($_POST['id'] ?? 0);
-            if (!$id)
-                throw new Exception('معرّف غير صالح');
+        }
+
+        elseif ($act === 'toggle_warehouse') {
+            $id = (int)($_POST['id'] ?? 0);
+            if (!$id) throw new Exception('معرّف غير صالح');
 
             $curRow = $pdo->prepare("SELECT is_active, warehouse_type FROM `{$TW}` WHERE id=?");
             $curRow->execute([$id]);
             $whRow = $curRow->fetch(PDO::FETCH_ASSOC);
-            if (!$whRow)
-                throw new Exception('المستودع غير موجود');
+            if (!$whRow) throw new Exception('المستودع غير موجود');
             // ⚠ صلاحية التعطيل حسب نوع المستودع الفعلي بقاعدة البيانات
             requirePermission($whRow['warehouse_type'] === 'consumables' ? 'expenses.warehouse' : 'inventory.warehouse', 'edit');
-            $isActive = (int) $whRow['is_active'];
+            $isActive = (int)$whRow['is_active'];
 
             // ⚠ فحص الأرصدة الفعلية قبل التعطيل — مصدر الفحص يختلف حسب
             // نوع المستودع (منتجات ↔ warehouse_items، مستهلكات ↔
@@ -95,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st = $pdo->prepare("SELECT COALESCE(SUM(quantity),0) FROM `{$TWI}` WHERE warehouse_id=?");
             }
             $st->execute([$id]);
-            $stockQty = (float) $st->fetchColumn();
+            $stockQty = (float)$st->fetchColumn();
 
             if ($isActive && $stockQty > 0) {
                 throw new Exception('لا يمكن تعطيل هذا المستودع — لسا فيه أرصدة فعلية (' . $stockQty . '). فرّغه أو انقل رصيده أولاً.');
@@ -103,15 +103,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $pdo->prepare("UPDATE `{$TW}` SET is_active = 1 - is_active WHERE id=?")->execute([$id]);
             echo json_encode(['ok' => true, 'msg' => 'تم تحديث حالة المستودع']);
-        } elseif ($act === 'get_warehouse') {
-            $id = (int) ($_POST['id'] ?? 0);
+        }
+
+        elseif ($act === 'get_warehouse') {
+            $id = (int)($_POST['id'] ?? 0);
             $st = $pdo->prepare("SELECT * FROM `{$TW}` WHERE id=?");
             $st->execute([$id]);
             $w = $st->fetch(PDO::FETCH_ASSOC);
-            if (!$w)
-                throw new Exception('المستودع غير موجود');
+            if (!$w) throw new Exception('المستودع غير موجود');
             echo json_encode(['ok' => true, 'data' => $w]);
-        } else {
+        }
+
+        else {
             throw new Exception('إجراء غير معروف');
         }
     } catch (Throwable $e) {
@@ -141,24 +144,24 @@ $baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
 // consumable_stock. لا يوجد بعد جدول رصيد لمواد أولية (raw_material_stock
 // موجود لكن بلا بيانات فعلية حتى الآن)، فبيرجع صفر مؤقتاً لهالنوع.
 if ($type === 'consumables') {
-    $statsSubqueryQty = "(SELECT COALESCE(SUM(cs.quantity),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
-    $statsSubqueryCount = "(SELECT COUNT(DISTINCT cs.item_id) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id AND cs.quantity > 0)";
+    $statsSubqueryQty     = "(SELECT COALESCE(SUM(cs.quantity),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
+    $statsSubqueryCount   = "(SELECT COUNT(DISTINCT cs.item_id) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id AND cs.quantity > 0)";
     // ⚠ قيمة المستودع = الكمية × متوسط التكلفة المرجّح — العمود اسمه
     // avg_cost_base فعلياً (تأكدنا مباشرة من قاعدة البيانات)، مش
     // avg_cost_usd كما كان مكتوب هون سابقاً — ترحيل _usd→_base صار
     // فعلياً على هذا الجدول تحديداً
-    $statsSubqueryValue = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_base),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_base),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
 } elseif ($type === 'raw_materials') {
-    $statsSubqueryQty = "(SELECT COALESCE(SUM(rms.quantity),0) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id)";
-    $statsSubqueryCount = "(SELECT COUNT(DISTINCT rms.material_id) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id AND rms.quantity > 0)";
-    $statsSubqueryValue = "0";
+    $statsSubqueryQty     = "(SELECT COALESCE(SUM(rms.quantity),0) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id)";
+    $statsSubqueryCount   = "(SELECT COUNT(DISTINCT rms.material_id) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id AND rms.quantity > 0)";
+    $statsSubqueryValue   = "0";
 } else {
-    $statsSubqueryQty = "(SELECT COALESCE(SUM(wi.quantity),0) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id)";
-    $statsSubqueryCount = "(SELECT COUNT(DISTINCT wi.variant_id) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id AND wi.quantity > 0)";
+    $statsSubqueryQty     = "(SELECT COALESCE(SUM(wi.quantity),0) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id)";
+    $statsSubqueryCount   = "(SELECT COUNT(DISTINCT wi.variant_id) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id AND wi.quantity > 0)";
     // قيمة المستودع = الكمية × سعر الشراء (cost_price بجدول المقاسات،
     // مخزّن أصلاً بعملة الفرع الأساسية — راجع الدرس الموثّق بجلسة
     // إلغاء اختيار عملة المنتج بـproduct_add.php/product_edit.php)
-    $statsSubqueryValue = "(SELECT COALESCE(SUM(wi.quantity * psz.cost_price),0)
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(wi.quantity * psz.cost_price),0)
         FROM `{$TWI}` wi
         JOIN product_variants_{$TS} pv ON pv.id = wi.variant_id
         JOIN product_sizes_{$TS} psz ON psz.id = pv.size_id
@@ -178,15 +181,15 @@ $stmt = $pdo->prepare("
 $stmt->execute([$type]);
 $warehouses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$totalWh = count($warehouses);
-$activeWh = count(array_filter($warehouses, fn($w) => (int) $w['is_active'] === 1));
+$totalWh    = count($warehouses);
+$activeWh   = count(array_filter($warehouses, fn($w) => (int)$w['is_active'] === 1));
 $totalStock = array_sum(array_column($warehouses, 'total_qty'));
 $totalValue = array_sum(array_column($warehouses, 'total_value'));
 
 $TYPE_LABELS = [
-    'products' => ['label' => 'مستودعات المنتجات', 'icon' => 'bi-boxes', 'unit_label' => 'قطعة'],
-    'consumables' => ['label' => 'مستودعات المواد الاستهلاكية', 'icon' => 'bi-recycle', 'unit_label' => 'وحدة'],
-    'raw_materials' => ['label' => 'مستودعات المواد الأولية', 'icon' => 'bi-boxes', 'unit_label' => 'وحدة'],
+    'products'      => ['label' => 'مستودعات المنتجات',       'icon' => 'bi-boxes',    'unit_label' => 'قطعة'],
+    'consumables'   => ['label' => 'مستودعات المواد الاستهلاكية', 'icon' => 'bi-recycle', 'unit_label' => 'وحدة'],
+    'raw_materials' => ['label' => 'مستودعات المواد الأولية',  'icon' => 'bi-boxes',    'unit_label' => 'وحدة'],
 ];
 $curTypeInfo = $TYPE_LABELS[$type];
 ?>
@@ -203,101 +206,20 @@ $curTypeInfo = $TYPE_LABELS[$type];
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
     <style>
-        .stat-card {
-            background: #fff;
-            border-radius: 14px;
-            border: 1px solid #e2e8f0;
-            padding: .85rem 1.1rem;
-            display: flex;
-            align-items: center;
-            gap: .85rem;
-            transition: all .2s
-        }
-
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, .06)
-        }
-
-        .stat-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 11px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0
-        }
-
-        .stat-val {
-            font-size: 1.3rem;
-            font-weight: 700;
-            line-height: 1.1
-        }
-
-        .stat-lbl {
-            font-size: .72rem;
-            color: #64748b;
-            margin-top: .15rem
-        }
-
-        .wh-card {
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 14px;
-            padding: 1.1rem 1.2rem;
-            transition: all .2s;
-            height: 100%
-        }
-
-        .wh-card:hover {
-            box-shadow: 0 4px 16px rgba(0, 0, 0, .06)
-        }
-
-        .wh-card.inactive {
-            opacity: .55
-        }
-
-        .wh-code {
-            font-family: monospace;
-            font-size: .72rem;
-            color: #94a3b8;
-            letter-spacing: .03em
-        }
-
-        .wh-name {
-            font-weight: 700;
-            font-size: 1rem;
-            color: #1e293b;
-            margin: .2rem 0 .5rem
-        }
-
-        .wh-meta {
-            font-size: .78rem;
-            color: #64748b;
-            display: flex;
-            align-items: center;
-            gap: .35rem;
-            margin-bottom: .3rem
-        }
-
-        .wh-badge {
-            font-size: .68rem;
-            padding: 3px 9px;
-            border-radius: 100px;
-            font-weight: 600
-        }
-
-        .wh-badge.on {
-            background: #f0fdf4;
-            color: #16a34a
-        }
-
-        .wh-badge.off {
-            background: #fef2f2;
-            color: #dc2626
-        }
+        .stat-card { background: #fff; border-radius: 14px; border: 1px solid #e2e8f0; padding: .85rem 1.1rem; display: flex; align-items: center; gap: .85rem; transition: all .2s }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.06) }
+        .stat-icon { width: 40px; height: 40px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0 }
+        .stat-val { font-size: 1.3rem; font-weight: 700; line-height: 1.1 }
+        .stat-lbl { font-size: .72rem; color: #64748b; margin-top: .15rem }
+        .wh-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1.1rem 1.2rem; transition: all .2s; height: 100% }
+        .wh-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.06) }
+        .wh-card.inactive { opacity: .55 }
+        .wh-code { font-family: monospace; font-size: .72rem; color: #94a3b8; letter-spacing: .03em }
+        .wh-name { font-weight: 700; font-size: 1rem; color: #1e293b; margin: .2rem 0 .5rem }
+        .wh-meta { font-size: .78rem; color: #64748b; display: flex; align-items: center; gap: .35rem; margin-bottom: .3rem }
+        .wh-badge { font-size: .68rem; padding: 3px 9px; border-radius: 100px; font-weight: 600 }
+        .wh-badge.on { background: #f0fdf4; color: #16a34a }
+        .wh-badge.off { background: #fef2f2; color: #dc2626 }
     </style>
 </head>
 
@@ -307,18 +229,16 @@ $curTypeInfo = $TYPE_LABELS[$type];
 
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-        <span class="tb-title"><i
-                class="bi <?= $curTypeInfo['icon'] ?> me-1 text-primary"></i><?= htmlspecialchars($curTypeInfo['label']) ?></span>
+        <span class="tb-title"><i class="bi <?= $curTypeInfo['icon'] ?> me-1 text-primary"></i><?= htmlspecialchars($curTypeInfo['label']) ?></span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
         <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.8rem;color:#94a3b8">
             <?php if ($type === 'consumables'): ?>
-                <a href="../expenses_and_consumables/consumables.php" style="color:#64748b;text-decoration:none">المصاريف
-                    والمستهلكات</a>
+                <a href="../expenses_and_consumables/consumables.php" style="color:#64748b;text-decoration:none">المصاريف والمستهلكات</a>
             <?php else: ?>
                 <a href="products.php" style="color:#64748b;text-decoration:none">المخزون</a>
             <?php endif; ?>
             <i class="bi bi-chevron-left mx-1" style="font-size:.7rem"></i>
-            <span class="text-primary">مستودعات المنتجات</span>
+            <span class="text-primary">المستودعات</span>
         </nav>
     </header>
 
@@ -331,37 +251,37 @@ $curTypeInfo = $TYPE_LABELS[$type];
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumables.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-box-seam me-1"></i>المواد
                             الاستهلاكية</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600"
-                            href="../expenses_and_consumables/consumable_purchases.php"
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_purchases.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-cart-plus me-1"></i>فواتير
                             الشراء</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_issues.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-arrow-bar-up me-1"></i>صرف
-                            المستهلكات</a></li>
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600 active" href="#"
                             style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
                                 class="bi bi-building me-1"></i>مستودعات المستهلكات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=consumables"
                             style="border:none;color:#64748b;font-size:.83rem"><i
                                 class="bi bi-arrow-left-right me-1"></i>حركة المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600"
-                            href="../expenses_and_consumables/consumable_transfers.php"
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_transfers.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i
                                 class="bi bi-signpost-split me-1"></i>مناقلة بين المستودعات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/expenses.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-wallet2 me-1"></i>إدارة
                             المصاريف</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
                 </ul>
             <?php elseif ($type === 'products'): ?>
                 <!-- الشريط الموحّد لقسم المنتجات/المخزون — نظير شريط المستهلكات
                      بالضبط، يظهر بس بسياق المنتجات (كان ناقصاً، هذا هو الإصلاح) -->
                 <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                     <li class="nav-item"><a class="nav-link fw-600" href="products.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a>
-                    </li>
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600 active" href="#"
                             style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
-                                class="bi bi-building me-1"></i>مستودعات المنتجات</a></li>
+                                class="bi bi-building me-1"></i>المستودعات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
                             style="border:none;color:#64748b;font-size:.83rem"><i
                                 class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
@@ -399,8 +319,7 @@ $curTypeInfo = $TYPE_LABELS[$type];
                 ] as [$val, $lbl, $icon, $color, $bg]): ?>
                     <div class="col-6 col-md-3">
                         <div class="stat-card">
-                            <div class="stat-icon" style="background:<?= $bg ?>;color:<?= $color ?>"><i
-                                    class="bi <?= $icon ?>"></i></div>
+                            <div class="stat-icon" style="background:<?= $bg ?>;color:<?= $color ?>"><i class="bi <?= $icon ?>"></i></div>
                             <div>
                                 <div class="stat-val"><?= $val ?></div>
                                 <div class="stat-lbl"><?= $lbl ?></div>
@@ -439,25 +358,15 @@ $curTypeInfo = $TYPE_LABELS[$type];
                                 <?php if ($w['address']): ?>
                                     <div class="wh-meta"><i class="bi bi-geo-alt"></i><?= htmlspecialchars($w['address']) ?></div>
                                 <?php endif; ?>
-                                <div class="wh-meta"><i
-                                        class="bi bi-person-badge"></i><?= htmlspecialchars($w['manager_name'] ?? 'بدون مدير محدد') ?>
-                                </div>
-                                <div class="wh-meta"><i class="bi bi-boxes"></i><?= number_format((float) $w['total_qty'], 0) ?>
-                                    <?= htmlspecialchars($curTypeInfo['unit_label']) ?> — <?= (int) $w['variant_count'] ?> صنف
-                                </div>
-                                <div class="wh-meta"><i
-                                        class="bi bi-cash-stack"></i><?= number_format((float) $w['total_value'], 2) ?>
-                                    <?= htmlspecialchars($baseCurSymbol) ?>
-                                </div>
+                                <div class="wh-meta"><i class="bi bi-person-badge"></i><?= htmlspecialchars($w['manager_name'] ?? 'بدون مدير محدد') ?></div>
+                                <div class="wh-meta"><i class="bi bi-boxes"></i><?= number_format((float)$w['total_qty'], 0) ?> <?= htmlspecialchars($curTypeInfo['unit_label']) ?> — <?= (int)$w['variant_count'] ?> صنف</div>
+                                <div class="wh-meta"><i class="bi bi-cash-stack"></i><?= number_format((float)$w['total_value'], 2) ?> <?= htmlspecialchars($baseCurSymbol) ?></div>
                                 <div class="d-flex gap-1 mt-2">
                                     <?php if (can($warehousePermKey, 'edit')): ?>
-                                        <button class="btn btn-outline-secondary btn-sm flex-fill"
-                                            onclick="openWhModal(<?= (int) $w['id'] ?>)">
+                                        <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="openWhModal(<?= (int)$w['id'] ?>)">
                                             <i class="bi bi-pencil"></i> تعديل
                                         </button>
-                                        <button
-                                            class="btn btn-outline-<?= $w['is_active'] ? 'danger' : 'success' ?> btn-sm flex-fill"
-                                            onclick="toggleWh(<?= (int) $w['id'] ?>)">
+                                        <button class="btn btn-outline-<?= $w['is_active'] ? 'danger' : 'success' ?> btn-sm flex-fill" onclick="toggleWh(<?= (int)$w['id'] ?>)">
                                             <i class="bi bi-power"></i> <?= $w['is_active'] ? 'تعطيل' : 'تفعيل' ?>
                                         </button>
                                     <?php endif; ?>
@@ -503,7 +412,7 @@ $curTypeInfo = $TYPE_LABELS[$type];
                         <select class="form-select" id="whManager">
                             <option value="">بدون مدير محدد</option>
                             <?php foreach ($managers as $m): ?>
-                                <option value="<?= (int) $m['id'] ?>"><?= htmlspecialchars($m['full_name']) ?></option>
+                                <option value="<?= (int)$m['id'] ?>"><?= htmlspecialchars($m['full_name']) ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>

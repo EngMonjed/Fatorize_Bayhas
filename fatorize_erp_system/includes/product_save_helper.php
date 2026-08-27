@@ -275,16 +275,38 @@ function syncProductVariants(
         $sizeIdToGroupKey[$sz['id']] = $sz['group_key'] ?? 'g0';
     }
 
+    $groupColorBarcode = []; // "{group_key}|{color_id}" => الباركود المشترك
+
+    // ✅ إصلاح: نعبّي الخريطة أولاً من الباركودات **الموجودة فعلياً**
+    // بقاعدة البيانات. بدون هالخطوة، أي مقاس جديد يُضاف لكروب موجود
+    // كان بياخد باركوداً جديداً كلياً بدل باركود كروبه — فيصير "يتيم"
+    // ويظهر لحاله بشاشة الباركود بدل ما ينضم لكروبه.
+    $existingBc = $pdo->prepare("SELECT size_id, color_id, barcode
+        FROM `{$table}`
+        WHERE product_id=? AND barcode IS NOT NULL AND barcode<>''");
+    $existingBc->execute([$productId]);
+    foreach ($existingBc->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $grpKey = $sizeIdToGroupKey[$row['size_id']] ?? null;
+        if ($grpKey === null) {
+            continue; // مقاس ما عاد ينتمي للمنتج — نتجاهل باركوده
+        }
+        $mapKey = $grpKey . '|' . $row['color_id'];
+        if (!isset($groupColorBarcode[$mapKey])) {
+            $groupColorBarcode[$mapKey] = $row['barcode'];
+        }
+    }
+
     // توليد باركود لكل (كروب × لون) — فقط للمتغيرات الجديدة بلا باركود
     $missing = $pdo->prepare("SELECT id, size_id, color_id FROM `{$table}` WHERE product_id=? AND (barcode IS NULL OR barcode='')");
     $missing->execute([$productId]);
     $upd = $pdo->prepare("UPDATE `{$table}` SET barcode=?, updated_by=?, updated_at=NOW() WHERE id=?");
 
-    $groupColorBarcode = []; // "{group_key}|{color_id}" => الباركود المشترك
     foreach ($missing->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $grpKey = $sizeIdToGroupKey[$row['size_id']] ?? 'g0';
         $mapKey = $grpKey . '|' . $row['color_id'];
 
+        // هلق بيولّد جديد بس لو الكروب×اللون فعلاً ما عنده باركود
+        // (لا بقاعدة البيانات ولا انولّد بهالدورة نفسها)
         if (!isset($groupColorBarcode[$mapKey])) {
             $groupColorBarcode[$mapKey] = generateFallbackBarcode($model, (int) $row['id'], $pdo, $table);
         }

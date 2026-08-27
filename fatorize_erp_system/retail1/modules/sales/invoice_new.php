@@ -90,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $st = $pdo->prepare("
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
-                    s.size, s.selling_price, s.age_type, s.packet_qty, s.group_key,
+                    s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                     s.base_currency_id AS price_base_currency_id,
                     c.name AS color_name, c.hex_code AS color_hex
                 FROM `{$TV}` v
@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st2 = $pdo->prepare("
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
-                        s.size, s.selling_price, s.age_type, s.packet_qty, s.group_key,
+                        s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                         s.base_currency_id AS price_base_currency_id,
                         c.name AS color_name, c.hex_code AS color_hex
                     FROM `{$TV}` v
@@ -261,8 +261,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $netPrice = isset($r['net_price']) && $r['net_price'] !== ''
                     ? (float) $r['net_price']
                     : $defaultPr;
-                $discValuePerUnit = max(0, $defaultPr - $netPrice); // قيمة الخصم الإفرادي لكل وحدة (مبلغ، لا نسبة)
-                $discPctForRecord = $defaultPr > 0 ? round($discValuePerUnit / $defaultPr * 100, 4) : 0; // نسبة محسوبة للتوافق مع عمود discount_percentage الموجود
+                // ⚠ قيمة الفارق = سعر التكلفة − سعر البيع — سالبة لما نبيع
+                // فوق التكلفة (ربح)، موجبة لما نبيع تحت التكلفة (خسارة).
+                // بعكس النظام السابق (كان يُقفَل عند 0 بافتراض إنه خصم
+                // دايماً)، صار يقبل الإشارتين بالكامل — تأكيد صريح من
+                // المستخدم (بيع بخسارة قرار تجاري صريح، مو خطأ إدخال).
+                $discValuePerUnit = $defaultPr - $netPrice; // قيمة الفارق لكل قطعة (موجب أو سالب)
+                // ⚠ نسبة الفارق = (سعر البيع − سعر التكلفة) ÷ سعر التكلفة
+                // × 100 — نسبة الربح/الخسارة القياسية، عكس إشارة القيمة
+                // أعلاه بالتصميم (موجبة = ربح هون، بعكس discValuePerUnit).
+                $discPctForRecord = $defaultPr > 0 ? round(($netPrice - $defaultPr) / $defaultPr * 100, 4) : 0;
                 $variantIds = $r['variant_ids'] ?? [$r['variant_id'] ?? 0];
                 $variantIds = array_values(array_filter(array_map('intval', $variantIds)));
 
@@ -1143,14 +1151,14 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                             <th style="width:24px">#</th>
                                             <th>بيان المنتج</th>
                                             <th>الموديل</th>
-                                            <th>الكروب / القياس</th>
+                                            <th>القياس</th>
                                             <th class="text-center">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
                                             <th class="text-center">عدد الكروبات</th>
                                             <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر التكلفة الافتراضي</th>
-                                            <th class="text-center">قيمة الخصم الإفرادي</th>
-                                            <th class="text-center">سعر التكلفة بعد الخصم</th>
+                                            <th class="text-center">سعر التكلفة</th>
+                                            <th class="text-center">سعر البيع</th>
+                                            <th class="text-center">نسبة الفارق</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
@@ -1218,15 +1226,15 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                             <div class="calc-section-lbl">التسلسل الحسابي</div>
                             <div class="calc-chain">
                                 <div class="calc-step">
-                                    <span class="calc-label">المبلغ الصافي <small>(بدون الخصم الإفرادي)</small></span>
+                                    <span class="calc-label">المبلغ الصافي <small>(بدون خصومات أو زيادات)</small></span>
                                     <span id="sumGross" class="calc-val">0.00</span>
                                 </div>
                                 <div class="calc-step sub">
-                                    <span class="calc-label">قيمة الخصم الإفرادي</span>
+                                    <span class="calc-label">مجموع قيمة الفوارق <small>(سالب أو موجب)</small></span>
                                     <span id="sumLineDisc" class="calc-val neg">-0.00</span>
                                 </div>
                                 <div class="calc-step subtotal">
-                                    <span class="calc-label">المبلغ الصافي بعد الخصم الإفرادي</span>
+                                    <span class="calc-label">المبلغ بعد الفوارق</span>
                                     <span id="sumAfterLineDisc" class="calc-val">0.00</span>
                                 </div>
 
@@ -1261,7 +1269,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                 </div>
 
                                 <div class="calc-step subtotal">
-                                    <span class="calc-label">المبلغ الصافي بعد الخصوم</span>
+                                    <span class="calc-label">المبلغ الصافي بعد الخصوم والفوارق</span>
                                     <span id="sumAfterAllDisc" class="calc-val">0.00</span>
                                 </div>
 
@@ -1581,6 +1589,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         product_name: it.product_name,
                         model_number: it.model_number,
                         selling_price: it.selling_price,
+                        cost_price: it.cost_price,
                         group_key: it.group_key,
                         age_type: it.age_type || 'سنة',
                         color_id: it.color_id,
@@ -1632,8 +1641,6 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 const grpLabel = `<span class="grp-badge" style="background:${bg};color:${clr};border-color:${br}">
             كروب ${grpIdx + 1}
         </span>`;
-                const colorDot = r.color_hex
-                    ? `<span class="clr-dot" style="background:${r.color_hex};margin-left:4px"></span>` : '';
                 const sizesStr = r.sizes.join(' · ');
 
                 // السعر المرجعي بعملة الفرع الأساسية — من product_sizes.selling_price
@@ -1662,7 +1669,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             <td><div class="fw-600" style="font-size:.8rem">${r.product_name}</div></td>
             <td>${grpLabel}</td>
             <td style="font-size:.8rem;color:#1e293b;font-weight:600">${sizesStr} <span style="font-size:.68rem;color:#94a3b8">${r.age_type || ''}</span></td>
-            <td><div class="d-flex align-items-center">${colorDot}<span style="font-size:.78rem">${r.color_name || '—'}</span></div></td>
+            <td><span style="font-size:.78rem">${r.color_name || '—'}</span></td>
             <td style="width:110px">
                 <input type="number" class="sel-price" data-key="${r.key}"
                     value="${suggestedPrice.toFixed(4)}" min="0" step="0.0001" dir="ltr" readonly
@@ -1748,12 +1755,14 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
                 // أول variant يُنشئ السطر، الباقي يُدمج
                 rowDef.variants.forEach((v, vi) => {
-                    // pr هو السعر كما راجعه/عدّله المستخدم بالمودال — بعملة الفاتورة
-                    // الحالية (متل ما هو ظاهر بعنوان العمود). نحوّله هنا لعملة الفرع
-                    // (المرجع الثابت) قبل تمريره لـ addLine، بدل تركه يُعاد تفسيره
-                    // كأنه بعملة الفرع أصلاً (كان هذا يسبب تحويلاً مضاعفاً خاطئاً).
-                    const costBaseDirect = exRate > 0 ? pr / exRate : pr;
-                    const lineItem = {...v, cost_base_direct: costBaseDirect, selling_price: rowDef.selling_price};
+                    // ⚠ pr هو السعر كما راجعه/عدّله المستخدم بالمودال —
+                    // بعملة الفاتورة الحالية. بعد التحول لنظام
+                    // "سعر التكلفة الثابت + سعر بيع حر"، هالسعر المُراجَع
+                    // يمثّل سعر البيع (net_price) — سعر التكلفة (default_price)
+                    // يجي حصراً من الكتالوج (v.cost_price)، ما يتعدَّل هون
+                    // إطلاقاً.
+                    const sellPriceDirect = exRate > 0 ? pr / exRate : pr;
+                    const lineItem = {...v, sell_price_direct: sellPriceDirect, selling_price: rowDef.selling_price, cost_price: rowDef.cost_price};
                     if (vi === 0) addLine(lineItem);
                     else mergeVariant(lineItem);
                     added++;
@@ -1801,20 +1810,19 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
             // سطر جديد — نجمع كل variants هذا الكروب×لون
             const rowId = 'lgrp_' + gk.replace(/[^a-z0-9]/gi, '_');
-            // سعر القطعة الثابت بعملة الفرع (المرجع الأساسي — لا يتغير أبداً،
-            // ويُعاد ضربه بـ exRate تلقائياً عند تغيير عملة الفاتورة — انظر
-            // onCurrencyChange()). يوجد مصدران محتملان لهذه القيمة:
-            let costBase;
-            if (item.cost_base_direct !== undefined) {
-                // من مودال الاختيار المتعدد: المستخدم راجع/عدّل السعر بعملة
-                // الفاتورة، وconfirmSelection() سبق أن حوّله لعملة الفرع.
-                costBase = parseFloat(item.cost_base_direct) || 0;
+            // ⚠ سعر التكلفة (default_price) صار ثابتاً حصراً من الكتالوج
+            // (product_sizes.cost_price) — ما يتعدَّل عبر أي مودال أو
+            // مسار إطلاقاً، بعكس النظام السابق (كان اسمه "تكلفة" بالتسمية
+            // بس قيمته فعلياً selling_price). سعر البيع (net_price) هو
+            // الحقل الحر الوحيد — يبدأ من sell_price_direct (لو المستخدم
+            // راجع/عدّل بمودال الاختيار)، وإلا selling_price كاقتراح
+            // ابتدائي بسيط، وإلا نفس سعر التكلفة كحد أدنى.
+            const costBase = parseFloat(item.cost_price || 0);
+            let sellStart;
+            if (item.sell_price_direct !== undefined) {
+                sellStart = parseFloat(item.sell_price_direct) || 0;
             } else {
-                // مسار احتياطي غير مُستخدم حالياً (المطابقة المباشرة بالباركود
-                // صارت تمر بالمودال دائماً — راجع doSearch()). لو استُخدم مستقبلاً:
-                // selling_price مخزّن أصلاً بعملة الفرع (base_currency_id)، فلا
-                // حاجة لأي تحويل هنا — القيمة الخام هي costBase مباشرة.
-                costBase = parseFloat(item.selling_price || 0);
+                sellStart = parseFloat(item.selling_price || item.cost_price || 0);
             }
             const line = {
                 grp_key: gk,
@@ -1832,9 +1840,10 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 sizes: [item.size || ''],
                 packet_qty: parseFloat(item.packet_qty) || 1, // ⚠ عدد القطع بالباكيت — من product_sizes.packet_qty، للقراءة فقط
                 qty: 1,                                        // عدد الكروبات
-                default_price: costBase,                       // سعر التكلفة الافتراضي (بعملة الفرع) — من product_sizes.cost_price
-                discount_value: 0,                             // قيمة الخصم الإفرادي (مبلغ، لا نسبة) — يُحفظ بعمود discount_amount
-                net_price: costBase,                           // سعر التكلفة بعد الخصم الإفرادي — مرتبط ثنائياً بقيمة الخصم
+                default_price: costBase,                       // سعر التكلفة الثابت (بعملة الفرع) — من product_sizes.cost_price، غير قابل للتعديل أبداً
+                variance_value: 0,                             // قيمة الفارق = سعر التكلفة − سعر البيع (سالب = ربح، موجب = خسارة) — يُحفظ بعمود discount_amount
+                variance_pct: 0,                               // نسبة الفارق = (سعر البيع − سعر التكلفة) ÷ سعر التكلفة × 100 — يُحفظ بعمود discount_percentage
+                net_price: sellStart,                          // سعر البيع — الحقل التحريري الوحيد
                 piece_count: 0,                                // عدد المنتجات = qty × packet_qty — هو المخزَّن بعمود quantity لاحقاً
                 total: 0,
             };
@@ -1855,7 +1864,6 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             const grpBadge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">
         كروب ${grpIdx + 1}
     </span>`;
-            const colorDot = line.color_hex ? `<span class="clr-dot" style="background:${line.color_hex}"></span>` : '';
             const idx = lines.length;
 
             const tbody = document.getElementById('linesBody');
@@ -1874,19 +1882,17 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
                 title="من إعدادات المنتج — للقراءة فقط">
         </td>
-        <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${line.color_name || '—'}</span></div></td>
+        <td><span>${line.color_name || '—'}</span></td>
         <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
         <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
         <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
             value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
-            title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-        <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-            value="0" dir="ltr" readonly
-            title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
+            title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
         <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
             value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
             onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
         <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
@@ -1920,9 +1926,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             // ⚠ قرار نهائي: البيع بالقطعة — الكمية تُعتمد حرفياً بلا أي
             // تحقق/تقريب (انلغى قرار "مضاعف صحيح" السابق).
             if (field === 'qty') line.qty = Math.max(0.001, parseFloat(val) || 0);
-            // ⚠ سعر التكلفة الافتراضي وقيمة الخصم صارا حقلين مقفلين (readonly)
-            // — ما بوصلهم onchange من الواجهة إطلاقاً. الحقل الوحيد يلي
-            // بيغيّر الخصم هو سعر التكلفة بعد الخصم نفسه (يُكتب مباشرة).
+            // ⚠ سعر التكلفة ثابت (readonly) — الحقل الوحيد القابل للتعديل
+            // هو سعر البيع نفسه. سعر البيع يقبل أي قيمة موجبة (حتى لو
+            // أقل من التكلفة — بيع بخسارة قرار تجاري صريح، مو خطأ).
             if (field === 'net_price') {
                 line.net_price = Math.max(0, parseFloat(val) || 0);
             }
@@ -1932,12 +1938,17 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         }
 
         function recalcLine(line, row) {
-            // ⚠ الاتجاه الوحيد للحساب الآن: قيمة الخصم مقفلة ومحسوبة دائماً
-            // = الافتراضي − سعر التكلفة بعد الخصم. سعر التكلفة بعد الخصم هو
-            // الحقل التحريري الوحيد بين الاثنين (نفس معادلة الربط الأصلية:
-            // سعر التكلفة بعد الخصم = سعر التكلفة الافتراضي − قيمة الخصم —
-            // بس محلولة بالاتجاه المعاكس لأنه صار هو المُدخَل، لا الناتج).
-            line.discount_value = Math.max(0, line.default_price - (line.net_price || 0));
+            // ⚠ قيمة الفارق = سعر التكلفة − سعر البيع — سالبة لما نبيع
+            // فوق التكلفة (ربح)، موجبة لما نبيع تحت التكلفة (خسارة).
+            // بعكس النظام السابق (discount_value)، ما عاد فيها Math.max
+            // — تقبل الإشارتين بالكامل.
+            line.variance_value = (line.default_price || 0) - (line.net_price || 0);
+            // ⚠ نسبة الفارق = (سعر البيع − سعر التكلفة) ÷ سعر التكلفة ×
+            // ١٠٠ — نسبة الربح/الخسارة القياسية مقارنة بالتكلفة. موجبة
+            // = ربح، سالبة = خسارة (عكس إشارة القيمة أعلاه بالتصميم).
+            line.variance_pct = (line.default_price || 0) > 0
+                ? ((line.net_price || 0) - line.default_price) / line.default_price * 100
+                : 0;
 
             // ⚠ عدد المنتجات = عدد الكروبات × عدد القطع بالباكيت فقط —
             // هاي الكمية الحقيقية يلي بتُحفظ بعمود quantity لكل متغيّر
@@ -1948,8 +1959,13 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
             if (row) {
                 row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
-                row.querySelector('.dv-input').value = (line.discount_value || 0).toFixed(2);
                 row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
+                const vpLbl = row.querySelector('.vp-lbl');
+                if (vpLbl) {
+                    const pct = line.variance_pct || 0;
+                    vpLbl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(4) + '%';
+                    vpLbl.style.color = pct > 0 ? '#16a34a' : (pct < 0 ? '#dc2626' : '#64748b');
+                }
                 row.querySelector('.t-input').value = line.total > 0 ? line.total.toFixed(2) : '';
             }
         }
@@ -1974,38 +1990,38 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             // ١) عدد البنود = إجمالي الكروبات (مجموع qty على كل الأسطر)
             const totalLines = lines.reduce((s, l) => s + (l.qty || 0), 0);
 
-            // ٤) المبلغ الصافي بدون الخصم الإفرادي = سعر التكلفة الافتراضي × عدد المنتجات (مجموع على كل الأسطر)
-            const gross = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
-            // ٥) مجموع قيم الخصوم الإفرادية (قيمة الخصم للوحدة × عدد المنتجات، مجموع على كل الأسطر)
-            const lineDiscTotal = lines.reduce((s, l) => s + ((l.default_price || 0) - (l.net_price || 0)) * (l.piece_count || 0), 0);
-            // ٦) المبلغ الصافي بعد الخصم الإفرادي = ٤ − ٥ (يساوي مجموع l.total أصلاً)
-            const afterLineDisc = gross - lineDiscTotal;
+            // ٢) المبلغ الصافي بدون خصم/زيادة = سعر التكلفة × عدد المنتجات (مجموع على كل الأسطر)
+            const netNoVariance = lines.reduce((s, l) => s + (l.default_price || 0) * (l.piece_count || 0), 0);
+            // ٣) مجموع قيمة الفوارق (سعر التكلفة − سعر البيع)×عدد المنتجات — سالب أو موجب
+            const varianceTotal = lines.reduce((s, l) => s + (l.variance_value || 0) * (l.piece_count || 0), 0);
+            // ٤) المبلغ بعد الفوارق = ٢ − ٣ (يساوي مجموع l.total أصلاً)
+            const afterVariance = netNoVariance - varianceTotal;
 
-            // ٧) نسبة الخصم العام للعميل
+            // ٥) نسبة الخصم العام للعميل
             const discPct = parseFloat(document.getElementById('discPct').value) || 0;
 
-            // ٨-٩) خصم تعجيل الدفع — معلوماتي بس، محسوب من حقل ٦ مباشرة
-            // (تأكيد صريح: ما بيدخل بحساب المبلغ الإجمالي إطلاقاً)
+            // ٦-٧) خصم تعجيل الدفع — معلوماتي بس، محسوب من حقل ٤ مباشرة
+            // (بلا تغيير — نفس القديم بالضبط)
             const hasSettle = document.getElementById('iHasSettleDisc').checked;
             const settlePct = hasSettle ? (parseFloat(document.getElementById('iSettleDiscPct').value) || 0) : 0;
-            const settleAmt = afterLineDisc * settlePct / 100;
+            const settleAmt = afterVariance * settlePct / 100;
 
-            // ١٠) المبلغ الصافي بعد احتساب الخصوم (الإفرادية والعامة فقط)
-            const afterAllDisc = afterLineDisc * (1 - discPct / 100);
+            // ٨) المبلغ الصافي بعد الخصوم والفوارق = ٤ − (٤×نسبة الخصم العام)
+            const afterDisc = afterVariance * (1 - discPct / 100);
 
-            // ١١-١٢) الضريبة العامة — على حقل ١٠ (بعد كل الخصومات)
+            // ٩-١٠) الضريبة العامة — على حقل ٨
             const taxPct = parseFloat(document.getElementById('taxPct').value) || 0;
-            const taxAmt = afterAllDisc * taxPct / 100;
+            const taxAmt = afterDisc * taxPct / 100;
 
-            // ١٣) المبلغ الإجمالي = ١٠ + ١٢ (بدون خصم تعجيل الدفع)
-            const grandTotal = afterAllDisc + taxAmt;
+            // ١١) المبلغ الإجمالي = ٨ + ١٠ (الضريبة تُضاف، تأكيد صريح)
+            const grandTotal = afterDisc + taxAmt;
 
             document.getElementById('sumLines').textContent = totalLines.toFixed(0);
-            document.getElementById('sumGross').textContent = gross.toFixed(2) + ' ' + BASE_CUR_SYM;
-            document.getElementById('sumLineDisc').textContent = '-' + lineDiscTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
-            document.getElementById('sumAfterLineDisc').textContent = afterLineDisc.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumGross').textContent = netNoVariance.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumLineDisc').textContent = (varianceTotal >= 0 ? '-' : '+') + Math.abs(varianceTotal).toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumAfterLineDisc').textContent = afterVariance.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumSettle').textContent = settleAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
-            document.getElementById('sumAfterAllDisc').textContent = afterAllDisc.toFixed(2) + ' ' + BASE_CUR_SYM;
+            document.getElementById('sumAfterAllDisc').textContent = afterDisc.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumTax').textContent = '+' + taxAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumTotal').textContent = grandTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
         }
@@ -2264,7 +2280,6 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         const grpIdx = pricesForProd.indexOf(l.group_key);
                         const [bg, clr, br] = GRP_COLORS[grpIdx % 4];
                         tr.style.setProperty('--grp-c', clr);
-                        const colorDot = l.color_hex ? `<span class="clr-dot" style="background:${l.color_hex}"></span>` : '';
                         tr.innerHTML = `
                     <td class="text-center"><span class="row-num">${lines.length}</span></td>
                     <td>${l.product_name}</td>
@@ -2275,19 +2290,17 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                         <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
                             title="من إعدادات المنتج — للقراءة فقط">
                     </td>
-                    <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
+                    <td><span>${l.color_name || '—'}</span></td>
                     <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
                         onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
                     <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
                     <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
                         value="${l.default_price || ''}" dir="ltr" readonly
-                        title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-                    <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-                        value="${l.discount_value || 0}" dir="ltr" readonly
-                        title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
+                        title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
                     <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
                         value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
                         onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+                    <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
                     <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
                     <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
                         tbody.appendChild(tr);

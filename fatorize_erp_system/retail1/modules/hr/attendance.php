@@ -11,6 +11,26 @@ $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $currentModule = 'hr.attendance';
 $T = "hr_employees_{$_SESSION['table_suffix']}";
 $TA = "hr_attendance_{$_SESSION['table_suffix']}";
+$TP = "hr_payroll_{$_SESSION['table_suffix']}";
+
+// تحقق: هل تاريخ الحضور هذا واقع بفترة راتب مُعتمَدة/مصروفة لهذا الموظف؟
+// لو إي، وما عند المستخدم صلاحية اعتماد/صرف الرواتب (hr.payroll:confirm)،
+// يُمنع أي تعديل — عشان ما ينفصل سجل الحضور عن القيد المحاسبي المرحَّل
+// أصلاً بناءً عليه
+function assertAttendanceEditable(PDO $pdo, string $TP, int $empId, string $date): void
+{
+    if (can('hr.payroll', 'confirm'))
+        return; // صلاحية اعتماد/صرف الرواتب تتجاوز القفل
+    $st = $pdo->prepare("SELECT payment_status FROM `{$TP}`
+        WHERE employee_id=? AND period_from<=? AND period_to>=?
+        AND payment_status IN ('accrued','paid') LIMIT 1");
+    $st->execute([$empId, $date, $date]);
+    $status = $st->fetchColumn();
+    if ($status) {
+        $lbl = $status === 'paid' ? 'مصروفة' : 'معتمدة';
+        throw new Exception("هذا التاريخ ضمن فترة راتب {$lbl} — لا يمكن تعديل الحضور. راجع صلاحية اعتماد/صرف الرواتب لو التعديل ضروري");
+    }
+}
 
 // إنشاء الجداول إذا لم تكن موجودة
 $TH = "public_holidays_{$_SESSION['table_suffix']}";
@@ -82,7 +102,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $saved = 0;
             $skipped = 0;
+            $locked = 0;
             foreach ($emps as $emp) {
+                if (!can('hr.payroll', 'confirm')) {
+                    $lockChk = $pdo->prepare("SELECT 1 FROM `{$TP}`
+                        WHERE employee_id=? AND period_from<=? AND period_to>=?
+                        AND payment_status IN ('accrued','paid') LIMIT 1");
+                    $lockChk->execute([$emp['id'], $date, $date]);
+                    if ($lockChk->fetchColumn()) {
+                        $locked++;
+                        continue;
+                    }
+                }
                 $fromCol = $dayName . '_from';
                 $toCol = $dayName . '_to';
                 $dayFrom = $emp[$fromCol] ?? null;
@@ -130,7 +161,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 'ok' => true,
                 'saved' => $saved,
                 'skipped' => $skipped,
-                'msg' => "تم تسجيل {$saved} موظف" . ($skipped > 0 ? " (تجاوز {$skipped})" : "")
+                'locked' => $locked,
+                'msg' => "تم تسجيل {$saved} موظف" . ($skipped > 0 ? " (تجاوز {$skipped})" : "") . ($locked > 0 ? " (مقفل برواتب معتمدة: {$locked})" : "")
             ]);
             exit;
         }
@@ -198,6 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $emp = $stmt->fetch();
             if (!$emp)
                 throw new Exception('الموظف غير موجود');
+            assertAttendanceEditable($pdo, $TP, $emp_id, $date);
             $day = strtolower(date('l', strtotime($date)));
             $from_col = $emp["{$day}_from"] ?? null;
             $to_col = $emp["{$day}_to"] ?? null;
@@ -246,6 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $employee = $stmt->fetch();
             if (!$employee)
                 throw new Exception('الموظف غير موجود');
+            assertAttendanceEditable($pdo, $TP, $emp_id, $date);
 
             $day = strtolower(date('l', strtotime($date)));
             $f_col = $employee["{$day}_from"] ?? null;

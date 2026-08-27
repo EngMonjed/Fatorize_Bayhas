@@ -11,6 +11,12 @@ SET FOREIGN_KEY_CHECKS=0;
 نهاية ملف السكوال
 SET FOREIGN_KEY_CHECKS=1;
 ----------------------
+قص اخر تلت خانات من الباركود
+SELECT
+    LEFT(barcode, LENGTH(barcode) - 3) AS barcode,
+   id,barcode, model_number ,supplier_id,name,age_type,age_from,age_to,age_step,unique_code
+FROM products;
+--------------------
 SELECT * from products_ret;
 SELECT * from product_colors_ret;
 SELECT * from product_sizes_ret;
@@ -20,469 +26,6 @@ DESCRIBE  products_ret;
 DESCRIBE  product_colors_ret;
 DESCRIBE  product_sizes_ret;
 DESCRIBE  product_variants_ret;
----------------------
-ستعلام لمعرفة التطابقات بالباركودات
-SELECT
-    old.id AS old_product_id,
-    old.model_number,
-    old.color AS old_color,
-    old.barcode AS old_barcode,
-
-    newp.id AS new_product_id,
-
-    ng.group_key,
-    ng.packet_qty,
-    ng.sizes AS new_sizes,
-
-    pc.id AS new_color_id,
-    pc.name AS new_color,
-
-    CASE
-        WHEN old.barcode IS NULL OR TRIM(old.barcode) = ''
-            THEN 'NO OLD BARCODE'
-
-        WHEN newp.id IS NULL
-            THEN 'NO PRODUCT'
-
-        WHEN ng.group_key IS NULL
-            THEN 'NO SIZE GROUP'
-
-        WHEN pc.id IS NULL
-            THEN 'NO COLOR'
-
-        ELSE 'MATCH'
-    END AS match_status
-
-FROM `test`.`products` old
-
-LEFT JOIN `test`.`products_ret` newp
-    ON newp.model_number = old.model_number
-
-LEFT JOIN (
-    SELECT
-        ps.product_id,
-        ps.group_key,
-        ps.packet_qty,
-
-        MIN(CAST(ps.size AS UNSIGNED)) AS min_size,
-        MAX(CAST(ps.size AS UNSIGNED)) AS max_size,
-        COUNT(*) AS size_count,
-
-        GROUP_CONCAT(
-            ps.size
-            ORDER BY CAST(ps.size AS UNSIGNED)
-            SEPARATOR ','
-        ) AS sizes
-
-    FROM `test`.`product_sizes_ret` ps
-
-    WHERE ps.age_type = 'سنة'
-      AND ps.size REGEXP '^[0-9]+$'
-
-    GROUP BY
-        ps.product_id,
-        ps.group_key,
-        ps.packet_qty
-) ng
-
-    ON ng.product_id = newp.id
-
-    AND ng.packet_qty = old.packet_size
-
-    AND ng.min_size = old.age_from
-    AND ng.max_size = old.age_to
-
-    AND ng.size_count =
-        FLOOR(
-            (old.age_to - old.age_from) / old.age_step
-        ) + 1
-
-LEFT JOIN `test`.`product_colors_ret` pc
-    ON pc.name = old.color
-
-ORDER BY
-    old.model_number,
-    old.age_from,
-    old.age_to,
-    old.color;
-    ----------------
-    استعلام جديد
-    SELECT
-    old.id AS old_product_id,
-    old.model_number,
-
-    old.name AS old_name,
-    new.id AS new_product_id,
-    new.name AS new_name,
-
-    old.color AS old_color,
-    pc.id AS new_color_id,
-    pc.name AS new_color,
-
-    old.age_from,
-    old.age_to,
-    old.age_step,
-    old.packet_size,
-
-    old.barcode AS old_barcode,
-
-    ps.group_key,
-
-    GROUP_CONCAT(
-        ps.size
-        ORDER BY CAST(ps.size AS UNSIGNED)
-        SEPARATOR '-'
-    ) AS new_sizes,
-
-    COUNT(ps.id) AS new_size_count,
-
-    CASE
-        WHEN new.id IS NULL
-            THEN '❌ الموديل غير موجود'
-
-        WHEN pc.id IS NULL
-            THEN '❌ اللون غير موجود'
-
-        WHEN ps.group_key IS NULL
-            THEN '❌ مجموعة القياسات غير موجودة'
-
-        WHEN COUNT(ps.id) <> (
-            FLOOR(
-                (old.age_to - old.age_from) / old.age_step
-            ) + 1
-        )
-            THEN '⚠ عدد القياسات مختلف'
-
-        WHEN MIN(CAST(ps.size AS UNSIGNED)) <> old.age_from
-            THEN '⚠ بداية القياسات مختلفة'
-
-        WHEN MAX(CAST(ps.size AS UNSIGNED)) <> old.age_to
-            THEN '⚠ نهاية القياسات مختلفة'
-
-        ELSE '✅ مطابق'
-    END AS match_status
-
-FROM products old
-
-LEFT JOIN products_ret new
-    ON new.model_number = old.model_number
-
-LEFT JOIN product_colors_ret pc
-    ON TRIM(pc.name) = TRIM(old.color)
-
-LEFT JOIN product_sizes_ret ps
-    ON ps.product_id = new.id
-    AND CAST(ps.size AS UNSIGNED) BETWEEN old.age_from AND old.age_to
-    AND MOD(
-        CAST(ps.size AS UNSIGNED) - old.age_from,
-        old.age_step
-    ) = 0
-
-GROUP BY
-    old.id,
-    old.model_number,
-    old.name,
-    new.id,
-    new.name,
-    old.color,
-    pc.id,
-    pc.name,
-    old.age_from,
-    old.age_to,
-    old.age_step,
-    old.packet_size,
-    old.barcode,
-    ps.group_key
-
-ORDER BY
-    old.model_number,
-    old.age_from,
-    old.color;
-    --------------
-    استعلام معرفة التطابق
-    SELECT
-    old.model_number,
-    old.color,
-    old.age_from,
-    old.age_to,
-    old.age_step,
-    old.barcode,
-    new.id AS new_product_id
-FROM test.products old
-LEFT JOIN test.products_ret new
-    ON new.model_number = old.model_number;
-    --------------------
-    ريد أولاً معرفة هل هناك موديلات قديمة لم تجد مقابلاً في products_ret
-    SELECT
-    old.model_number,
-    old.name,
-    old.color
-FROM test.products old
-LEFT JOIN test.products_ret new
-    ON new.model_number = old.model_number
-WHERE new.id IS NULL;
--------------------
-خلينا نعرف الرقم الحقيقي أولاً.
-SELECT COUNT(DISTINCT old.model_number) AS missing_models
-FROM test.products old
-LEFT JOIN test.products_ret new
-    ON new.model_number = old.model_number
-WHERE new.id IS NULL;
-------------------
-SELECT DISTINCT
-    old.model_number AS old_model,
-    new.model_number AS new_model,
-    new.id AS new_id
-FROM test.products old
-JOIN test.products_ret new
-    ON CAST(old.model_number AS UNSIGNED) = CAST(new.model_number AS UNSIGNED)
-WHERE old.model_number IN (
-    '01','02','03','04','052','057','062','07','08'
-)
-ORDER BY CAST(old.model_number AS UNSIGNED);
----------------
-نريد معرفة كل الـ155 موديل هل له مقابل رقمي في الجديدة.
-SELECT
-    old.model_number AS old_model,
-    new.model_number AS new_model,
-    new.id AS new_id
-FROM (
-    SELECT DISTINCT model_number
-    FROM test.products
-) old
-LEFT JOIN test.products_ret new
-    ON old.model_number = new.model_number
-    OR (
-        old.model_number REGEXP '^[0-9]+$'
-        AND new.model_number REGEXP '^[0-9]+$'
-        AND CAST(old.model_number AS UNSIGNED) =
-            CAST(new.model_number AS UNSIGNED)
-    )
-WHERE new.id IS NULL
-ORDER BY old.model_number;
---------------
-نحتاج نعرف شيئاً أهم:
-
-هل هذه الـ152 موديل لها باركودات في القديم تستحق الترحيل، أم أنها سجلات قديمة لا نحتاجها؟
-SELECT
-    COUNT(*) AS rows_count,
-    COUNT(DISTINCT model_number) AS models_count,
-    COUNT(barcode) AS barcode_count
-FROM test.products
-WHERE model_number IN (
-    SELECT DISTINCT old.model_number
-    FROM test.products old
-    LEFT JOIN test.products_ret new
-        ON old.model_number = new.model_number
-        OR (
-            old.model_number REGEXP '^[0-9]+$'
-            AND new.model_number REGEXP '^[0-9]+$'
-            AND CAST(old.model_number AS UNSIGNED) =
-                CAST(new.model_number AS UNSIGNED)
-        )
-    WHERE new.id IS NULL
-);
-----------------
-أريد أن نعرف هل الـ547 باركود فريدة أم يوجد نفس الباركود مستخدم لأكثر من سجل قديم.
-SELECT
-    COUNT(*) AS total_rows,
-    COUNT(DISTINCT barcode) AS unique_barcodes
-FROM test.products
-WHERE model_number IN (
-    SELECT DISTINCT old.model_number
-    FROM test.products old
-    LEFT JOIN test.products_ret new
-        ON old.model_number = new.model_number
-        OR (
-            old.model_number REGEXP '^[0-9]+$'
-            AND new.model_number REGEXP '^[0-9]+$'
-            AND CAST(old.model_number AS UNSIGNED) =
-                CAST(new.model_number AS UNSIGNED)
-        )
-    WHERE new.id IS NULL
-)
-AND barcode IS NOT NULL
-AND barcode <> '';
-----------------
-هل الباركودات موجودة أصلاً في القاعدة الجديدة ضمن product_variants_ret ولكن تحت موديلات/منتجات مختلفة؟
-
-خلينا نفحص هذا قبل أي قرار.
-SELECT
-    COUNT(*) AS found_barcodes,
-    COUNT(DISTINCT old.barcode) AS unique_found_barcodes
-FROM test.products old
-JOIN test.product_variants_ret v
-    ON v.barcode = old.barcode
-WHERE old.model_number IN (
-    SELECT DISTINCT p.model_number
-    FROM test.products p
-    LEFT JOIN test.products_ret pr
-        ON p.model_number = pr.model_number
-        OR (
-            p.model_number REGEXP '^[0-9]+$'
-            AND pr.model_number REGEXP '^[0-9]+$'
-            AND CAST(p.model_number AS UNSIGNED) =
-                CAST(pr.model_number AS UNSIGNED)
-        )
-    WHERE pr.id IS NULL
-);
-هذا الفحص سيخبرنا إذا كانت بعض الباركودات التي نظن أنها "مفقودة" موجودة فعلياً في النظام الجديد.
-----------------------
-نريد تقسيم الـ152 إلى مجموعات حسب سبب وجودها. أبسط فحص:
-SELECT
-    model_number,
-    COUNT(*) AS rows_count,
-    COUNT(DISTINCT color) AS colors_count,
-    GROUP_CONCAT(DISTINCT color ORDER BY color SEPARATOR ' | ') AS colors
-FROM test.products
-WHERE model_number IN (
-    SELECT DISTINCT p.model_number
-    FROM test.products p
-    LEFT JOIN test.products_ret pr
-        ON p.model_number = pr.model_number
-        OR (
-            p.model_number REGEXP '^[0-9]+$'
-            AND pr.model_number REGEXP '^[0-9]+$'
-            AND CAST(p.model_number AS UNSIGNED) =
-                CAST(pr.model_number AS UNSIGNED)
-        )
-    WHERE pr.id IS NULL
-)
-GROUP BY model_number
-ORDER BY model_number;
------------
-نحن هدفنا ترحيل الباركود، لذلك أريد معرفة هل هذه الموديلات القديمة لها منتجات جديدة مشابهة بالاسم رغم اختلاف model_number
-SELECT
-    old.model_number AS old_model,
-    old.name AS old_name,
-    new.id AS new_id,
-    new.model_number AS new_model,
-    new.name AS new_name
-FROM (
-    SELECT
-        model_number,
-        MAX(name) AS name
-    FROM test.products
-    GROUP BY model_number
-) old
-LEFT JOIN test.products_ret new
-    ON new.name = old.name
-WHERE new.id IS NOT NULL
-AND old.model_number NOT IN (
-    SELECT model_number
-    FROM test.products_ret
-)
-ORDER BY old.model_number;
-------------
-لدينا أساس جيد لمتابعة الموديلات التي تطابقت، ونقدر نبدأ فحص الباركود الحقيقي عليها.
-SELECT
-    COUNT(*) AS total_old,
-    COUNT(DISTINCT old.barcode) AS unique_barcodes,
-    COUNT(DISTINCT v.barcode) AS found_in_new
-FROM test.products old
-LEFT JOIN test.products_ret new
-    ON old.model_number = new.model_number
-LEFT JOIN test.product_variants_ret v
-    ON v.barcode = old.barcode
-WHERE new.id IS NOT NULL
-AND old.barcode IS NOT NULL
-AND old.barcode <> '';
-----------
-لآن ننتقل لأهم نقطة: مطابقة اللون
-SELECT
-    COUNT(*) AS total_rows,
-    COUNT(pc.id) AS matched_colors,
-    COUNT(*) - COUNT(pc.id) AS missing_colors
-FROM test.products old
-JOIN test.products_ret new
-    ON old.model_number = new.model_number
-LEFT JOIN test.product_colors_ret pc
-    ON TRIM(old.color) = TRIM(pc.name)
-WHERE old.barcode IS NOT NULL
-  AND old.barcode <> '';
-  -----------------
-  الآن أريد منك استخراج الـ28 لون فقط
-  SELECT
-    old.color,
-    COUNT(*) AS rows_count
-FROM test.products old
-JOIN test.products_ret new
-    ON old.model_number = new.model_number
-LEFT JOIN test.product_colors_ret pc
-    ON TRIM(old.color) = TRIM(pc.name)
-WHERE old.barcode IS NOT NULL
-  AND old.barcode <> ''
-  AND pc.id IS NULL
-GROUP BY old.color
-ORDER BY old.color;
----------------
-أريد أن نرى قائمة الألوان الموجودة فعلياً في product_colors_ret، حتى نقرر التحويل بدون تخمين.
-SELECT
-    id,
-    name,
-    hex_code
-FROM test.product_colors_ret
-ORDER BY id;
---------------
-ختبر مطابقة الـVariants
-
-نحتاج الآن نعرف بنية product_variants_ret بالضبط، خصوصاً أسماء الحقول التي تربط:
-DESCRIBE test.product_variants_ret;
-------------
-بقي عندنا مفتاحان لازم نعرفهما قبل بناء استعلام المطابقة:
-
-كيف نحدد product_id الجديد؟
-كيف نحدد size_id الجديد؟
-
-وبما أنك ذكرت أن products_ret لا يحتوي رقم الموديل، فلا أريد أن أفترض طريقة الربط.
-DESCRIBE test.products_ret;
-DESCRIBE test.product_sizes_ret;
-------------------
-مهم لأن group_key هو المفتاح الذي كنا نحتاجه لمعرفة مجموعة القياسات.
-
-لكن قبل أن نكتب استعلام الترحيل، أريد أن نتأكد من كيفية تمثيل القياسات في القديم والجديد، لأن هذه هي النقطة الحساسة الأخيرة.
-SELECT
-    age_from,
-    age_to,
-    age_step,
-    COUNT(*) AS rows_count
-FROM test.products
-WHERE barcode IS NOT NULL
-  AND barcode <> ''
-GROUP BY
-    age_from,
-    age_to,
-    age_step
-ORDER BY
-    age_from,
-    age_to,
-    age_step;
-    -----------------
-    نحتاج أن نرى كيف تم تحويل هذه المجموعات فعلياً إلى product_sizes_ret.group_key.
-
-لكن الآن لا أريد منك إرسال بيانات ضخمة.
-
-نفّذ هذا الاستعلام، وهو سيعطينا عينة كافية جداً من النظام الجديد:
-SELECT
-    ps.product_id,
-    p.model_number,
-    p.name,
-    ps.id AS size_id,
-    ps.size,
-    ps.age_type,
-    ps.group_key,
-    ps.sort_order
-FROM test.product_sizes_ret ps
-JOIN test.products_ret p
-    ON p.id = ps.product_id
-WHERE ps.group_key IS NOT NULL
-ORDER BY
-    ps.product_id,
-    ps.group_key,
-    ps.sort_order
-LIMIT 200;
----------------
-
 -- ============================================================================
 -- أداة تجريبية: حذف كل جداول فرع معيّن (حسب اللاحقة) دفعة وحدة
 -- ⚠️ للاستخدام بمرحلة التجريب فقط — عملية لا رجعة فيها (حذف نهائي).
@@ -543,3 +86,64 @@ WHERE TABLE_SCHEMA = DATABASE()
 
 -- ── تنظيف اختياري: احذف الإجراء نفسه لو ما بدك يضل موجود بالقاعدة ──
 -- DROP PROCEDURE IF EXISTS drop_branch_tables;
+----------------------------
+ضيف paid_amount DECIMAL(15,2) DEFAULT 0 لكل جداول hr_loans_* بكل الفروع تلقائياً.
+يهيّئ القيم الموجودة مسبقاً (paid_installments × monthly_deduction) — عشان أي سلفة قديمة عندها أقساط مسدَّدة أصلاً ما تنكشف على إنها صفر بالغلط لحظة التفعيل.
+آمن لإعادة التشغيل (بيتفحص العمود قبل الإضافة).
+
+
+-- 1_hr_loans_paid_amount.sql
+-- غيّر NN لرقم الهجرة التالي الفعلي عندك.
+--
+-- يضيف عمود `paid_amount` لجداول hr_loans_* بكل الفروع — تتبّع تراكمي
+-- للمبلغ الفعلي المسدَّد من كل سلفة، بدل الاعتماد فقط على عدد الأقساط
+-- (paid_installments/installments) يلي بيفترض إنه كل خصم = قسط كامل
+-- بالضبط. لازم لدعم الخصم الجزئي المخصَّص (مبلغ حر، مو قسط ثابت فقط).
+--
+-- آمن لإعادة التشغيل: يفحص وجود العمود قبل الإضافة، ويهيّئ القيم
+-- الموجودة مسبقاً (paid_amount = paid_installments × monthly_deduction)
+-- عشان السلف يلي أصلاً فيها تسديد جزئي من النظام القديم ما تنكشف
+-- على إنها صفر بالغلط.
+
+SET @db := DATABASE();
+
+DROP PROCEDURE IF EXISTS hr_loans_paid_amount_migration;
+
+DELIMITER $$
+CREATE PROCEDURE hr_loans_paid_amount_migration()
+BEGIN
+    DECLARE done INT DEFAULT 0;
+    DECLARE tbl_name VARCHAR(128);
+    DECLARE cur CURSOR FOR
+        SELECT TABLE_NAME
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = @db AND TABLE_NAME LIKE 'hr_loans\_%';
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+    OPEN cur;
+    loans_loop: LOOP
+        FETCH cur INTO tbl_name;
+        IF done THEN
+            LEAVE loans_loop;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=@db AND TABLE_NAME=tbl_name AND COLUMN_NAME='paid_amount') THEN
+            SET @sql = CONCAT('ALTER TABLE `', tbl_name, '` ADD COLUMN `paid_amount` DECIMAL(15,2) NOT NULL DEFAULT 0 AFTER `paid_installments`');
+            PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+            -- تهيئة القيم الموجودة مسبقاً بناءً على عدد الأقساط المسجّلة
+            -- (أفضل تقدير متاح للبيانات القديمة، مش افتراض صفر أعمى)
+            SET @sql = CONCAT('UPDATE `', tbl_name, '` SET paid_amount = paid_installments * monthly_deduction WHERE paid_amount = 0 AND paid_installments > 0');
+            PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+            SELECT CONCAT('تم تحديث: ', tbl_name) AS log;
+        END IF;
+    END LOOP;
+    CLOSE cur;
+END$$
+DELIMITER ;
+
+CALL hr_loans_paid_amount_migration();
+DROP PROCEDURE hr_loans_paid_amount_migration;
+----------------------------

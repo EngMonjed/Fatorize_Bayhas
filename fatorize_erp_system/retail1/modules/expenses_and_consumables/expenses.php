@@ -499,6 +499,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                 <li class="nav-item"><a class="nav-link fw-600 active" href="#"
                         style="border:none;border-bottom:2px solid #f59e0b;color:#f59e0b;font-size:.83rem;margin-bottom:-2px"><i
                             class="bi bi-wallet2 me-1"></i>إدارة المصاريف</a></li>
+                <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
+                        style="border:none;color:#64748b;font-size:.83rem"><i
+                            class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
             </ul>
 
             <!-- إحصائيات -->

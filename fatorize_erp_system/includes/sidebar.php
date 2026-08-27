@@ -11,34 +11,15 @@ $menu = reorderAndFilterSidebarMenu($menu, $_SESSION['table_suffix'] ?? '');
 $user = getCurrentUser();
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $currentPage = $currentModule ?? '';
-$sectionColor = getCurrentSectionColor($menu, $currentPage);
 ?>
 <style>
-    /* ✅ لون القسم الحالي — متغيّر CSS واحد، مصدره عمود modules.theme_color
-   (راجع 15_add_section_theme_colors.sql). أي صفحة داخل هالقسم بتقدر
-   تستخدم var(--section-color) بأي عنصر (أزرار، تبويبات، حدود...)
-   بدل ما تكتب لون حرفي ثابت — هيك كل عناصر القسم بتاخد نفس اللون
-   تلقائياً، وتغييره من صفحة الإعدادات بيطبّق على كل الصفحات فوراً. */
-    :root {
-        --section-color:
-            <?= htmlspecialchars($sectionColor) ?>
-        ;
-    }
-</style>
-<style>
-    /* تجميع بصري لأقسام القائمة حسب تكرار الاستخدام — مضاف محلياً هون
+/* تجميع بصري لأقسام القائمة حسب تكرار الاستخدام — مضاف محلياً هون
    لتفادي التعديل على layout.css المشترك بين كل الصفحات. */
-    .sb-group-label {
-        padding: 14px 16px 4px;
-        font-size: 11px;
-        color: rgba(255, 255, 255, .45);
-        text-transform: none;
-        letter-spacing: .02em;
-    }
-
-    .sb-nav>.sb-group-label:first-child {
-        padding-top: 4px;
-    }
+.sb-group-label{
+    padding:14px 16px 4px; font-size:11px; color:rgba(255,255,255,.45);
+    text-transform:none; letter-spacing:.02em;
+}
+.sb-nav > .sb-group-label:first-child{ padding-top:4px; }
 </style>
 <aside class="sidebar" id="sidebar">
 
@@ -60,9 +41,9 @@ $sectionColor = getCurrentSectionColor($menu, $currentPage);
         $groupLabels = [0 => 'الأكثر استخداماً', 4 => 'دوري', 7 => 'إداري'];
         foreach ($menu as $i => $section):
             if (isset($groupLabels[$i])):
-                ?>
-                <div class="sb-group-label"><?= htmlspecialchars($groupLabels[$i]) ?></div>
-            <?php endif; ?>
+        ?>
+            <div class="sb-group-label"><?= htmlspecialchars($groupLabels[$i]) ?></div>
+        <?php endif; ?>
 
             <div class="sb-group <?= isGroupActive($currentPage, $section) ? 'open' : '' ?>"
                 data-key="<?= $section['key'] ?>">
@@ -135,23 +116,20 @@ function reorderAndFilterSidebarMenu(array $menu, string $tableSuffix): array
 {
     // الأكثر استخداماً أولاً، فالدوري، فالإداري. أي قسم غير مذكور هون
     // (غير معروف/جديد) بينضاف تلقائياً بالآخر، مش بيختفي.
-    $priority = ['inventory', 'purchases', 'sales', 'expenses', 'hr', 'finance', 'admin']; // 'crm' أُزيلت — المجموعة نفسها انحلّت (راجع 11_dissolve_crm_group.sql)
+    $priority = ['sales', 'inventory', 'purchases', 'finance', 'expenses', 'hr', 'admin']; // 'crm' أُزيلت — المجموعة نفسها انحلّت (راجع 11_dissolve_crm_group.sql)
 
     $isRetailBranch = ($tableSuffix === 'ret');
-    $hiddenKeys = ['production', 'manufacturing'];
+    $hiddenKeys     = ['production', 'manufacturing'];
     $hiddenLabelHints = ['إنتاج', 'تصنيع'];
 
     $visible = [];
     foreach ($menu as $section) {
-        $key = $section['key'] ?? '';
+        $key   = $section['key'] ?? '';
         $label = $section['label'] ?? '';
 
         $looksLikeProduction = in_array($key, $hiddenKeys, true);
         foreach ($hiddenLabelHints as $hint) {
-            if (mb_strpos($label, $hint) !== false) {
-                $looksLikeProduction = true;
-                break;
-            }
+            if (mb_strpos($label, $hint) !== false) { $looksLikeProduction = true; break; }
         }
 
         if ($isRetailBranch && $looksLikeProduction) {
@@ -194,32 +172,6 @@ function injectInternalOrdersToMenu(array &$menu): void
     }
 }
 
-/**
- * لون القسم الحالي — بتدوّر جوا $menu (نفس بيانات buildSidebarMenu())
- * عن القسم الأب المطابق لـ$currentModule، وترجّع theme_color تبعه.
- * نفس منطق البحث الموجود بـrenderBreadcrumb() بالضبط، بس هون بترجّع
- * لون بدل نص.
- *
- * ⚠ لو القسم ما عنده theme_color بعد (عمود جديد، قيم افتراضية بس)،
- * أو الصفحة غير مربوطة بجدول modules أصلاً، بترجع لون افتراضي آمن
- * بدل فراغ يكسر التصميم.
- */
-function getCurrentSectionColor(array $menu, string $currentModule): string
-{
-    $default = '#3b82f6';
-    if ($currentModule === '') {
-        return $default;
-    }
-    foreach ($menu as $section) {
-        foreach ($section['children'] ?? [] as $child) {
-            if (($child['key'] ?? null) === $currentModule) {
-                return $section['theme_color'] ?? $default;
-            }
-        }
-    }
-    return $default;
-}
-
 /** هل أي ابن في هذا القسم هو الصفحة الحالية؟ */
 function isGroupActive(string $current, array $section): bool
 {
@@ -227,7 +179,8 @@ function isGroupActive(string $current, array $section): bool
         if ($child['key'] === $current)
             return true;
     }
-    return false;
+    // أيضاً إذا كانت الصفحة الحالية هي قسم فرعي من هذا القسم
+    return strpos($current, $section['key'] . '.') === 0;
 }
 
 /** تحويل مفتاح القسم إلى URL */
@@ -240,38 +193,22 @@ function moduleUrl(string $key): string
     // README-claude.md للتفاصيل الكاملة.
 
     // المبيعات
-    'sales.invoices' => 'sales/sales_index.php',        // ✅ مسار مُصلح (كان sales/invoices.php)
-    // sales.invoices.new أُزيلت (راجع 16_remove_sales_invoices_new_menu_item.sql)
-    // — كانت عنصر شريط جانبي منفصل لـ"فاتورة جديدة"، عكس نمط المشتريات
-    // (purchases.invoices.new غير موجود إطلاقاً). "فاتورة جديدة" الآن
-    // بس زر داخل sales_index.php (<a href="invoice_new.php">)، مو عنصر
-    // قائمة مستقل — نفس نمط المشتريات بالضبط.
-    // ملاحظة: invoice_edit.php (تعديل فاتورة بيع) ما محتاج مفتاح
-    // modules منفصل هون — بيستخدم نفس مفتاح 'sales.invoices' الموجود
-    // فوق، بس بصلاحية action='edit' (أحد الأعلام السبعة)، مش قسم
-    // مستقل بالقائمة الجانبية. الوصول إلها من زر "تعديل" داخل
-    // sales_index.php مباشرة (<a href="invoice_edit.php?id=...">) لا من
-    // القائمة الجانبية.
-    'sales.returns' => 'sales/returns.php', // ✅ صفحة فعلية كاملة (CRUD مسودات + تأكيد/إلغاء عبر confirm_sale_return.php)
-    'sales.reports' => 'sales/reports.php', // ✅ جديد — 6 تقارير (سجل مبيعات، أكثر عملاء، أكثر منتجات، هامش ربح، مرتجعات، حالة دفع)
-    'sales.orders' => 'sales/orders.php', // ⚠ جديد — وضع صيانة مؤقت عمداً (نفس نمط purchases.orders)، بانتظار بناء المنطق الفعلي
+    'sales.invoices'     => 'sales/sales_index.php',        // ✅ مسار مُصلح (كان sales/invoices.php)
+    'sales.invoices.new' => 'sales/sales_invoice_new.php',  // ✅ مسار مُصلح (كان sales/invoices.php?action=new)
+    // sales.returns أُزيل — sales_returns_ret schema-only، لا صفحة فعلية
 
     // المشتريات
-    'purchases.invoices' => 'purchases/index.php',
+    'purchases.invoices'  => 'purchases/index.php',
     'purchases.suppliers' => 'purchases/suppliers.php',
     'purchases.consumable_purchases' => 'expenses_and_consumables/consumable_purchases.php', // ✅ نُقلت فيزيائياً من inventory/ لمجلدها المخصص الجديد
-    'purchases.returns' => 'purchases/returns.php', // ✅ إنشاء + تأكيد كامل (مخزون + قيد محاسبي) مختبر وناجح
-    'purchases.reports' => 'purchases/reports.php', // ✅ جديد — 7 تقارير (سجل مشتريات، أكثر شراءً، مرتجعات، نسبة إرجاع، خصم تعجيل، توزيع عملة، تاريخ سعر)
-    'purchases.orders' => 'purchases/orders.php', // ⚠ جديد — وضع صيانة مؤقت عمداً (نفس نمط inventory.internal_orders)، بانتظار بناء المنطق الفعلي
+    // purchases.returns أُزيل — purchase_returns_ret schema-only، لا صفحة فعلية
 
     // المخزون (منتجات فقط — المستهلكات صارت تحت "المصاريف والمستهلكات")
-    'inventory.products' => 'inventory/products.php',
-    'inventory.warehouse' => 'inventory/warehouse.php',   // افتراضي type=products داخل الملف نفسه
-    'inventory.movements' => 'inventory/movements.php',   // افتراضي tab=products داخل الملف نفسه
-    'inventory.internal_orders' => 'inventory/internal_orders.php',
-    'inventory.reports' => 'inventory/reports.php', // ✅ جديد — تقارير المنتجات (حركة/أسعار/ربح)
-    'inventory.consumables' => 'expenses_and_consumables/consumables.php', // ✅ نُقلت فيزيائياً من inventory/ — المفتاح بدون تغيير (parent_key بجدول modules صار 'expenses')
-    'inventory.import_products' => 'inventory/import_products.php', // ✅ جديد
+    'inventory.products'         => 'inventory/products.php',
+    'inventory.warehouse'        => 'inventory/warehouse.php',   // افتراضي type=products داخل الملف نفسه
+    'inventory.movements'        => 'inventory/movements.php',   // افتراضي tab=products داخل الملف نفسه
+    'inventory.internal_orders'  => 'inventory/internal_orders.php',
+    'inventory.consumables'      => 'expenses_and_consumables/consumables.php', // ✅ نُقلت فيزيائياً من inventory/ — المفتاح بدون تغيير (parent_key بجدول modules صار 'expenses')
     // inventory.raw_materials / inventory.operations أُزيلا — لا ملفات فعلية بعد (مواد أولية/تصنيع)
 
     // المصاريف والمستهلكات — ✅ مجموعة أُعيد بناؤها بالكامل بجدول modules
@@ -279,23 +216,21 @@ function moduleUrl(string $key): string
     // (expenses.consumables/utilities/reports مع مجلد expenses/ غير
     // موجود) اختفت من الأساس لأنها ما كانت موجودة فعلياً بجدول modules
     // الحقيقي — كانت بس بخريطة moduleUrl() القديمة.
-    'expenses.consumable_issues' => 'expenses_and_consumables/consumable_issues.php', // ✅ نُقلت فيزيائياً من inventory/
+    'expenses.consumable_issues'    => 'expenses_and_consumables/consumable_issues.php', // ✅ نُقلت فيزيائياً من inventory/
     'expenses.consumable_transfers' => 'expenses_and_consumables/consumable_transfers.php', // ✅ صفحة جديدة (مناقلة بين المستودعات المستهلكات)
-    'expenses.warehouse' => 'inventory/warehouse.php?type=consumables',
-    'expenses.consumable_entries' => 'inventory/movements.php?tab=consumables', // ✅ صف يتيم أُعيد تدويره — كان "سجل الاستهلاك" بلا صفحة
-    'finance.expenses' => 'expenses_and_consumables/expenses.php', // ✅ نُقلت فيزيائياً من accounting/ — المفتاح بدون تغيير
+    'expenses.consumable_suppliers' => 'purchases/suppliers.php?tab=consumables', // ✅ نفس ملف موردي المنتجات، بسياق مختلف — الجدول عام أصلاً
+    'expenses.warehouse'            => 'inventory/warehouse.php?type=consumables',
+    'expenses.consumable_entries'   => 'inventory/movements.php?tab=consumables', // ✅ صف يتيم أُعيد تدويره — كان "سجل الاستهلاك" بلا صفحة
+    'finance.expenses'              => 'expenses_and_consumables/expenses.php', // ✅ نُقلت فيزيائياً من accounting/ — المفتاح بدون تغيير
 
     // المحاسبة/المالية
-    'finance.accounts' => 'accounting/accounts.php',
-    'finance.account_settings' => 'accounting/account_settings.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
-    'finance.journal' => 'accounting/journal.php',
-    'finance.receipts' => 'accounting/receipts.php',        // ✅ مسار مُصلح (كان receipts/index.php)
-    'finance.payments' => 'accounting/payments.php',        // ✅ جديد — سندات الدفع (مقابل finance.receipts)
-    'finance.treasury' => 'accounting/treasury.php',        // ✅ جديد — الصندوق (نظرة عامة + تحويل بين الصناديق/البنوك)
-    'finance.taxes' => 'accounting/taxes.php',           // ✅ جديد — الضرائب والرسوم
-    'finance.reports' => 'accounting/reports.php',         // ✅ جديد — التقارير المالية (ميزانية/أرباح وخسائر/تدفقات نقدية)
-    'finance.currencies' => 'accounting/currencies.php',      // ✅ موجودة، كانت غير مربوطة بأي قائمة
-    'finance.shipping_carriers' => 'accounting/shipping_carriers.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    'finance.accounts'          => 'accounting/accounts.php',
+    'finance.account_settings'  => 'accounting/account_settings.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    'finance.journal'            => 'accounting/journal.php',
+    'finance.receipts'           => 'accounting/receipts.php',        // ✅ مسار مُصلح (كان receipts/index.php)
+    'finance.currencies'         => 'accounting/currencies.php',      // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    'finance.shipping_carriers'  => 'accounting/shipping_carriers.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
+    // finance.reports أُزيل — لا صفحة تقارير فعلية بعد
 
     // ✅ مجموعة "العملاء والموردون" (crm) انحلّت بالكامل (راجع
     // 11_dissolve_crm_group.sql) — crm.customers نُقلت لمجموعة sales
@@ -307,18 +242,16 @@ function moduleUrl(string $key): string
     // sales.customers أُزيل نهائياً من جدول modules (كان تكرار حرفي لـ crm.customers)
 
     // الموارد البشرية
-    'hr.employees' => 'hr/employees.php',
+    'hr.employees'  => 'hr/employees.php',
     'hr.attendance' => 'hr/attendance.php',
-    'hr.payroll' => 'hr/payroll.php',
-    'hr.reports' => 'hr/reports.php', // ✅ رجّعت — الصفحة صارت موجودة فعلياً (كشف حساب موظف)
+    'hr.payroll'    => 'hr/payroll.php',
+    // hr.reports أُزيل — لا صفحة تقارير فعلية بعد
     // hr.holidays أُزيل — العطل مُدارة جوا attendance.php نفسها، لا صفحة مستقلة
 
     // الإدارة
-    'admin.users' => 'admin/users.php',
+    'admin.users'       => 'admin/users.php',
     'admin.permissions' => 'admin/permissions.php',
-    'admin.branches' => 'admin/branches.php',
-    'admin.section_colors' => 'admin/section_colors.php', // ✅ جديد — صفحة إعدادات ألوان الأقسام
-    'admin.opening_balances' => 'admin/opening_balances.php', // ✅ كانت مفقودة
+    'admin.branches'    => 'admin/branches.php',
     // admin.settings أُزيل — لا صفحة settings/index.php فعلية بعد
     ];
     // قراءة base_path من session حسب الفرع

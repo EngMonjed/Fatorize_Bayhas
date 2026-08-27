@@ -135,6 +135,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // الصحيح الوحيد — DDL أصلاً مش transactional بـMySQL.
             $pdo->commit();
 
+            // ✅ منح المستخدم رقم ١ (مدير النظام) وصول كامل تلقائياً
+            // لأي فرع جديد — ربط بالفرع + كل الصلاحيات السبعة على كل
+            // الأقسام الموجودة فعلياً بجدول modules وقت الإنشاء
+            try {
+                $pdo->prepare("INSERT IGNORE INTO user_branches (user_id, branch_id) VALUES (1, ?)")
+                    ->execute([$newBranchId]);
+
+                $allModuleKeys = $pdo->query("SELECT `key` FROM modules WHERE is_active=1")->fetchAll(PDO::FETCH_COLUMN);
+                $grantStmt = $pdo->prepare("INSERT IGNORE INTO user_permissions
+                    (user_id, branch_id, module_key, can_view, can_create, can_edit, can_delete, can_confirm, can_print, can_export, granted_by, created_at)
+                    VALUES (1, ?, ?, 1,1,1,1,1,1,1, ?, NOW())");
+                foreach ($allModuleKeys as $moduleKey) {
+                    $grantStmt->execute([$newBranchId, $moduleKey, $_SESSION['user_id']]);
+                }
+            } catch (Throwable $e) {
+                // ⚠ ما نوقف إنشاء الفرع لو فشلت هالخطوة — الفرع أصلاً
+            // انحفظ صح، بس نسجّل الخطأ لمراجعة يدوية لاحقة
+                error_log('branch_add: فشل منح صلاحيات المستخدم 1 للفرع ' . $newBranchId . ': ' . $e->getMessage());
+            }
+
             $tablesResult = null;
             if (!empty($_POST['create_tables_now'])) {
                 require_once __DIR__ . '/../../../config/create_branch_tables.php';
@@ -143,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             echo json_encode([
                 'ok' => true,
-                'msg' => 'تم إنشاء الفرع بنجاح',
+                'msg' => 'تم إنشاء الفرع بنجاح، ومُنح المستخدم رقم 1 وصول كامل تلقائياً',
                 'branch_id' => $newBranchId,
                 'tables' => $tablesResult,
             ]);

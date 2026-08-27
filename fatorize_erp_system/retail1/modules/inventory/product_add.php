@@ -1665,8 +1665,12 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
 
             pricing.forEach((p, i) => { if (sizeGroups[i]) p.group_key = sizeGroups[i].key; });
 
-            document.getElementById('saveTxt').style.opacity = '0';
-            document.getElementById('saveSpin').style.display = 'inline-block';
+            // ⚠ الأربعة محميين بفحص وجود — أي عنصر ناقص من الصفحة كان
+            // بيكسر saveProduct() كلياً (TypeError) فما يتم الحفظ إطلاقاً
+            const _sTxt = document.getElementById('saveTxt');
+            const _sSpin = document.getElementById('saveSpin');
+            if (_sTxt) _sTxt.style.opacity = '0';
+            if (_sSpin) _sSpin.style.display = 'inline-block';
             if (document.getElementById('saveTxt2')) document.getElementById('saveTxt2').style.opacity = '0';
             if (document.getElementById('saveSpin2')) document.getElementById('saveSpin2').style.display = 'inline-block';
 
@@ -1685,8 +1689,8 @@ $rootCats = array_values(array_filter($categories, fn($c) => !$c['parent_id']));
                 colors: JSON.stringify(selColors),
                 pricing: JSON.stringify(pricing),
             }).then(d => {
-                document.getElementById('saveTxt').style.opacity = '1';
-                document.getElementById('saveSpin').style.display = 'none';
+                if (_sTxt) _sTxt.style.opacity = '1';
+                if (_sSpin) _sSpin.style.display = 'none';
                 if (document.getElementById('saveTxt2')) document.getElementById('saveTxt2').style.opacity = '1';
                 if (document.getElementById('saveSpin2')) document.getElementById('saveSpin2').style.display = 'none';
                 if (d.ok) {

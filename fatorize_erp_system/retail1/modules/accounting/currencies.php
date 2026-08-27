@@ -132,6 +132,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     if ($cashParent && $bankParent) {
                         $pdo->prepare("UPDATE currencies SET cash_account_id=?, bank_account_id=? WHERE id=?")
                             ->execute([$cashId, $bankId, $id]);
+
+                        // ── الربط الفعلي بالفرع (المصدر الحقيقي الجديد) —
+                        // خطوة واحدة: إضافة العملة = ربطها تلقائياً بفرع
+                        // المُنشئ، بدون أي خطوة إضافية منفصلة ──
+                        $myBranchId = $pdo->prepare("SELECT id FROM branches WHERE table_suffix=?");
+                        $myBranchId->execute([$TS2]);
+                        $myBranchId = $myBranchId->fetchColumn();
+                        if ($myBranchId) {
+                            $pdo->prepare("INSERT INTO currency_branch_links (currency_id,branch_id,cash_account_id,bank_account_id,linked_by)
+                                VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE cash_account_id=?,bank_account_id=?")
+                                ->execute([$id, $myBranchId, $cashId, $bankId, $_SESSION['user_id'], $cashId, $bankId]);
+                        }
                     }
                     $pdo->commit();
                     // 🔴 كانت الرسالة ثابتة تدّعي دايماً إنشاء حسابات الصندوق
@@ -146,6 +158,114 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $pdo->rollBack();
                     throw $e;
                 }
+            }
+        }
+
+        // ── معاينة أكواد الحسابات المقترحة قبل الربط (قابلة للتعديل بالواجهة) ──
+        elseif ($act === 'get_link_preview') {
+            $currId = (int) $_POST['currency_id'];
+            $cur = $pdo->prepare("SELECT * FROM currencies WHERE id=?");
+            $cur->execute([$currId]);
+            $cur = $cur->fetch();
+            if (!$cur)
+                throw new Exception('العملة غير موجودة');
+
+            $myBranchId = $pdo->prepare("SELECT id FROM branches WHERE table_suffix=?");
+            $myBranchId->execute([$TS2]);
+            $myBranchId = $myBranchId->fetchColumn();
+            $already = $pdo->prepare("SELECT COUNT(*) FROM currency_branch_links WHERE currency_id=? AND branch_id=?");
+            $already->execute([$currId, $myBranchId]);
+            if ($already->fetchColumn())
+                throw new Exception('هذه العملة مربوطة أصلاً بفرعك');
+
+            $cashParent = $pdo->query("SELECT id FROM `{$TAC2}` WHERE code='1.1.1' LIMIT 1")->fetchColumn();
+            $bankParent = $pdo->query("SELECT id FROM `{$TAC2}` WHERE code='1.1.2' LIMIT 1")->fetchColumn();
+            if (!$cashParent || !$bankParent)
+                throw new Exception('الحسابان الأب 1.1.1 (الصناديق) و1.1.2 (البنوك) مش موجودين بشجرة حسابات فرعك — أنشئهما أولاً');
+
+            $cashCount = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC2}` WHERE parent_id={$cashParent}")->fetchColumn();
+            $bankCount = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC2}` WHERE parent_id={$bankParent}")->fetchColumn();
+
+            echo json_encode(['ok' => true, 'data' => [
+                'code' => $cur['code'], 'name' => $cur['name'],
+                'cash_code' => sprintf('1.1.1.%03d', $cashCount + 1),
+                'cash_name' => "صندوق {$cur['name']}",
+                'bank_code' => sprintf('1.1.2.%03d', $bankCount + 1),
+                'bank_name' => "بنك {$cur['name']}",
+            ]]);
+        }
+
+        // ── الربط الفعلي: إنشاء الحسابين بالأكواد المؤكَّدة (المقترحة أو المعدَّلة) ──
+        elseif ($act === 'link_currency_to_branch') {
+            requirePermission('finance.currencies', 'edit');
+            $currId = (int) $_POST['currency_id'];
+            $cashCode = trim($_POST['cash_code'] ?? '');
+            $cashName = trim($_POST['cash_name'] ?? '');
+            $bankCode = trim($_POST['bank_code'] ?? '');
+            $bankName = trim($_POST['bank_name'] ?? '');
+            if (!$cashCode || !$cashName || !$bankCode || !$bankName)
+                throw new Exception('كل الحقول مطلوبة');
+            if ($cashCode === $bankCode)
+                throw new Exception('كود حساب الصندوق والبنك لا يمكن أن يكونا نفس الكود');
+
+            $cur = $pdo->prepare("SELECT * FROM currencies WHERE id=?");
+            $cur->execute([$currId]);
+            $cur = $cur->fetch();
+            if (!$cur)
+                throw new Exception('العملة غير موجودة');
+
+            $myBranchId = $pdo->prepare("SELECT id FROM branches WHERE table_suffix=?");
+            $myBranchId->execute([$TS2]);
+            $myBranchId = $myBranchId->fetchColumn();
+            if (!$myBranchId)
+                throw new Exception('تعذّر تحديد فرعك الحالي');
+
+            $already = $pdo->prepare("SELECT COUNT(*) FROM currency_branch_links WHERE currency_id=? AND branch_id=?");
+            $already->execute([$currId, $myBranchId]);
+            if ($already->fetchColumn())
+                throw new Exception('هذه العملة مربوطة أصلاً بفرعك');
+
+            // ⚠ تحقق تفرّد الكود — بما إنه المستخدم يقدر يعدّله يدوياً، لازم
+            // نتأكد ما تعارض مع كود موجود أصلاً بشجرة حسابات هذا الفرع
+            $dupCheck = $pdo->prepare("SELECT COUNT(*) FROM `{$TAC2}` WHERE code IN (?, ?)");
+            $dupCheck->execute([$cashCode, $bankCode]);
+            if ($dupCheck->fetchColumn())
+                throw new Exception('أحد الكودين المدخَلين مستخدم أصلاً بحساب موجود — اختر كوداً آخر');
+
+            $cashParent = $pdo->query("SELECT id FROM `{$TAC2}` WHERE code='1.1.1' LIMIT 1")->fetchColumn();
+            $bankParent = $pdo->query("SELECT id FROM `{$TAC2}` WHERE code='1.1.2' LIMIT 1")->fetchColumn();
+            if (!$cashParent || !$bankParent)
+                throw new Exception('الحسابان الأب 1.1.1/1.1.2 مش موجودين بشجرة حسابات فرعك');
+
+            $pdo->beginTransaction();
+            try {
+                $pdo->prepare("INSERT INTO `{$TAC2}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                    VALUES (?,?,?,'asset',?,4,0)")
+                    ->execute([$cashCode, $cashName, $cashParent, $currId]);
+                $cashId = (int) $pdo->lastInsertId();
+
+                $pdo->prepare("INSERT INTO `{$TAC2}` (code,name,parent_id,account_type,currency_id,level,is_locked)
+                    VALUES (?,?,?,'asset',?,4,0)")
+                    ->execute([$bankCode, $bankName, $bankParent, $currId]);
+                $bankId = (int) $pdo->lastInsertId();
+
+                $lcode = strtolower($cur['code']);
+                $pdo->prepare("INSERT INTO `{$TIAS2}` (setting_key,account_id,account_code,account_name,description)
+                    VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE account_id=?,account_code=?,account_name=?")
+                    ->execute(["cash_{$lcode}", $cashId, $cashCode, $cashName, "صندوق {$cur['code']}", $cashId, $cashCode, $cashName]);
+                $pdo->prepare("INSERT INTO `{$TIAS2}` (setting_key,account_id,account_code,account_name,description)
+                    VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE account_id=?,account_code=?,account_name=?")
+                    ->execute(["bank_{$lcode}", $bankId, $bankCode, $bankName, "بنك {$cur['code']}", $bankId, $bankCode, $bankName]);
+
+                $pdo->prepare("INSERT INTO currency_branch_links (currency_id,branch_id,cash_account_id,bank_account_id,linked_by)
+                    VALUES (?,?,?,?,?)")
+                    ->execute([$currId, $myBranchId, $cashId, $bankId, $_SESSION['user_id']]);
+
+                $pdo->commit();
+                echo json_encode(['ok' => true, 'msg' => "تم ربط عملة {$cur['code']} بفرعك، وإنشاء حسابي الصندوق والبنك"]);
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                throw $e;
             }
         }
 
@@ -242,12 +362,25 @@ try {
 
 
 // ── بيانات الصفحة ──
-$currencies = $pdo->query("SELECT cur.*, cash.code AS cash_code, cash.name AS cash_name,
+$myBranchId = $pdo->prepare("SELECT id FROM branches WHERE table_suffix=?");
+$myBranchId->execute([$TS]);
+$myBranchId = $myBranchId->fetchColumn() ?: 0;
+
+$currencies = $pdo->prepare("SELECT cur.*,
+    l.cash_account_id AS link_cash_id, l.bank_account_id AS link_bank_id,
+    cash.code AS cash_code, cash.name AS cash_name,
     bank.code AS bank_code, bank.name AS bank_name
     FROM currencies cur
-    LEFT JOIN `{$TAC}` cash ON cash.id = cur.cash_account_id
-    LEFT JOIN `{$TAC}` bank ON bank.id = cur.bank_account_id
-    ORDER BY cur.is_base DESC, cur.id")->fetchAll();
+    LEFT JOIN currency_branch_links l ON l.currency_id = cur.id AND l.branch_id = ?
+    LEFT JOIN `{$TAC}` cash ON cash.id = l.cash_account_id
+    LEFT JOIN `{$TAC}` bank ON bank.id = l.bank_account_id
+    ORDER BY cur.is_base DESC, cur.id");
+$currencies->execute([$myBranchId]);
+$currencies = $currencies->fetchAll();
+foreach ($currencies as &$c) {
+    $c['is_linked'] = !empty($c['link_cash_id']) || !empty($c['link_bank_id']);
+}
+unset($c);
 $baseCur = array_filter($currencies, function ($c) {
     return $c['is_base'];
 });
@@ -573,7 +706,8 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                 else
                                     $freshCls = 'stale-badge';
                                 ?>
-                                <tr id="row_<?= $cur['id'] ?>">
+                                <tr id="row_<?= $cur['id'] ?>"
+                                    style="<?= !$cur['is_linked'] ? 'background:#fffbeb' : '' ?>">
                                     <td>
                                         <span class="fw-700"
                                             style="font-size:.9rem;direction:ltr;display:inline-block;color:#1e3a8a"><?= htmlspecialchars($cur['code']) ?></span>
@@ -615,7 +749,7 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                         <?php else: ?>—<?php endif; ?>
                                     </td>
                                     <td style="font-size:.72rem">
-                                        <?php if ($cur['cash_code'] || $cur['bank_code']): ?>
+                                        <?php if ($cur['is_linked']): ?>
                                             <?php if ($cur['cash_code']): ?>
                                                 <div><i class="bi bi-cash-coin me-1 text-success"></i>
                                                     <span class="n" dir="ltr"><?= htmlspecialchars($cur['cash_code']) ?></span>
@@ -629,7 +763,9 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                                 </div>
                                             <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="text-muted">—</span>
+                                            <span class="text-warning fw-600">
+                                                <i class="bi bi-exclamation-triangle-fill me-1"></i>غير مربوطة بفرعك
+                                            </span>
                                         <?php endif; ?>
                                     </td>
                                     <td>
@@ -657,6 +793,12 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                                     </td>
                                     <td>
                                         <div class="d-flex gap-1 justify-content-center">
+                                            <?php if (!$cur['is_linked']): ?>
+                                                <button class="act-btn" style="border-color:#f59e0b;color:#d97706"
+                                                    onclick="openLinkModal(<?= $cur['id'] ?>)" title="ربط عملة بفرعي">
+                                                    <i class="bi bi-link-45deg"></i>
+                                                </button>
+                                            <?php endif; ?>
                                             <button class="act-btn primary"
                                                 onclick="openEdit(<?= $cur['id'] ?>,'<?= htmlspecialchars($cur['code'], ENT_QUOTES) ?>','<?= htmlspecialchars($cur['name'], ENT_QUOTES) ?>','<?= htmlspecialchars($cur['symbol'] ?? '', ENT_QUOTES) ?>',<?= $rate ?>,'<?= $cur['status'] ?>')"
                                                 title="تعديل">
@@ -757,8 +899,42 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
         </div>
     </div>
 
+    <!-- مودال ربط عملة بالفرع -->
+    <div class="modal fade" id="linkModal" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="border-radius:16px;border:none">
+                <div class="modal-header py-3 px-4 border-0"
+                    style="background:linear-gradient(135deg,#d97706,#f59e0b);border-radius:16px 16px 0 0">
+                    <h6 class="modal-title text-white fw-700 mb-0" id="linkModalTitle">
+                        <i class="bi bi-link-45deg me-2"></i>ربط عملة بفرعي
+                    </h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body px-4 py-4">
+                    <input type="hidden" id="linkCurrencyId">
+                    <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem;border-radius:10px">
+                        <i class="bi bi-info-circle me-1"></i>
+                        هيك رح يتنشئ حساب صندوق وحساب بنك جديدين بشجرة حساباتك — راجع الأكواد المقترحة أو عدّلها قبل التأكيد.
+                    </div>
+                    <div id="linkFormBody">
+                        <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-warning"></span></div>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 px-4 pb-4">
+                    <button class="btn btn-sm btn-light" style="border-radius:8px" data-bs-dismiss="modal">إلغاء</button>
+                    <button class="btn btn-sm fw-600" style="border-radius:8px;background:#d97706;color:#fff;min-width:110px"
+                        onclick="confirmLinkCurrency()" id="btnConfirmLink">
+                        <span id="linkTxt"><i class="bi bi-check-circle me-1"></i>تأكيد الربط</span>
+                        <span id="linkSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        const linkModal = new bootstrap.Modal(document.getElementById('linkModal'));
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
         function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
         function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
@@ -779,6 +955,66 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
             t.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:9999;border-radius:12px;min-width:240px;text-align:center;font-size:.83rem;padding:.5rem 1.2rem';
             t.innerHTML = `<i class="bi bi-${type === 'success' ? 'check-circle-fill text-success' : 'exclamation-triangle-fill text-danger'} me-2"></i>${msg}`;
             document.body.appendChild(t); setTimeout(() => t.remove(), 3000);
+        }
+
+        // ── ربط عملة بالفرع ──
+        function openLinkModal(currencyId) {
+            document.getElementById('linkCurrencyId').value = currencyId;
+            document.getElementById('linkModalTitle').innerHTML = '<i class="bi bi-link-45deg me-2"></i>ربط عملة بفرعي';
+            document.getElementById('linkFormBody').innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm text-warning"></span></div>';
+            linkModal.show();
+            post({ _action: 'get_link_preview', currency_id: currencyId }).then(d => {
+                if (!d.ok) {
+                    document.getElementById('linkFormBody').innerHTML = `<div class="text-danger" style="font-size:.85rem">${d.msg}</div>`;
+                    return;
+                }
+                const p = d.data;
+                document.getElementById('linkModalTitle').innerHTML = `<i class="bi bi-link-45deg me-2"></i>ربط ${p.code} — ${p.name}`;
+                document.getElementById('linkFormBody').innerHTML = `
+            <div class="row g-2">
+                <div class="col-6">
+                    <label class="field-lbl">كود حساب الصندوق</label>
+                    <input type="text" id="linkCashCode" class="form-control form-control-sm n" dir="ltr" value="${p.cash_code}">
+                </div>
+                <div class="col-6">
+                    <label class="field-lbl">اسم حساب الصندوق</label>
+                    <input type="text" id="linkCashName" class="form-control form-control-sm" value="${p.cash_name}">
+                </div>
+                <div class="col-6">
+                    <label class="field-lbl">كود حساب البنك</label>
+                    <input type="text" id="linkBankCode" class="form-control form-control-sm n" dir="ltr" value="${p.bank_code}">
+                </div>
+                <div class="col-6">
+                    <label class="field-lbl">اسم حساب البنك</label>
+                    <input type="text" id="linkBankName" class="form-control form-control-sm" value="${p.bank_name}">
+                </div>
+            </div>`;
+            });
+        }
+
+        function confirmLinkCurrency() {
+            const cashCode = document.getElementById('linkCashCode')?.value.trim();
+            const cashName = document.getElementById('linkCashName')?.value.trim();
+            const bankCode = document.getElementById('linkBankCode')?.value.trim();
+            const bankName = document.getElementById('linkBankName')?.value.trim();
+            if (!cashCode || !cashName || !bankCode || !bankName) { toast('كل الحقول مطلوبة', 'danger'); return; }
+
+            document.getElementById('linkTxt').style.opacity = '0';
+            document.getElementById('linkSpin').style.display = 'inline-block';
+            document.getElementById('btnConfirmLink').disabled = true;
+
+            post({
+                _action: 'link_currency_to_branch',
+                currency_id: document.getElementById('linkCurrencyId').value,
+                cash_code: cashCode, cash_name: cashName,
+                bank_code: bankCode, bank_name: bankName,
+            }).then(d => {
+                document.getElementById('linkTxt').style.opacity = '1';
+                document.getElementById('linkSpin').style.display = 'none';
+                document.getElementById('btnConfirmLink').disabled = false;
+                if (d.ok) { toast(d.msg); linkModal.hide(); setTimeout(() => location.reload(), 800); }
+                else toast(d.msg, 'danger');
+            });
         }
 
         // ── مودال ──

@@ -20,6 +20,7 @@ try {
     $TJE="journal_entries_{$TS}";
     $TJI="journal_entry_items_{$TS}";
     $TIAS="invoice_account_settings_{$TS}";
+    $TLA="hr_payroll_loan_allocations_{$TS}";
     $act=$_POST['_action']??'';
     // جلب العملات من DB بدل hardcoded
     $curRows=$pdo->query("SELECT id,code,symbol FROM currencies WHERE status='active'")->fetchAll(PDO::FETCH_ASSOC);
@@ -127,7 +128,7 @@ try {
                 if($diff>0)$weeklySchedHours+=$diff;
             }
         }
-        $hrRate=$weeklySchedHours>0?round($base/$weeklySchedHours,4):0;
+        $hrRate=$weeklySchedHours>0?round($base/$weeklySchedHours,4):0; // افتراضي (أسبوعي)
 
         // الحضور
         $attSt=$pdo->prepare("SELECT
@@ -149,15 +150,55 @@ try {
         $holSt->execute([$dateFrom,$dateTo]);
         $holDays=(int)$holSt->fetchColumn();
 
-        // الحساب
-        if($emp['salary_type']==='monthly'){
-            $pd=max(1,(new DateTime($dateTo))->diff(new DateTime($dateFrom))->days+1);
-            $hrRate=round($base/(22*8),4);
-            $earned=$base*($workDays+$holDays)/$pd;
-            $regularHours=($workDays+$holDays)*8;
-        }else{
-            $earned=$hrRate*$totalHours;
-            $regularHours=$totalHours;
+        // الحساب — حسب نوع الراتب الفعلي، الأربعة أنواع منفصلين عن بعض
+        // (كانت "يومي"/"ساعي" بتُعاملان زي "أسبوعي" بالغلط: القسمة على
+        // ساعات الأسبوع المجدولة بدل معاملة basic_salary كأجر يوم/ساعة
+        // مباشر — تصحيح جذري، مو تعديل تجميلي)
+        switch($emp['salary_type']){
+            case 'monthly':
+                // أجر الساعة للموظف الشهري ديناميكي حسب الشهر الفعلي —
+                // مو افتراض ثابت "٢٢ يوم × ٨ ساعات". نمر يوم يوم على
+                // كامل الفترة (عادة = الشهر التقويمي كامل للموظف الشهري)،
+                // ونجمع ساعات الدوام المجدولة فعلياً لكل يوم مو عطلة
+                // أسبوعية له — فيختلف المجموع تلقائياً حسب عدد أيام الشهر
+                // (٢٨-٣١) وحسب يوم بداية الشهر (بيغيّر كم مرة تقع عطلته
+                // الأسبوعية بنفس الشهر)
+                $totalSchedHours=0;
+                $dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+                $period=new DatePeriod(new DateTime($dateFrom), new DateInterval('P1D'), (new DateTime($dateTo))->modify('+1 day'));
+                foreach($period as $d){
+                    $dn=$dayNames[(int)$d->format('w')];
+                    $f=$emp[$dn.'_from'];$t=$emp[$dn.'_to'];
+                    if($f!==null&&$f!==''&&$t!==null&&$t!==''){
+                        $diff=(int)$t-(int)$f;
+                        if($diff>0)$totalSchedHours+=$diff;
+                    }
+                }
+                $hrRate=$totalSchedHours>0?round($base/$totalSchedHours,4):0;
+                $earned=$hrRate*$totalHours;
+                $regularHours=$totalHours;
+                break;
+            case 'daily':
+                // basic_salary = أجر اليوم الواحد مباشرة، لا يُقسَم على
+                // ساعات الأسبوع. hrRate هون بس مكافئ نظري (÷٨ ساعات)
+                // يُستخدم لحساب الإضافي فقط، مو الأجر الأساسي نفسه
+                $hrRate=round($base/8,4);
+                $earned=$base*$workDays;
+                $regularHours=$workDays*8;
+                break;
+            case 'hourly':
+                // basic_salary = أجر الساعة مباشرة، بدون أي قسمة إطلاقاً
+                $hrRate=$base;
+                $earned=$hrRate*$totalHours;
+                $regularHours=$totalHours;
+                break;
+            case 'weekly':
+            default:
+                // basic_salary إجمالي الأسبوع ÷ ساعاته المجدولة = أجر الساعة
+                // الفعلي، والأجر المكتسب = أجر الساعة × الساعات الفعلية بالحضور
+                $earned=$hrRate*$totalHours;
+                $regularHours=$totalHours;
+                break;
         }
         $holAmount=$holDays*$hrRate*8;
         $otAmt    =$otHours*$hrRate*$otMult;
@@ -169,6 +210,12 @@ try {
         $lSt=$pdo->prepare("SELECT COALESCE(SUM(monthly_deduction),0) FROM `{$TL}` WHERE employee_id=? AND status='active'");
         $lSt->execute([$empId]);
         $loan=(float)$lSt->fetchColumn();
+        // إجمالي المتبقي فعلياً على كل السلف النشطة سوا — الحد الأقصى
+        // المسموح خصمه هالمرة (مو مجموع الأقساط الشهرية بس، ممكن الموظف
+        // يسدد أكتر من قسط بمرة وحدة لو حاب)
+        $loSt=$pdo->prepare("SELECT COALESCE(SUM(amount-paid_amount),0) FROM `{$TL}` WHERE employee_id=? AND status='active'");
+        $loSt->execute([$empId]);
+        $loanOutstanding=(float)$loSt->fetchColumn();
         $net=$earned+$otAmt+$bonus-$loan;
 
         $out=ob_get_clean();
@@ -188,6 +235,7 @@ try {
             'ot_amount'      =>round($otAmt,2),
             'bonus'          =>round($bonus,2),
             'loan_ded'       =>round($loan,2),
+            'loan_outstanding_total' =>round($loanOutstanding,2),
             'net'            =>round($net,2),
             'currency'         =>$curSym,
             'emp_cur_code'     =>$cur,
@@ -261,6 +309,17 @@ try {
         $net=round($gross-$lnd,2);
         if($gross<=0)throw new Exception('لا يوجد مبلغ مستحق لهذه الفترة');
 
+        // تحقق أمان: مبلغ الخصم المُدخَل (قد يكون جزئي/مخصَّص من الواجهة)
+        // ما يقدر يتجاوز إجمالي المتبقي فعلياً على كل السلف النشطة سوا —
+        // لا نثق بحد أقصى مفروض بالواجهة بس، نتحقق بالسيرفر أيضاً
+        if($lnd>0){
+            $totOutSt=$pdo->prepare("SELECT COALESCE(SUM(amount-paid_amount),0) FROM `{$TL}` WHERE employee_id=? AND status='active'");
+            $totOutSt->execute([$empId]);
+            $totOutstanding=(float)$totOutSt->fetchColumn();
+            if($lnd>$totOutstanding+0.01)
+                throw new Exception("مبلغ الخصم ({$lnd}) أكبر من إجمالي المتبقي على السلف النشطة ({$totOutstanding})");
+        }
+
         $chk=$pdo->prepare("SELECT id,payment_status FROM `{$TP}` WHERE employee_id=? AND period_from=?");
         $chk->execute([$empId,$dateFrom]);$ex=$chk->fetch(PDO::FETCH_ASSOC);
         if($ex&&in_array($ex['payment_status'],['accrued','paid']))throw new Exception('هذه الفترة معتمدة مسبقاً');
@@ -282,27 +341,27 @@ try {
             $en=$emp['full_name']??'موظف';
             $branchCurCode=$currMap[$branchBaseCurrId3]??'USD';
 
-            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','payroll_accrual',?,?)")
-                ->execute([$jeNo,date('Y-m-d'),"استحقاق راتب {$en} {$month}",$branchCurCode,$exchangeRate,$grossBase,$grossBase,0,$_SESSION['user_id']]);
+            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','payroll_accrual',?,?)")
+                ->execute([$jeNo,date('Y-m-d'),"استحقاق راتب {$en} {$month}",$branchBaseCurrId3,$exchangeRate,$grossBase,$grossBase,0,$_SESSION['user_id']]);
             $jeId=(int)$pdo->lastInsertId();
 
             // مدين: مصروف الرواتب (gross)
-            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
-                ->execute([$jeId,$aS['id'],$grossBase,$grossBase,$grossBase,"استحقاق راتب {$en}",$branchCurCode]);
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
+                ->execute([$jeId,$aS['id'],$grossBase,$grossBase,$grossBase,"استحقاق راتب {$en}",$branchBaseCurrId3]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                 ->execute([$grossBase,$grossBase,$aS['id']]);
 
             // دائن: تصفية جزئية لسلف الموظف (لو في خصم سلفة بهالفترة)
             if($lndBase>0){
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
-                    ->execute([$jeId,$emp['loan_account_id'],$lndBase,$lndBase,$lndBase,"خصم سلفة من راتب {$en}",$branchCurCode]);
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
+                    ->execute([$jeId,$emp['loan_account_id'],$lndBase,$lndBase,$lndBase,"خصم سلفة من راتب {$en}",$branchBaseCurrId3]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                     ->execute([$lndBase,$lndBase,$emp['loan_account_id']]);
             }
 
             // دائن: مستحقات الموظف (net)
-            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
-                ->execute([$jeId,$emp['payable_account_id'],$netBase,$netBase,$netBase,"استحقاق راتب {$en}",$branchCurCode]);
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
+                ->execute([$jeId,$emp['payable_account_id'],$netBase,$netBase,$netBase,"استحقاق راتب {$en}",$branchBaseCurrId3]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                 ->execute([$netBase,$netBase,$emp['payable_account_id']]);
 
@@ -322,14 +381,32 @@ try {
             }
             $pdo->prepare("UPDATE `{$TJE}` SET reference_id=? WHERE id=?")->execute([$payId,$jeId]);
 
-            // تصفية جزء من السلفة فعلياً (installment) — بلحظة الاستحقاق، مو
-            // بلحظة الدفع النقدي، لأنه هون فعلياً بيصير تسجيل الدين كمُسدّد جزئياً محاسبياً
+            // توزيع مبلغ الخصم (قد يكون جزئي/مخصَّص) على السلف النشطة —
+            // الأقدم أول (FIFO). بيحدّث paid_amount الفعلي لكل سلفة، وبيوسمها
+            // "مسدَّدة" لما تكتمل، بدل الاعتماد على عدّاد أقساط ثابت.
+            // كل توزيع بيتسجّل بجدول hr_payroll_loan_allocations — عشان
+            // "إلغاء الاعتماد" لاحقاً (لو صار) يقدر يرجع بالضبط لنفس
+            // الأرقام، بغض النظر شو صار بالسلف بعدها
             if($lnd>0){
-                $ls=$pdo->prepare("SELECT * FROM `{$TL}` WHERE employee_id=? AND status='active' LIMIT 1");
-                $ls->execute([$empId]);$ln=$ls->fetch(PDO::FETCH_ASSOC);
-                if($ln){$np=$ln['paid_installments']+1;
-                    $pdo->prepare("UPDATE `{$TL}` SET paid_installments=?,status=? WHERE id=?")
-                    ->execute([$np,$np>=$ln['installments']?'completed':'active',$ln['id']]);}
+                $remaining=$lnd;
+                $ls=$pdo->prepare("SELECT * FROM `{$TL}` WHERE employee_id=? AND status='active' ORDER BY loan_date ASC");
+                $ls->execute([$empId]);
+                foreach($ls->fetchAll(PDO::FETCH_ASSOC) as $ln){
+                    if($remaining<=0.001)break;
+                    $outstanding=round($ln['amount']-$ln['paid_amount'],2);
+                    if($outstanding<=0)continue;
+                    $apply=min($remaining,$outstanding);
+                    $newPaid=round($ln['paid_amount']+$apply,2);
+                    $newInst=$ln['monthly_deduction']>0
+                        ? min($ln['installments'],(int)floor($newPaid/$ln['monthly_deduction']))
+                        : $ln['paid_installments'];
+                    $newStatus=($newPaid>=$ln['amount']-0.01)?'completed':'active';
+                    $pdo->prepare("UPDATE `{$TL}` SET paid_amount=?,paid_installments=?,status=? WHERE id=?")
+                        ->execute([$newPaid,$newInst,$newStatus,$ln['id']]);
+                    $pdo->prepare("INSERT INTO `{$TLA}` (payroll_id,loan_id,amount) VALUES(?,?,?)")
+                        ->execute([$payId,$ln['id'],$apply]);
+                    $remaining=round($remaining-$apply,2);
+                }
             }
             $pdo->commit();
         }catch(Throwable $e){
@@ -407,21 +484,21 @@ try {
                 $netOrig=(float)$ex['net_salary'];
 
                 $jeNo=$genJeNo();
-                $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','payroll_pay',?,?)")
-                    ->execute([$jeNo,date('Y-m-d'),"صرف راتب {$en} {$month}",$branchCurCode,$netBase,$netBase,$ex['id'],$_SESSION['user_id']]);
+                $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','payroll_pay',?,?)")
+                    ->execute([$jeNo,date('Y-m-d'),"صرف راتب {$en} {$month}",$branchBaseCurrId2,$netBase,$netBase,$ex['id'],$_SESSION['user_id']]);
                 $jeId=(int)$pdo->lastInsertId();
 
                 // مدين: تصفية مستحقات الموظف (حسابه الفرعي)
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
-                    ->execute([$jeId,$emp['payable_account_id'],$netBase,$netBase,$netBase,"صرف راتب {$en}",$branchCurCode]);
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
+                    ->execute([$jeId,$emp['payable_account_id'],$netBase,$netBase,$netBase,"صرف راتب {$en}",$branchBaseCurrId2]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                     ->execute([$netBase,$netBase,$emp['payable_account_id']]);
 
                 // دائن: الصندوق
                 $exchangeRate=payrollSafeRate($pdo,$cashCurId,$branchBaseCurrId2);
                 $cashOrig=round($netBase*$exchangeRate,4);
-                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
-                    ->execute([$jeId,$aC['id'],$netBase,$cashOrig,$netBase,"صرف راتب {$en}",$cashCur,$exchangeRate]);
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
+                    ->execute([$jeId,$aC['id'],$netBase,$cashOrig,$netBase,"صرف راتب {$en}",$cashCurId,$exchangeRate]);
                 $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                     ->execute([$netBase,$cashOrig,$aC['id']]);
 
@@ -440,6 +517,16 @@ try {
                 $bon  =(float)($cd['bonus_total']??0);
                 $lnd  =(float)($cd['loan_deduction']??0);
 
+                // نفس تحقق الأمان المطبَّق بـ accrue — مبلغ الخصم ما يقدر
+                // يتجاوز إجمالي المتبقي فعلياً على السلف النشطة
+                if($lnd>0){
+                    $totOutSt=$pdo->prepare("SELECT COALESCE(SUM(amount-paid_amount),0) FROM `{$TL}` WHERE employee_id=? AND status='active'");
+                    $totOutSt->execute([$empId]);
+                    $totOutstanding=(float)$totOutSt->fetchColumn();
+                    if($lnd>$totOutstanding+0.01)
+                        throw new Exception("مبلغ الخصم ({$lnd}) أكبر من إجمالي المتبقي على السلف النشطة ({$totOutstanding})");
+                }
+
                 if($ex){
                     $pdo->prepare("UPDATE `{$TP}` SET basic_salary=?,working_days=?,working_hours=?,
                         overtime_hours=?,overtime_amount=?,bonus_total=?,loan_deduction=?,net_salary=?,
@@ -457,11 +544,25 @@ try {
                     $payId=(int)$pdo->lastInsertId();
                 }
                 if($lnd>0){
-                    $ls=$pdo->prepare("SELECT * FROM `{$TL}` WHERE employee_id=? AND status='active' LIMIT 1");
-                    $ls->execute([$empId]);$ln=$ls->fetch(PDO::FETCH_ASSOC);
-                    if($ln){$np=$ln['paid_installments']+1;
-                        $pdo->prepare("UPDATE `{$TL}` SET paid_installments=?,status=? WHERE id=?")
-                        ->execute([$np,$np>=$ln['installments']?'completed':'active',$ln['id']]);}
+                    $remaining=$lnd;
+                    $ls=$pdo->prepare("SELECT * FROM `{$TL}` WHERE employee_id=? AND status='active' ORDER BY loan_date ASC");
+                    $ls->execute([$empId]);
+                    foreach($ls->fetchAll(PDO::FETCH_ASSOC) as $ln){
+                        if($remaining<=0.001)break;
+                        $outstanding=round($ln['amount']-$ln['paid_amount'],2);
+                        if($outstanding<=0)continue;
+                        $apply=min($remaining,$outstanding);
+                        $newPaid=round($ln['paid_amount']+$apply,2);
+                        $newInst=$ln['monthly_deduction']>0
+                            ? min($ln['installments'],(int)floor($newPaid/$ln['monthly_deduction']))
+                            : $ln['paid_installments'];
+                        $newStatus=($newPaid>=$ln['amount']-0.01)?'completed':'active';
+                        $pdo->prepare("UPDATE `{$TL}` SET paid_amount=?,paid_installments=?,status=? WHERE id=?")
+                            ->execute([$newPaid,$newInst,$newStatus,$ln['id']]);
+                        $pdo->prepare("INSERT INTO `{$TLA}` (payroll_id,loan_id,amount) VALUES(?,?,?)")
+                            ->execute([$payId,$ln['id'],$apply]);
+                        $remaining=round($remaining-$apply,2);
+                    }
                 }
                 $netOrig=$net;
                 $exchangeRate=payrollSafeRate($pdo,$curId,$branchBaseCurrId2);
@@ -469,17 +570,17 @@ try {
                 $aS=$pdo->query("SELECT ac.* FROM `{$TIAS}` i JOIN `{$TAC}` ac ON ac.id=i.account_id WHERE i.setting_key='salary_expense' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
                 if($aS){
                     $jeNo=$genJeNo();
-                    $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','payroll',?,?)")
-                        ->execute([$jeNo,date('Y-m-d'),"راتب {$en} {$month}",$branchCurCode,$exchangeRate,$netBase,$netBase,$payId,$_SESSION['user_id']]);
+                    $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','payroll',?,?)")
+                        ->execute([$jeNo,date('Y-m-d'),"راتب {$en} {$month}",$branchBaseCurrId2,$exchangeRate,$netBase,$netBase,$payId,$_SESSION['user_id']]);
                     $jeId=(int)$pdo->lastInsertId();
 
-                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
-                        ->execute([$jeId,$aS['id'],$netBase,$netBase,$netBase,"راتب {$en}",$branchCurCode]);
+                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
+                        ->execute([$jeId,$aS['id'],$netBase,$netBase,$netBase,"راتب {$en}",$branchBaseCurrId2]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                         ->execute([$netBase,$netBase,$aS['id']]);
 
-                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
-                        ->execute([$jeId,$aC['id'],$netBase,$netOrig,$netBase,"دفع راتب {$en}",$cashCur,$exchangeRate]);
+                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
+                        ->execute([$jeId,$aC['id'],$netBase,$netOrig,$netBase,"دفع راتب {$en}",$cashCurId,$exchangeRate]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                         ->execute([$netBase,$netOrig,$aC['id']]);
 
@@ -497,12 +598,143 @@ try {
         exit;
     }
 
+    // ── cancel_payment: إلغاء صرف راتب (يرجع لحالة "معتمد") — قيد عكسي
+    // منفصل يعكس فقط قيد التصفية (مدين/دائن الصندوق)، لا يلمس أي شي متعلق
+    // بالسلف (السلف اتصفّت وقت الاعتماد، مو وقت الصرف). محمي بصلاحية
+    // hr.payroll:confirm — نفس صلاحية اعتماد/صرف الراتب أصلاً، ما في
+    // فحص صلاحيات تاني بهالملف حالياً فهاي أول مرة صراحة
+    if($act==='cancel_payment'){
+        // auth.php أصلاً محمَّل، والصلاحيات محمَّلة بالجلسة من تحميل الصفحة
+        if(!can('hr.payroll','confirm'))throw new Exception('ما عندك صلاحية إلغاء صرف الرواتب');
+
+        $payId=(int)($_POST['id']??0);
+        $st=$pdo->prepare("SELECT * FROM `{$TP}` WHERE id=? AND payment_status='paid'");
+        $st->execute([$payId]);$pr=$st->fetch(PDO::FETCH_ASSOC);
+        if(!$pr)throw new Exception('سجل غير موجود أو غير مصروف');
+        if(!$pr['payment_entry_id'])throw new Exception('لا يوجد قيد دفع مرتبط لعكسه');
+
+        $empSt=$pdo->prepare("SELECT * FROM `{$TE}` WHERE id=?");
+        $empSt->execute([$pr['employee_id']]);$emp=$empSt->fetch(PDO::FETCH_ASSOC);
+
+        $pdo->beginTransaction();
+        try{
+            $lines=$pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
+            $lines->execute([$pr['payment_entry_id']]);
+            $items=$lines->fetchAll(PDO::FETCH_ASSOC);
+            $y=date('Y');
+            $last=$pdo->query("SELECT entry_number FROM `{$TJE}` WHERE entry_number LIKE 'JE-{$y}-%' ORDER BY id DESC LIMIT 1")->fetchColumn();
+            $seq=$last?(int)substr($last,-4)+1:1;
+            $jeNo='JE-'.$y.'-'.str_pad($seq,4,'0',STR_PAD_LEFT);
+            $en=$emp['full_name']??'موظف';
+            $totBase=array_sum(array_column($items,'base_amount'))/2; // القيد متوازن، النصف = المبلغ الفعلي
+
+            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','payroll_pay_cancel',?,?)")
+                ->execute([$jeNo,date('Y-m-d'),"إلغاء صرف راتب {$en}",$pr['currency_id'],$totBase,$totBase,$payId,$_SESSION['user_id']]);
+            $jeId=(int)$pdo->lastInsertId();
+
+            // عكس كل سطر بالضبط (مدين↔دائن)، بنفس المبالغ الأصلية تماماً
+            foreach($items as $it){
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,?,?,?,?,?,?)")
+                    ->execute([$jeId,$it['account_id'],$it['credit'],$it['debit'],$it['original_amount'],$it['base_amount'],"إلغاء صرف راتب {$en}",$it['currency_id'],$it['exchange_rate']]);
+                $delta=$it['debit']-$it['credit']; // كان زاد الحساب بهالمقدار، هلق لازم ينعكس
+                $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                    ->execute([$delta,($it['original_amount']*($it['debit']>0?1:-1)),$it['account_id']]);
+            }
+
+            $pdo->prepare("UPDATE `{$TP}` SET payment_status='accrued',cancel_payment_entry_id=? WHERE id=?")
+                ->execute([$jeId,$payId]);
+            $pdo->commit();
+        }catch(Throwable $e){
+            if($pdo->inTransaction())$pdo->rollBack();
+            throw $e;
+        }
+        echo json_encode(['ok'=>true,'msg'=>'تم إلغاء الصرف — الفترة رجعت لحالة معتمد']);exit;
+    }
+
+    // ── cancel_accrual: إلغاء اعتماد راتب (يرجع لحالة "معلَّق"، جاهز
+    // لإعادة الاعتماد من جديد). قيد عكسي منفصل يعكس مصروف الرواتب وأي
+    // سلف اتخصمت، بالاعتماد على جدول hr_payroll_loan_allocations (دقيق
+    // ١٠٠٪ حتى لو صار عندك أكتر من سلفة أو تغيّرت حالتها بعدين) — لا
+    // نعيد حساب أو نخمّن التوزيع العكسي إطلاقاً
+    if($act==='cancel_accrual'){
+        // auth.php أصلاً محمَّل، والصلاحيات محمَّلة بالجلسة من تحميل الصفحة
+        if(!can('hr.payroll','confirm'))throw new Exception('ما عندك صلاحية إلغاء اعتماد الرواتب');
+
+        $payId=(int)($_POST['id']??0);
+        $st=$pdo->prepare("SELECT * FROM `{$TP}` WHERE id=? AND payment_status='accrued'");
+        $st->execute([$payId]);$pr=$st->fetch(PDO::FETCH_ASSOC);
+        if(!$pr)throw new Exception('سجل غير موجود أو غير معتمد (لازم تلغي الصرف أولاً لو مصروف)');
+        if(!$pr['accrual_entry_id'])throw new Exception('لا يوجد قيد استحقاق مرتبط لعكسه');
+
+        $empSt=$pdo->prepare("SELECT * FROM `{$TE}` WHERE id=?");
+        $empSt->execute([$pr['employee_id']]);$emp=$empSt->fetch(PDO::FETCH_ASSOC);
+
+        $pdo->beginTransaction();
+        try{
+            // ١) عكس قيد الاستحقاق بالكامل (كل الأسطر، بنفس المبالغ)
+            $lines=$pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
+            $lines->execute([$pr['accrual_entry_id']]);
+            $items=$lines->fetchAll(PDO::FETCH_ASSOC);
+            $y=date('Y');
+            $last=$pdo->query("SELECT entry_number FROM `{$TJE}` WHERE entry_number LIKE 'JE-{$y}-%' ORDER BY id DESC LIMIT 1")->fetchColumn();
+            $seq=$last?(int)substr($last,-4)+1:1;
+            $jeNo='JE-'.$y.'-'.str_pad($seq,4,'0',STR_PAD_LEFT);
+            $en=$emp['full_name']??'موظف';
+            $totBase=(float)$pr['basic_salary']; // تقريبي للعرض فقط، القيد نفسه بيتوازن من أسطره
+
+            $grossLine=null;
+            foreach($items as $it){ if($it['debit']>0){$grossLine=$it;break;} }
+            $grossBase=$grossLine?(float)$grossLine['base_amount']:0;
+
+            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','payroll_accrual_cancel',?,?)")
+                ->execute([$jeNo,date('Y-m-d'),"إلغاء اعتماد راتب {$en}",$pr['currency_id'],$grossBase,$grossBase,$payId,$_SESSION['user_id']]);
+            $jeId=(int)$pdo->lastInsertId();
+
+            foreach($items as $it){
+                $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,?,?,?,?,?,?)")
+                    ->execute([$jeId,$it['account_id'],$it['credit'],$it['debit'],$it['original_amount'],$it['base_amount'],"إلغاء اعتماد راتب {$en}",$it['currency_id'],$it['exchange_rate']]);
+                $delta=$it['debit']-$it['credit'];
+                $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                    ->execute([$delta,$delta,$it['account_id']]);
+            }
+
+            // ٢) عكس توزيع السلف بالضبط — من جدول التتبّع، لا إعادة حساب
+            $allocSt=$pdo->prepare("SELECT * FROM `{$TLA}` WHERE payroll_id=? AND reversed=0");
+            $allocSt->execute([$payId]);
+            foreach($allocSt->fetchAll(PDO::FETCH_ASSOC) as $al){
+                $lnSt=$pdo->prepare("SELECT * FROM `{$TL}` WHERE id=?");
+                $lnSt->execute([$al['loan_id']]);$ln=$lnSt->fetch(PDO::FETCH_ASSOC);
+                if(!$ln)continue;
+                $newPaid=round($ln['paid_amount']-$al['amount'],2);
+                if($newPaid<0)$newPaid=0;
+                $newInst=$ln['monthly_deduction']>0
+                    ? (int)floor($newPaid/$ln['monthly_deduction'])
+                    : max(0,$ln['paid_installments']-1);
+                $pdo->prepare("UPDATE `{$TL}` SET paid_amount=?,paid_installments=?,status='active' WHERE id=?")
+                    ->execute([$newPaid,$newInst,$ln['id']]);
+                $pdo->prepare("UPDATE `{$TLA}` SET reversed=1 WHERE id=?")->execute([$al['id']]);
+            }
+
+            // ٣) الفترة ترجع "معلَّقة" — جاهزة لإعادة الاعتماد من جديد
+            //    (accrual_entry_id الأصلي يضل مسجَّل للتوثيق التاريخي)
+            $pdo->prepare("UPDATE `{$TP}` SET payment_status='pending',cancel_accrual_entry_id=? WHERE id=?")
+                ->execute([$jeId,$payId]);
+            $pdo->commit();
+        }catch(Throwable $e){
+            if($pdo->inTransaction())$pdo->rollBack();
+            throw $e;
+        }
+        echo json_encode(['ok'=>true,'msg'=>'تم إلغاء الاعتماد — الفترة رجعت معلَّقة']);exit;
+    }
+
     // ── add_loan: صرف سلفة — قيد فوري مدين سلف الموظف [حسابه الفرعي] / دائن الصندوق ──
+    // ملاحظة: مسموح بأكتر من سلفة نشطة بنفس الوقت لنفس الموظف — كل سلفة
+    // مستقلة بأقساطها، و`calculate` أصلاً بيجمع خصم كل السلف النشطة سوا
+    // (SUM وليس سلفة وحدة)، فالمبلغ المالي بالراتب صحيح دايماً بغض النظر
+    // عن عدد السلف النشطة
     if($act==='add_loan'){
         $empId=(int)($_POST['employee_id']??0);$amt=(float)($_POST['amount']??0);
         if($amt<=0)throw new Exception('المبلغ 0');
-        $ac=$pdo->prepare("SELECT COUNT(*) FROM `{$TL}` WHERE employee_id=? AND status='active'");
-        $ac->execute([$empId]);if($ac->fetchColumn())throw new Exception('سلفة نشطة موجودة');
 
         $st=$pdo->prepare("SELECT * FROM `{$TE}` WHERE id=?");
         $st->execute([$empId]);$emp=$st->fetch(PDO::FETCH_ASSOC);
@@ -542,20 +774,20 @@ try {
             $seq=$last?(int)substr($last,-4)+1:1;
             $jeNo='JE-'.$y.'-'.str_pad($seq,4,'0',STR_PAD_LEFT);
 
-            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','employee_loan',?,?)")
-                ->execute([$jeNo,date('Y-m-d'),"سلفة موظف — {$en}",$branchCurCode,$exchangeRate,$amtBase,$amtBase,$loanId,$_SESSION['user_id']]);
+            $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,?,?,?,'posted','employee_loan',?,?)")
+                ->execute([$jeNo,date('Y-m-d'),"سلفة موظف — {$en}",$branchBaseCurrId4,$exchangeRate,$amtBase,$amtBase,$loanId,$_SESSION['user_id']]);
             $jeId=(int)$pdo->lastInsertId();
 
             // مدين: سلف الموظف (حسابه الفرعي)
-            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
-                ->execute([$jeId,$emp['loan_account_id'],$amtBase,$amtBase,$amtBase,"سلفة — {$en}",$branchCurCode]);
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,0,?,?,?,?,1)")
+                ->execute([$jeId,$emp['loan_account_id'],$amtBase,$amtBase,$amtBase,"سلفة — {$en}",$branchBaseCurrId4]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                 ->execute([$amtBase,$amtBase,$emp['loan_account_id']]);
 
             // دائن: الصندوق
             $cashOrig=round($amtBase*$exchangeRate,4);
-            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
-                ->execute([$jeId,$aC['id'],$amtBase,$cashOrig,$amtBase,"صرف سلفة — {$en}",$cashCur,$exchangeRate]);
+            $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,?)")
+                ->execute([$jeId,$aC['id'],$amtBase,$cashOrig,$amtBase,"صرف سلفة — {$en}",$cashCurId,$exchangeRate]);
             $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                 ->execute([$amtBase,$cashOrig,$aC['id']]);
 
@@ -613,19 +845,19 @@ try {
                     $seq=$last?(int)substr($last,-4)+1:1;
                     $jeNo='JE-'.$y.'-'.str_pad($seq,4,'0',STR_PAD_LEFT);
 
-                    $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','employee_loan_cancel',?,?)")
-                        ->execute([$jeNo,date('Y-m-d'),"إلغاء سلفة — {$en}",$branchCurCode,$amtBase,$amtBase,$loanId,$_SESSION['user_id']]);
+                    $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by) VALUES(?,?,?,?,1,?,?,'posted','employee_loan_cancel',?,?)")
+                        ->execute([$jeNo,date('Y-m-d'),"إلغاء سلفة — {$en}",$branchBaseCurrId5,$amtBase,$amtBase,$loanId,$_SESSION['user_id']]);
                     $jeId=(int)$pdo->lastInsertId();
 
                     // مدين: الصندوق (رجوع الفلوس)
-                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,?,0,?,?,?,?,?)")
-                        ->execute([$jeId,$cashLine['account_id'],$amtBase,$cashLine['original_amount'],$amtBase,"إلغاء سلفة — {$en}",$cashLine['currency'],$cashLine['exchange_rate']]);
+                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,?,0,?,?,?,?,?)")
+                        ->execute([$jeId,$cashLine['account_id'],$amtBase,$cashLine['original_amount'],$amtBase,"إلغاء سلفة — {$en}",$cashLine['currency_id'],$cashLine['exchange_rate']]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                         ->execute([$amtBase,$cashLine['original_amount'],$cashLine['account_id']]);
 
                     // دائن: تصفية سلف الموظف
-                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
-                        ->execute([$jeId,$emp['loan_account_id'],$amtBase,$amtBase,$amtBase,"إلغاء سلفة — {$en}",$branchCurCode]);
+                    $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES(?,?,0,?,?,?,?,?,1)")
+                        ->execute([$jeId,$emp['loan_account_id'],$amtBase,$amtBase,$amtBase,"إلغاء سلفة — {$en}",$branchBaseCurrId5]);
                     $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                         ->execute([$amtBase,$amtBase,$emp['loan_account_id']]);
 

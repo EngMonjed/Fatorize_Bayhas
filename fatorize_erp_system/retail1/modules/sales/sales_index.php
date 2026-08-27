@@ -116,14 +116,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             // لا علاقة له بحساب الكمية الفعلية بالفاتورة).
             $items = $pdo->prepare("SELECT ii.*, p.name AS item_name, p.model_number,
                 v.color_id, s.size, s.age_type, s.group_key, c.name AS color, s.cost_price AS cost_price_base,
-                s.selling_price AS catalog_selling_price, s.packet_qty AS packet_qty
+                s.selling_price AS catalog_selling_price, s.packet_qty AS packet_qty,
+                COALESCE(wi.quantity, 0) AS stock_qty
                 FROM `{$TII}` ii
                 LEFT JOIN `{$TPROD}` p ON p.id=ii.product_id
                 LEFT JOIN `{$TV}` v ON v.id=ii.variant_id
                 LEFT JOIN `{$TSZ}` s ON s.id=v.size_id
                 LEFT JOIN `{$TCL}` c ON c.id=v.color_id
+                LEFT JOIN `{$TWI}` wi ON wi.variant_id=ii.variant_id AND wi.warehouse_id=?
                 WHERE ii.invoice_id=? ORDER BY ii.id");
-            $items->execute([$id]);
+            $items->execute([$inv['warehouse_id'], $id]);
             $inv['items'] = $items->fetchAll();
 
             // بيانات الفرع الكاملة — لترويسة الطباعة (اسم/عنوان/هاتف/
@@ -840,10 +842,16 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                                                     بيان القطعة</th>
                                                 <th
                                                     style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">
+                                                    رقم الموديل</th>
+                                                <th
+                                                    style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0;width:70px">
                                                     القياس</th>
                                                 <th
                                                     style="padding:6px 10px;color:#16a34a;font-weight:600;border-bottom:1px solid #e2e8f0">
                                                     اللون</th>
+                                                <th
+                                                    style="padding:6px 10px;color:#7c3aed;font-weight:600;border-bottom:1px solid #e2e8f0;width:60px">
+                                                    المخزون</th>
                                                 <th
                                                     style="padding:6px 10px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">
                                                     عدد الكروبات</th>
@@ -1234,18 +1242,23 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 // استثناء: بتختلف فعلياً حسب تكلفة كل مقاس بذاته، فتضل تُجمع.
                 const grpMap = {};
                 (inv.items || []).forEach(it => {
-                    // ⚠ group_key مصدر الحقيقة الوحيد للتجميع (مخزَّن
-                    // فعلياً بجدول product_sizes) — راجع تسليم "الكروب
-                    // صار حقيقة مخزَّنة، مش مُستنتَجة".
-                    const k = `${it.product_id || it.item_name}_${it.group_key}_${it.color || ''}`;
+                    // ⚠ group_key مصدر الحقيقة الوحيد للتجميع — الألوان
+                    // المختلفة بنفس الكروب تندمج بصف واحد الآن (قرار
+                    // جديد)، بلا فصل باللون بالمفتاح.
+                    const k = `${it.product_id || it.item_name}_${it.group_key}`;
                     if (!grpMap[k]) grpMap[k] = {
-                        item_name: it.item_name, model_number: it.model_number || '',
-                        unit_price: parseFloat(it.unit_price), color: it.color || '—',
+                        item_name: it.item_name, model_number: it.model_number || '—',
+                        unit_price: parseFloat(it.unit_price), colors: [], stocks: [],
                         qty: parseFloat(it.quantity), total: 0,
                         sizes: [], cost_total: 0
                     };
                     grpMap[k].cost_total += (parseFloat(it.cost_price_base || 0) * parseFloat(it.quantity));
                     if (it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
+                    const colorLabel = it.color || '—';
+                    if (!grpMap[k].colors.includes(colorLabel)) {
+                        grpMap[k].colors.push(colorLabel);
+                        grpMap[k].stocks.push(it.stock_qty != null ? it.stock_qty : '—');
+                    }
                 });
                 Object.values(grpMap).forEach(g => {g.total = g.qty * g.unit_price * (g.sizes.length || 1);});
                 const grpRows = Object.values(grpMap).sort((a, b) => a.unit_price - b.unit_price);
@@ -1263,10 +1276,11 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                     const [bg, clr, br] = GRP_COLORS[pi % 4];
                     const badge = `<span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${pi + 1}</span>`;
                     return `<tr>
-                <td><div class="fw-600" style="font-size:.8rem">${g.item_name}</div>
-                    <div style="font-size:.7rem;color:#94a3b8" dir="ltr">${g.model_number}</div></td>
+                <td><div class="fw-600" style="font-size:.8rem">${g.item_name}</div></td>
+                <td style="font-size:.73rem;color:#64748b" dir="ltr">${g.model_number}</td>
                 <td>${badge}<div style="font-size:.72rem;font-weight:600;color:#334155;margin-top:2px">${g.sizes.join(' · ')}</div></td>
-                <td class="text-center" style="font-size:.78rem">${g.color}</td>
+                <td class="text-center" style="font-size:.73rem;color:#16a34a">${g.colors.join(' · ')}</td>
+                <td class="n text-center" style="color:#7c3aed;font-size:.73rem" dir="ltr">${g.stocks.join(' · ')}</td>
                 <td class="n text-center fw-600">${g.qty.toFixed(0)}</td>
                 <td class="n text-center">${symDoc} ${g.unit_price.toFixed(4)}</td>
                 <td class="n text-end fw-600">${symDoc} ${g.total.toFixed(2)}</td>
@@ -1297,7 +1311,10 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
         <div class="table-responsive mb-3">
         <table class="mtbl" style="font-size:.78rem">
             <thead><tr style="background:#f8fafc">
-                <th>المنتج</th><th>الكروب/القياسات</th><th class="text-center">اللون</th>
+                <th>المنتج</th><th>رقم الموديل</th>
+                <th style="width:70px">الكروب/القياسات</th>
+                <th class="text-center">اللون</th>
+                <th class="text-center" style="color:#7c3aed;width:60px">المخزون</th>
                 <th class="text-center">عدد الكروبات</th>
                 <th class="text-center">سعر الوحدة (${symDoc})</th>
                 <th class="text-end">الإجمالي (${symDoc})</th>
@@ -1362,12 +1379,12 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             document.getElementById('cCashAccount').value = '';
             document.getElementById('cExactSettle').checked = false;
             _cPaidRateTouched = false;
-            document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="6" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
+            document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="9" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
             clearImg();
             confirmModal.show();
             // جلب بنود الفاتورة الحقيقية
             post({_action: 'get_invoice', id}).then(d => {
-                if (!d.ok) {document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return;}
+                if (!d.ok) {document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="9" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return;}
                 const p = d.data;
                 _cInvoiceData = p;
 
@@ -1387,17 +1404,23 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 document.getElementById('cWarehouseName').textContent = p.warehouse_name || 'المستودع الرئيسي';
                 document.getElementById('cWarehouse').value = p.warehouse_id || '';
 
-                // بنود مجمَّعة حسب الكروب (منتج × group_key × لون) — نفس
-                // منطق مودال التفاصيل بالضبط. group_key مصدر الحقيقة
-                // الوحيد للتجميع (مخزَّن فعلياً بجدول product_sizes).
+                // بنود مجمَّعة حسب الكروب (منتج × group_key) — الألوان
+                // المختلفة بنفس الكروب تندمج بصف واحد (قرار جديد: مو
+                // مفصولة بعد الآن). group_key مصدر الحقيقة الوحيد للتجميع.
                 const groups = {};
                 (p.items || []).forEach(it => {
-                    const key = (it.product_id || it.item_name || it.id) + '_' + it.group_key + '_' + (it.color || '');
+                    const key = (it.product_id || it.item_name || it.id) + '_' + it.group_key;
                     if (!groups[key]) groups[key] = {
-                        name: it.item_name || ('بند #' + it.id), color: it.color || '—',
-                        sizes: [], qty: parseFloat(it.quantity), unit: parseFloat(it.unit_price), total: 0
+                        name: it.item_name || ('بند #' + it.id), model_number: it.model_number || '—',
+                        sizes: [], colors: [], stocks: [],
+                        qty: parseFloat(it.quantity), unit: parseFloat(it.unit_price), total: 0
                     };
                     if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
+                    const colorLabel = it.color || '—';
+                    if (!groups[key].colors.includes(colorLabel)) {
+                        groups[key].colors.push(colorLabel);
+                        groups[key].stocks.push(it.stock_qty != null ? it.stock_qty : '—');
+                    }
                 });
                 Object.values(groups).forEach(g => {g.total = g.qty * g.unit * (g.sizes.length || 1);});
                 let rows = '', i = 1;
@@ -1405,14 +1428,16 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                     rows += `<tr style="border-bottom:1px solid #f1f5f9">
                 <td style="padding:5px 10px;color:#94a3b8">${i++}</td>
                 <td style="padding:5px 10px;font-weight:600">${g.name}</td>
+                <td style="padding:5px 10px;text-align:center;font-size:.73rem;color:#64748b" dir="ltr">${g.model_number}</td>
                 <td style="padding:5px 10px;text-align:center;font-size:.73rem">${g.sizes.join(' · ') || '—'}</td>
-                <td style="padding:5px 10px;text-align:center;color:#16a34a">${g.color}</td>
+                <td style="padding:5px 10px;text-align:center;color:#16a34a;font-size:.73rem">${g.colors.join(' · ')}</td>
+                <td style="padding:5px 10px;text-align:center;color:#7c3aed;font-size:.73rem" dir="ltr">${g.stocks.join(' · ')}</td>
                 <td style="padding:5px 10px;text-align:center">${g.qty}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr">${sym2} ${fmt(g.unit)}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr;font-weight:600">${sym2} ${fmt(g.total)}</td>
             </tr>`;
                 });
-                document.getElementById('cItemsBody').innerHTML = rows || '<tr><td colspan="6" class="text-center text-muted p-2">لا توجد بنود</td></tr>';
+                document.getElementById('cItemsBody').innerHTML = rows || '<tr><td colspan="9" class="text-center text-muted p-2">لا توجد بنود</td></tr>';
 
                 // ملخص المبالغ
                 document.getElementById('cSumProducts').textContent = sym2 + ' ' + fmt(p.total_amount);
