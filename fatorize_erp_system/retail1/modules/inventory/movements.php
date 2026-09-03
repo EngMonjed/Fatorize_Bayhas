@@ -58,8 +58,8 @@ $baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
 $tab = $_GET['tab'] ?? 'products';
 $whF = (int) ($_GET['wh'] ?? 0);
 $typeF = $_GET['type'] ?? '';
-$dateFrom = $_GET['from'] ?? date('Y-m-01');
-$dateTo = $_GET['to'] ?? date('Y-m-d');
+$dateFrom = $_GET['from'] ?? '';
+$dateTo = $_GET['to'] ?? '';
 $search = trim($_GET['q'] ?? '');
 
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
@@ -431,7 +431,6 @@ $MOVE_TYPE_MAP = [
                     </div>
                 </div>
             </div>
-
             <!-- فلاتر -->
             <div class="tbl-wrap mb-3">
                 <div class="tbl-hdr">
@@ -542,7 +541,8 @@ $MOVE_TYPE_MAP = [
                                             <?= number_format($mov['unit_cost_base'], 4) ?>
                                         </td>
                                         <td class="n text-end fw-600"><?= htmlspecialchars($baseCurSymbol) ?>
-                                            <?= number_format($mov['total_cost_base'], 2) ?></td>
+                                            <?= number_format($mov['total_cost_base'], 2) ?>
+                                        </td>
                                         <td style="font-size:.72rem;color:#64748b">
                                             <?= htmlspecialchars(refTypeLabel($mov['reference_type'], $REF_TYPE_AR)) ?>
                                             #<?= $mov['reference_id'] ?? '—' ?>
@@ -606,7 +606,8 @@ $MOVE_TYPE_MAP = [
                                             <?= number_format($mov['quantity'], 0) ?>
                                         </td>
                                         <td class="n text-end fw-600"><?= htmlspecialchars($baseCurSymbol) ?>
-                                            <?= number_format($mov['total_base'], 2) ?></td>
+                                            <?= number_format($mov['total_base'], 2) ?>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>

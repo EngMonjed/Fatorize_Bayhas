@@ -1,13 +1,13 @@
 <?php
 /**
- * accounting/supplier_statement.php — كشف حساب مورد
- * المسار: retail1/modules/accounting/supplier_statement.php
+ * logistics/shipping_carrier_statement.php — كشف حساب شركة شحن
+ * المسار: retail1/modules/logistics/shipping_carrier_statement.php
  *
- * يُفتح دايماً بمعرِّف صريح: ?supplier_id=5 (رابط من suppliers.php).
- * بيسحب حركة الحساب المخصص (account_id) لهيك مورد مباشرة من
- * journal_entry_items — نفس منطق "حركة الحساب" المبني أصلاً بـ
- * accounts.php، بس بعرض تجاري (اسم العميل، فلترة بعدد عمليات أو تاريخ)
- * بدل عرض محاسبي خام.
+ * يُفتح دايماً بمعرِّف صريح: ?carrier_id=5 (رابط من shipping_carriers.php).
+ * نفس منطق كشف حساب المورد/العميل (accounting/supplier_statement.php)
+ * تماماً، بفارق واحد مهم: بجدول shipping_carriers_{TS} حساب "الذمة"
+ * (الأساسي) اسمه العمود payable_account_id، وحساب "الدفعة المقدمة"
+ * اسمه العمود account_id — عكس تسمية جدولي customers/product_suppliers.
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -15,28 +15,28 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('finance.reports', 'view');
-$currentModule = 'finance.reports';
+requirePermission('logistics.shipping_carriers', 'view');
+$currentModule = 'logistics.shipping_carriers';
 
 $TS = $_SESSION['table_suffix'];
-$TC = "customers_{$TS}";
-$TSP = "product_suppliers_{$TS}";
+$TSC = "shipping_carriers_{$TS}";
 $TAC = "account_charts_{$TS}";
 $TJE = "journal_entries_{$TS}";
 $TJI = "journal_entry_items_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
-function loadEntity(PDO $pdo, string $type, int $id, string $TC, string $TSP, string $TAC): ?array
+function loadCarrier(PDO $pdo, string $table, int $id, string $TAC): ?array
 {
-    $table = $type === 'customer' ? $TC : $TSP;
+    // ⚠ بجدول شركات النقلية/الشحن: payable_account_id = حساب الذمة (الأساسي)
+    //    account_id = حساب الدفعات المقدمة — عكس تسمية جدولي العملاء/الموردين
     $st = $pdo->prepare("SELECT e.*, ac.code AS acc_code, ac.name AS acc_name, ac.balance AS acc_balance,
             ac.base_balance AS acc_base_balance, ac.currency_id AS acc_currency_id,
             cur.symbol AS acc_sym, cur.code AS acc_cur_code,
             adv.code AS adv_code, adv.name AS adv_name, adv.balance AS adv_balance, adv.base_balance AS adv_base_balance
         FROM `{$table}` e
-        LEFT JOIN `{$TAC}` ac ON ac.id = e.account_id
+        LEFT JOIN `{$TAC}` ac ON ac.id = e.payable_account_id
         LEFT JOIN currencies cur ON cur.id = ac.currency_id
-        LEFT JOIN `{$TAC}` adv ON adv.id = e.prepaid_account_id
+        LEFT JOIN `{$TAC}` adv ON adv.id = e.account_id
         WHERE e.id = ?");
     $st->execute([$id]);
     $row = $st->fetch();
@@ -49,19 +49,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         $act = $_POST['_action'];
 
         if ($act === 'get_statement') {
-            $type = 'supplier';
-            $id = (int) ($_POST['supplier_id'] ?? 0);
-            $entity = loadEntity($pdo, $type, $id, $TC, $TSP, $TAC);
+            $id = (int) ($_POST['carrier_id'] ?? 0);
+            $entity = loadCarrier($pdo, $TSC, $id, $TAC);
             if (!$entity)
                 throw new Exception('غير موجود');
-            if (!$entity['account_id'])
-                throw new Exception('هذا المورد ما إله حساب ذمة مخصص بعد');
+            if (!$entity['payable_account_id'])
+                throw new Exception('هذه الشركة ما إلها حساب ذمة مخصص بعد');
 
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
             $limit = (int) ($_POST['limit'] ?? 0); // آخر N عملية — يتجاهل التاريخ لو محدَّد
 
-            $accId = (int) $entity['account_id'];
+            $accId = (int) $entity['payable_account_id'];
 
             $opening = 0;
             if ($dateFrom && !$limit) {
@@ -73,14 +72,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             }
 
             if ($limit > 0) {
-                // آخر N عملية: نجيبها بترتيب عكسي، وبعدين نرجّعها لترتيب زمني عادي
                 $st = $pdo->prepare("SELECT ji.*, je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
                     WHERE ji.account_id = ? AND je.status = 'posted'
                     ORDER BY je.entry_date DESC, je.id DESC LIMIT {$limit}");
                 $st->execute([$accId]);
                 $rows = array_reverse($st->fetchAll());
-                // الرصيد الافتتاحي لعرض "آخر N" = الرصيد قبل أقدم عملية بالنتيجة
                 if ($rows) {
                     $firstDate = $rows[0]['entry_date'];
                     $firstId = $rows[0]['journal_entry_id'];
@@ -129,7 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     'acc_base_balance' => (float) ($entity['acc_base_balance'] ?? 0),
                     'adv_balance' => (float) ($entity['adv_balance'] ?? 0),
                     'adv_base_balance' => (float) ($entity['adv_base_balance'] ?? 0),
-                    'has_advance' => !empty($entity['prepaid_account_id']),
+                    'has_advance' => !empty($entity['account_id']),
                 ],
                 'opening_balance' => $opening,
                 'movements' => $rows,
@@ -143,20 +140,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     exit;
 }
 
-$type = 'supplier';
-$id = (int) ($_GET['supplier_id'] ?? 0);
+$id = (int) ($_GET['carrier_id'] ?? 0);
 if (!$id) {
     die('<div dir="rtl" style="font-family:sans-serif;padding:40px;text-align:center;color:#dc2626">
-        رابط غير صالح — لازم يُفتح كشف الحساب من صفحة إدارة الموردين مباشرة.
-        <br><a href="suppliers.php">رجوع للموردين</a></div>');
+        رابط غير صالح — لازم يُفتح كشف الحساب من صفحة شركات الشحن مباشرة.
+        <br><a href="shipping_carriers.php">رجوع لشركات الشحن</a></div>');
 }
-$entity = loadEntity($pdo, $type, $id, $TC, $TSP, $TAC);
+$entity = loadCarrier($pdo, $TSC, $id, $TAC);
 if (!$entity) {
     die('<div dir="rtl" style="font-family:sans-serif;padding:40px;text-align:center;color:#dc2626">
-        المورد غير موجود.</div>');
+        شركة الشحن غير موجودة.</div>');
 }
-$typeLabel = 'المورد';
-$backLink = 'suppliers.php';
+$backLink = 'shipping_carriers.php';
 $baseSym = '$';
 if (!empty($_SESSION['branch_id'])) {
     $bcStmt = $pdo->prepare("SELECT c.symbol FROM branches b
@@ -267,12 +262,10 @@ if (!empty($_SESSION['branch_id'])) {
     <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
     <header class="topbar no-print">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-        <span class="tb-title"><i class="bi bi-file-earmark-text me-1 text-primary"></i>كشف حساب
-            <?= $typeLabel ?></span>
+        <span class="tb-title"><i class="bi bi-file-earmark-text me-1 text-warning"></i>كشف حساب شركة شحن</span>
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
         <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
-            <a href="<?= $backLink ?>"
-                style="color:#64748b;text-decoration:none"><?= $type === 'customer' ? 'العملاء' : 'الموردين' ?></a>
+            <a href="<?= $backLink ?>" style="color:#64748b;text-decoration:none">شركات الشحن</a>
             <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
             <span class="text-primary fw-600">كشف حساب</span>
         </nav>
@@ -282,7 +275,7 @@ if (!empty($_SESSION['branch_id'])) {
 
             <div class="d-flex align-items-center justify-content-between mb-3 no-print">
                 <a href="<?= $backLink ?>" class="btn btn-sm btn-light" style="border-radius:8px">
-                    <i class="bi bi-arrow-right me-1"></i>رجوع لـ<?= $type === 'customer' ? 'العملاء' : 'الموردين' ?>
+                    <i class="bi bi-arrow-right me-1"></i>رجوع لشركات الشحن
                 </a>
                 <button class="btn btn-sm btn-primary" style="border-radius:8px" onclick="window.print()">
                     <i class="bi bi-printer me-1"></i>طباعة
@@ -293,11 +286,11 @@ if (!empty($_SESSION['branch_id'])) {
                 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                     <div>
                         <div style="font-size:1.1rem;font-weight:700;color:#1e293b">
-                            <i class="bi bi-<?= $type === 'customer' ? 'person' : 'truck' ?> me-2 text-primary"></i>
+                            <i class="bi bi-truck me-2 text-warning"></i>
                             <?= htmlspecialchars($entity['name']) ?>
                         </div>
                         <div style="font-size:.8rem;color:#64748b;margin-top:4px">
-                            <?= $typeLabel ?><?= !empty($entity['phone']) ? ' — ' . htmlspecialchars($entity['phone']) : '' ?>
+                            شركة شحن<?= !empty($entity['phone']) ? ' — ' . htmlspecialchars($entity['phone']) : '' ?>
                             <?php if ($entity['acc_code']): ?>
                                 · حساب الذمة: <span class="n" dir="ltr"><?= htmlspecialchars($entity['acc_code']) ?></span>
                             <?php endif; ?>
@@ -323,11 +316,10 @@ if (!empty($_SESSION['branch_id'])) {
                         <div class="kpi-val n">
                             <?= htmlspecialchars($baseSym) ?> <?= number_format($entity['acc_base_balance'] ?? 0, 2) ?>
                         </div>
-
                         <div class="kpi-lbl">الرصيد الحالي (بعملة الفرع)</div>
                     </div>
                 </div>
-                <?php if (!empty($entity['prepaid_account_id'])): ?>
+                <?php if (!empty($entity['account_id'])): ?>
                     <div class="col-6 col-md-3">
                         <div class="kpi-card">
                             <div class="kpi-val n text-primary"><?= htmlspecialchars($baseSym) ?>
@@ -375,7 +367,7 @@ if (!empty($_SESSION['branch_id'])) {
         function toggleGroup(g) { const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString()); }
         document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
 
-        const SUPPLIER_ID = <?= (int) $id ?>;
+        const CARRIER_ID = <?= (int) $id ?>;
         const BASE_SYM = <?= json_encode($baseSym) ?>;
 
         function post(data) {
@@ -399,15 +391,15 @@ if (!empty($_SESSION['branch_id'])) {
         }
 
         const REF_LABELS = {
-            sale: 'فاتورة بيع', sale_cogs: 'تكلفة بيع', sale_payment: 'تحصيل',
-            purchase: 'فاتورة شراء', purchase_payment: 'دفعة مورد',
-            receipt: 'سند قبض', payment: 'سند دفع', transfer: 'تحويل', fee: 'رسم',
+            transport: 'ترحيل نقل (شحن من المعمل)', transport_payment: 'دفعة نقلية',
+            shipping: 'ترحيل شحن (تسليم)', shipping_payment: 'دفعة شركة شحن',
+            payment: 'سند دفع', receipt: 'سند قبض', transfer: 'تحويل', fee: 'رسم',
         };
 
         function loadStatement() {
             document.getElementById('stBody').innerHTML = '<div class="text-center py-5"><span class="spinner-border text-primary"></span></div>';
             post({
-                _action: 'get_statement', supplier_id: SUPPLIER_ID,
+                _action: 'get_statement', carrier_id: CARRIER_ID,
                 date_from: document.getElementById('stFrom').value,
                 date_to: document.getElementById('stTo').value,
                 limit: document.getElementById('stLimit').value,
@@ -435,6 +427,10 @@ if (!empty($_SESSION['branch_id'])) {
                                 <th class="text-end">مدين</th><th class="text-end">دائن</th><th class="text-end">الرصيد التراكمي</th></tr>
                         </thead>
                         <tbody>
+                            <tr style="background:#f8fafc">
+                                <td colspan="5" class="fw-600" style="font-size:.8rem">رصيد افتتاحي</td>
+                                <td class="n text-end fw-600" style="font-size:.8rem">${sym} ${fmt(d.opening_balance)}</td>
+                            </tr>
                             ${rows || `<tr><td colspan="6" class="text-center text-muted py-4" style="font-size:.82rem">لا توجد حركة بهذه الفترة</td></tr>`}
                             <tr style="background:#eff6ff">
                                 <td colspan="5" class="fw-700" style="font-size:.82rem;color:#1e3a8a">الرصيد الختامي</td>

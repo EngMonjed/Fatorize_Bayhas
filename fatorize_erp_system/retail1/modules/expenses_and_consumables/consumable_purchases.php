@@ -784,77 +784,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $pdo->rollBack();
                 throw $e;
             }
-        } elseif ($act === 'add_supplier') {
-            // ⚠ نفس منطق صفحة فاتورة شراء المنتج بالضبط (invoice_new.php)
-            // — إنشاء حسابي الذمة والدفعة المقدمة تلقائياً تحت الحسابين
-            // الأب المضبوطين بإعدادات الربط المحاسبي، إجباري لكل مورد
-            // جديد بلا استثناء. النسخة القديمة هون كانت تُنشئ المورد
-            // بدون أي حساب مرتبط إطلاقاً — فجوة محاسبية حقيقية (أي دفعة
-            // لاحقة لهالمورد ما كان إلها حساب فرعي تُرصد عليه).
-            $name = trim($_POST['name'] ?? '');
-            $contact = trim($_POST['contact_person'] ?? '');
-            $phone = trim($_POST['phone'] ?? '');
-            $email = trim($_POST['email'] ?? '');
-            $address = trim($_POST['address'] ?? '');
-            $tax = trim($_POST['tax_number'] ?? '');
-            $type = $_POST['type'] ?? 'wholesaler';
-            $supType = $_POST['supplier_type'] ?? 'consumable';
-            $creditLimit = (float) ($_POST['credit_limit'] ?? 0);
-            $discount = (float) ($_POST['discount_percentage'] ?? 0);
-            $notes = trim($_POST['notes'] ?? '');
-            if (!$name)
-                throw new Exception('اسم المورد مطلوب');
-
-            $pdo->beginTransaction();
-            try {
-                $getParent = function (string $key) use ($pdo, $TAS, $TAC): ?array {
-                    $st = $pdo->prepare("SELECT ac.* FROM `{$TAS}` i JOIN `{$TAC}` ac ON ac.id=i.account_id WHERE i.setting_key=? LIMIT 1");
-                    $st->execute([$key]);
-                    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
-                };
-                $parentPayable = $getParent('consumable_supplier') ?: $getParent('supplier_payable');
-                $parentAdvance = $getParent('shipping_advance') ?: $getParent('employee_advance');
-                if (!$parentPayable || !$parentAdvance)
-                    throw new Exception('اضبط حسابي "ذمم موردي المستهلكات" و"دفعات مقدمة للموردين" أولاً من صفحة إعدادات الربط المحاسبي');
-
-                $cnt = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentPayable['id']}")->fetchColumn();
-                $code = $parentPayable['code'] . '.' . str_pad($cnt + 1, 3, '0', STR_PAD_LEFT);
-                $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
-                    VALUES (?,?,?,'liability',?,?,0)")
-                    ->execute([$code, "ذمم {$name}", $parentPayable['id'], $branchBaseCurrencyId, substr_count($code, '.') + 1]);
-                $accId = (int) $pdo->lastInsertId();
-
-                $cnt2 = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC}` WHERE parent_id={$parentAdvance['id']}")->fetchColumn();
-                $code2 = $parentAdvance['code'] . '.' . str_pad($cnt2 + 1, 3, '0', STR_PAD_LEFT);
-                $pdo->prepare("INSERT INTO `{$TAC}` (code,name,parent_id,account_type,currency_id,level,is_locked)
-                    VALUES (?,?,?,'asset',?,?,0)")
-                    ->execute([$code2, "دفعات مقدمة — {$name}", $parentAdvance['id'], $branchBaseCurrencyId, substr_count($code2, '.') + 1]);
-                $prepaidId = (int) $pdo->lastInsertId();
-
-                $pdo->prepare("INSERT INTO `{$TSP}`
-                    (name,contact_person,phone,email,address,tax_number,type,supplier_type,
-                     status,credit_limit,discount_percentage,notes,account_id,prepaid_account_id,created_by)
-                    VALUES (?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?)")
-                    ->execute([
-                        $name, $contact, $phone, $email, $address, $tax, $type, $supType,
-                        $creditLimit, $discount, $notes, $accId, $prepaidId, $_SESSION['user_id']
-                    ]);
-                $newId = (int) $pdo->lastInsertId();
-                $pdo->commit();
-
-                echo json_encode([
-                    'ok' => true,
-                    'id' => $newId,
-                    'name' => $name,
-                    'phone' => $phone,
-                    'contact' => $contact,
-                    'discount_percentage' => $discount,
-                    'msg' => 'تمت إضافة المورد وإنشاء حسابي الذمة والدفعة المقدمة ✅'
-                ]);
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
+        } elseif ($act === 'get_suppliers') {
+            // ⚠ لتحديث القائمة بدون إعادة تحميل الصفحة — مفيدة تحديداً
+            // لما يضيف المستخدم مورد من صفحة إدارة الموردين بتبويب
+            // متصفح جديد (زر "فتح بتبويب جديد")، وبده يرجع يلاقيه هون
+            // بدون Refresh يدوي
+            $rows = $pdo->query("SELECT id, name, phone, contact_person, discount_percentage FROM `{$TSP}`
+                WHERE status='active' AND supplier_type IN ('consumable','both') ORDER BY name")->fetchAll();
+            echo json_encode(['ok' => true, 'suppliers' => $rows]);
         } else
             throw new Exception('إجراء غير معروف');
 
@@ -1511,9 +1448,12 @@ $STATUS_MAP = [
                                                 </option>
                                     <?php endforeach; ?>
                                 </select>
-                                <button class="btn btn-sm"
+                                <a class="btn btn-sm" href="../purchases/suppliers.php?tab=consumables&new=1" target="_blank"
                                     style="border-radius:7px;border:1px solid #1e3a8a;color:#1e3a8a;padding:4px 7px"
-                                    onclick="openSupplierModal()" title="مورد جديد"><i class="bi bi-plus"></i></button>
+                                    title="مورد جديد — بتبويب جديد"><i class="bi bi-plus-lg"></i></a>
+                                <button class="btn btn-sm" onclick="refreshSuppliers()"
+                                    style="border-radius:7px;border:1px solid #16a34a;color:#16a34a;padding:4px 7px"
+                                    title="تحديث القائمة (بعد إضافة مورد بالتبويب الجديد)"><i class="bi bi-arrow-clockwise"></i></button>
                             </div>
                             <div id="supplierInfo" style="display:none;font-size:.7rem;color:#64748b;margin-top:3px">
                                 <i class="bi bi-telephone me-1"></i><span id="supplierPhone"></span>
@@ -1660,113 +1600,12 @@ $STATUS_MAP = [
         </div>
     </div>
 
-    <!-- ══ مودال مورد جديد ══ -->
-    <div class="modal fade" id="supplierModal" tabindex="-1" data-bs-backdrop="static">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content" style="border-radius:16px;border:none">
-                <div class="modal-header py-3 px-4 border-0"
-                    style="background:linear-gradient(135deg,#0c447c,#1e3a8a);border-radius:16px 16px 0 0">
-                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-truck me-2"></i>إضافة مورد مستهلكات
-                    </h6>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body px-4 pt-3">
-                    <div class="row g-3">
-                        <div class="col-12">
-                            <div class="sec-title">المعلومات الأساسية</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="field-lbl">اسم المورد <span class="req">*</span></label>
-                            <input type="text" id="spName" class="form-control form-control-sm"
-                                placeholder="اسم الشركة أو المورد">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="field-lbl">جهة الاتصال</label>
-                            <input type="text" id="spContact" class="form-control form-control-sm"
-                                placeholder="اسم المسؤول">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="field-lbl">الهاتف</label>
-                            <input type="text" id="spPhone" class="form-control form-control-sm" dir="ltr"
-                                placeholder="+963...">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="field-lbl">بريد إلكتروني</label>
-                            <input type="email" id="spEmail" class="form-control form-control-sm" dir="ltr">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="field-lbl">الرقم الضريبي</label>
-                            <input type="text" id="spTax" class="form-control form-control-sm" dir="ltr">
-                        </div>
-                        <div class="col-12">
-                            <label class="field-lbl">العنوان</label>
-                            <input type="text" id="spAddress" class="form-control form-control-sm">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="field-lbl">نوع المورد</label>
-                            <select id="spType" class="form-select form-select-sm">
-                                <option value="manufacturer">مصنّع</option>
-                                <option value="distributor">موزّع</option>
-                                <option value="wholesaler" selected>موزّع بالجملة</option>
-                                <option value="retailer">تاجر تجزئة</option>
-                            </select>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="field-lbl">يورد</label>
-                            <select id="spSupType" class="form-select form-select-sm">
-                                <option value="consumable" selected>مستهلكات</option>
-                                <option value="product">منتجات</option>
-                                <option value="both">كليهما</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="field-lbl">الحد الائتماني</label>
-                            <input type="number" id="spCredit" class="form-control form-control-sm" value="0"
-                                dir="ltr">
-                        </div>
-                        <div class="col-md-2">
-                            <label class="field-lbl">خصم%</label>
-                            <input type="number" id="spDiscount" class="form-control form-control-sm" value="0"
-                                min="0" max="100" dir="ltr">
-                        </div>
-                        <div class="col-12">
-                            <div
-                                style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;padding:10px 14px">
-                                <div class="fw-600" style="font-size:.8rem;color:#16a34a">
-                                    <i class="bi bi-magic me-1"></i>حسابات المورد تُنشأ تلقائياً
-                                </div>
-                                <div style="font-size:.72rem;color:#64748b;margin-top:4px">
-                                    حساب ذمة وحساب دفعات مقدمة، تحت الحسابين الأب المضبوطين مسبقاً بصفحة إعدادات
-                                    الربط المحاسبي — إجباري لكل مورد جديد.
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-12">
-                            <label class="field-lbl">ملاحظات</label>
-                            <textarea id="spNotes" class="form-control form-control-sm" rows="2"
-                                placeholder="اختياري"></textarea>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer border-0 px-4 pb-4">
-                    <button class="btn btn-sm btn-light" style="border-radius:8px"
-                        data-bs-dismiss="modal">إلغاء</button>
-                    <button class="btn btn-sm fw-600" style="border-radius:8px;background:#1e3a8a;color:#fff"
-                        onclick="saveSupplier()">
-                        <i class="bi bi-plus-lg me-1"></i>إضافة
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
         // ── Modals ──
         const invModal = new bootstrap.Modal(document.getElementById('invModal'));
         const viewModal = new bootstrap.Modal(document.getElementById('viewModal'));
-        const supplierModal = new bootstrap.Modal(document.getElementById('supplierModal'));
 
         // ── بيانات المواد والعملات ──
         const ITEMS = <?= json_encode(array_values($items_list)) ?>;
@@ -2421,47 +2260,22 @@ $STATUS_MAP = [
             }
         }
 
-        function openSupplierModal() {
-            ['spName', 'spContact', 'spPhone', 'spEmail', 'spTax', 'spAddress', 'spNotes'].forEach(id => document.getElementById(id).value = '');
-            document.getElementById('spType').value = 'wholesaler';
-            document.getElementById('spSupType').value = 'consumable';
-            document.getElementById('spCredit').value = 0;
-            document.getElementById('spDiscount').value = 0;
-            supplierModal.show();
-        }
-
-        function saveSupplier() {
-            const name = document.getElementById('spName').value.trim();
-            if (!name) { toast('اسم المورد مطلوب', 'danger'); return; }
-            post({
-                _action: 'add_supplier', name,
-                contact_person: document.getElementById('spContact').value,
-                phone: document.getElementById('spPhone').value,
-                email: document.getElementById('spEmail').value,
-                tax_number: document.getElementById('spTax').value,
-                address: document.getElementById('spAddress').value,
-                type: document.getElementById('spType').value,
-                supplier_type: document.getElementById('spSupType').value,
-                credit_limit: document.getElementById('spCredit').value,
-                discount_percentage: document.getElementById('spDiscount').value,
-                notes: document.getElementById('spNotes').value,
-            }).then(d => {
+        // ⚠ تحديث قائمة الموردين بدون Refresh — لما تضيف مورد بتبويب
+        // المتصفح الجديد (زر "مورد جديد") وترجع لهون، بتضغط هالزر
+        // فتتحدث القائمة بدون ما تفقد أي بيانات مدخلة بالفاتورة
+        function refreshSuppliers() {
+            const sel = document.getElementById('iSupplier');
+            const currentVal = sel.value;
+            post({ _action: 'get_suppliers' }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
-                const sel = document.getElementById('iSupplier');
-                const opt = document.createElement('option');
-                opt.value = d.id;
-                opt.dataset.phone = d.phone || '';
-                opt.dataset.contact = d.contact || '';
-                opt.dataset.discount = d.discount_percentage || 0;
-                opt.textContent = d.name;
-                opt.selected = true;
-                sel.appendChild(opt);
+                sel.innerHTML = '<option value="">— بدون مورد —</option>' +
+                    d.suppliers.map(s => `<option value="${s.id}" data-phone="${s.phone || ''}" data-contact="${s.contact_person || ''}" data-discount="${s.discount_percentage || 0}">${s.name}</option>`).join('');
+                if (currentVal) sel.value = currentVal;
                 onSupplierChange();
-                supplierModal.hide();
-                toast(d.msg || 'تمت إضافة المورد');
+                toast('تم تحديث قائمة الموردين');
             });
         }
-    
+
         // ══════════════════════════════════════════════════════════
         // فرز الجداول بالنقر على رأس العمود — عام لأي جدول بالصفحة
         // ══════════════════════════════════════════════════════════

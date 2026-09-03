@@ -248,7 +248,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 // مدين: رصيد افتتاحي / دائن: حساب المورد (علينا ندفع)
                 $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate) VALUES (?,?,0,?,?,?,?,?,1)")
                     ->execute([$jeId, $party['account_id'], $amount, $amount, $amount, $label, $branchCurrencyId]);
-                bumpAccountBalance($pdo, $TAC, $party['account_id'], $amount);
+                // ✅ مُصلح: كانت $amount موجبة بالغلط — القيد "دائن" لازم
+                // يخلي الرصيد المخزَّن أكتر سلبية (نفس اتجاه حسابات
+                // الالتزامات بباقي النظام)، مو موجب زي حالة العميل
+                // (مدين) فوق.
+                bumpAccountBalance($pdo, $TAC, $party['account_id'], -$amount);
             }
 
             $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)

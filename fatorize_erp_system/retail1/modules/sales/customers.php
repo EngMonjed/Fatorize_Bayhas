@@ -17,6 +17,7 @@ $TS = $_SESSION['table_suffix'];
 $TC = "customers_{$TS}";
 $TSI = "sales_invoices_{$TS}";
 $TAC = "account_charts_{$TS}";
+$TPP = "pricing_patterns_{$TS}";
 $TIAS = "invoice_account_settings_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
@@ -45,11 +46,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         if ($act === 'get_customer') {
             $id = (int) $_POST['id'];
             $st = $pdo->prepare("SELECT c.*,
+                pp.name AS pricing_pattern_name,
                 rec.code AS rec_code, rec.name AS rec_name, rec.balance AS rec_balance,
                 rec.base_balance AS rec_base_balance, recCur.code AS rec_cur_code, recCur.symbol AS rec_cur_sym,
                 adv.code AS adv_code, adv.name AS adv_name, adv.balance AS adv_balance,
                 adv.base_balance AS adv_base_balance, advCur.code AS adv_cur_code, advCur.symbol AS adv_cur_sym
                 FROM `{$TC}` c
+                LEFT JOIN `{$TPP}` pp ON pp.id=c.pricing_pattern_id
                 LEFT JOIN `{$TAC}` rec ON rec.id=c.account_id
                 LEFT JOIN `currencies` recCur ON recCur.id=rec.currency_id
                 LEFT JOIN `{$TAC}` adv ON adv.id=c.prepaid_account_id
@@ -94,7 +97,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $id = (int) ($_POST['id'] ?? 0);
             $name = trim($_POST['name'] ?? '');
             $contact = trim($_POST['contact_person'] ?? '');
-            $type = $_POST['type'] ?? 'individual';
+            $type = $_POST['type'] ?? 'retail';
+            $pricingPatternId = (int) ($_POST['pricing_pattern_id'] ?? 0) ?: null;
             $phone = trim($_POST['phone'] ?? '');
             $email = trim($_POST['email'] ?? '');
             $address = trim($_POST['address'] ?? '');
@@ -147,7 +151,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
                 if ($id) {
                     requirePermission('crm.customers', 'edit');
-                    $pdo->prepare("UPDATE `{$TC}` SET name=?,contact_person=?,type=?,phone=?,
+                    $pdo->prepare("UPDATE `{$TC}` SET name=?,contact_person=?,type=?,pricing_pattern_id=?,phone=?,
                         email=?,address=?,tax_number=?,shipping_company=?,shipping_code=?,
                         credit_limit=?,discount_percentage=?,notes=?,
                         status=?,account_id=?,prepaid_account_id=?,updated_at=NOW() WHERE id=?")
@@ -155,6 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             $name,
                             $contact,
                             $type,
+                            $pricingPatternId,
                             $phone,
                             $email,
                             $address,
@@ -173,14 +178,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 } else {
                     requirePermission('crm.customers', 'create');
                     $pdo->prepare("INSERT INTO `{$TC}`
-                        (name,contact_person,type,phone,email,address,tax_number,
+                        (name,contact_person,type,pricing_pattern_id,phone,email,address,tax_number,
                          shipping_company,shipping_code,credit_limit,discount_percentage,notes,
                          status,account_id,prepaid_account_id)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                         ->execute([
                             $name,
                             $contact,
                             $type,
+                            $pricingPatternId,
                             $phone,
                             $email,
                             $address,
@@ -203,6 +209,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $pdo->rollBack();
                 throw $e;
             }
+        } elseif ($act === 'add_pricing_pattern') {
+            requirePermission('crm.customers', 'create');
+            $name = trim($_POST['name'] ?? '');
+            if (!$name)
+                throw new Exception('اسم نمط التسعير مطلوب');
+            $pdo->prepare("INSERT INTO `{$TPP}` (name, description) VALUES (?, ?)")
+                ->execute([$name, trim($_POST['description'] ?? '')]);
+            echo json_encode(['ok' => true, 'id' => (int) $pdo->lastInsertId(), 'name' => $name, 'msg' => 'تمت إضافة نمط التسعير']);
         } elseif ($act === 'toggle_status') {
             requirePermission('crm.customers', 'edit');
             $id = (int) $_POST['id'];
@@ -272,14 +286,16 @@ $advanceAccs = $pdo->query("SELECT id,code,name FROM `{$TAC}` WHERE account_type
 try {
     $stats = $pdo->query("SELECT COUNT(*) AS total,
         SUM(status='active') AS active,
-        SUM(type='individual') AS individuals,
-        SUM(type='company') AS companies
+        SUM(type='wholesale') AS wholesale_cnt,
+        SUM(type='retail') AS retail_cnt,
+        SUM(type='super_wholesale') AS super_wholesale_cnt
         FROM `{$TC}`")->fetch();
 } catch (Exception $e) {
-    $stats = ['total' => 0, 'active' => 0, 'individuals' => 0, 'companies' => 0];
+    $stats = ['total' => 0, 'active' => 0, 'wholesale_cnt' => 0, 'retail_cnt' => 0, 'super_wholesale_cnt' => 0];
 }
 
-$TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
+$TYPE_MAP = ['wholesale' => 'جملة', 'retail' => 'مفرق', 'super_wholesale' => 'جملة الجملة'];
+$pricingPatterns = $pdo->query("SELECT id, name FROM `{$TPP}` WHERE is_active=1 ORDER BY name")->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -468,6 +484,11 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
             color: #92400e
         }
 
+        .avatar.super-wholesale {
+            background: #f0fdf4;
+            color: #065f46
+        }
+
         .det-row {
             display: flex;
             justify-content: space-between;
@@ -568,21 +589,21 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#eff6ff"><i class="bi bi-person text-primary"></i>
+                        <div class="stat-icon" style="background:#eff6ff"><i class="bi bi-box-seam text-primary"></i>
                         </div>
                         <div>
-                            <div class="stat-val"><?= $stats['individuals'] ?></div>
-                            <div class="stat-lbl">أفراد</div>
+                            <div class="stat-val"><?= $stats['wholesale_cnt'] ?></div>
+                            <div class="stat-lbl">جملة</div>
                         </div>
                     </div>
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#fef3c7"><i class="bi bi-building text-warning"></i>
+                        <div class="stat-icon" style="background:#fef3c7"><i class="bi bi-shop text-warning"></i>
                         </div>
                         <div>
-                            <div class="stat-val"><?= $stats['companies'] ?></div>
-                            <div class="stat-lbl">شركات</div>
+                            <div class="stat-val"><?= $stats['retail_cnt'] ?></div>
+                            <div class="stat-lbl">مفرق</div>
                         </div>
                     </div>
                 </div>
@@ -601,8 +622,9 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                         <select name="type" class="form-select form-select-sm" style="width:130px;border-radius:8px"
                             onchange="this.form.submit()">
                             <option value="">النوع</option>
-                            <option value="individual" <?= $typeF === 'individual' ? 'selected' : '' ?>>فرد</option>
-                            <option value="company" <?= $typeF === 'company' ? 'selected' : '' ?>>شركة</option>
+                            <option value="wholesale" <?= $typeF === 'wholesale' ? 'selected' : '' ?>>جملة</option>
+                            <option value="retail" <?= $typeF === 'retail' ? 'selected' : '' ?>>مفرق</option>
+                            <option value="super_wholesale" <?= $typeF === 'super_wholesale' ? 'selected' : '' ?>>جملة الجملة</option>
                         </select>
                         <select name="status" class="form-select form-select-sm" style="width:180px;border-radius:8px"
                             onchange="this.form.submit()">
@@ -647,15 +669,22 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                                     </td>
                                 </tr>
                             <?php endif; ?>
+                            <?php
+                            $TYPE_STYLE = [
+                                'wholesale' => ['avatar' => 'company', 'badge' => 'bg-warning-subtle text-warning', 'icon' => 'box-seam'],
+                                'retail' => ['avatar' => '', 'badge' => 'bg-secondary-subtle text-secondary', 'icon' => 'shop'],
+                                'super_wholesale' => ['avatar' => 'super-wholesale', 'badge' => 'bg-success-subtle text-success', 'icon' => 'buildings'],
+                            ];
+                            ?>
                             <?php foreach ($customers as $i => $c):
                                 $init = mb_substr($c['name'], 0, 1, 'UTF-8');
-                                $isCompany = $c['type'] === 'company';
+                                $ts = $TYPE_STYLE[$c['type']] ?? $TYPE_STYLE['retail'];
                                 ?>
                                 <tr>
                                     <td class="text-muted" style="font-size:.75rem"><?= $i + 1 ?></td>
                                     <td>
                                         <div class="d-flex align-items-center gap-2">
-                                            <div class="avatar <?= $isCompany ? 'company' : '' ?>"><?= $init ?></div>
+                                            <div class="avatar <?= $ts['avatar'] ?>"><?= $init ?></div>
                                             <div>
                                                 <div class="fw-600"><?= htmlspecialchars($c['name']) ?></div>
                                                 <?php if ($c['contact_person']): ?>
@@ -669,10 +698,10 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                                     </td>
                                     <td>
                                         <span
-                                            class="badge <?= $isCompany ? 'bg-warning-subtle text-warning' : 'bg-secondary-subtle text-secondary' ?>"
+                                            class="badge <?= $ts['badge'] ?>"
                                             style="font-size:.68rem">
                                             <i
-                                                class="bi bi-<?= $isCompany ? 'building' : 'person' ?> me-1"></i><?= $TYPE_MAP[$c['type']] ?>
+                                                class="bi bi-<?= $ts['icon'] ?> me-1"></i><?= $TYPE_MAP[$c['type']] ?>
                                         </span>
                                     </td>
                                     <td dir="ltr" style="font-size:.8rem;color:#475569">
@@ -792,9 +821,25 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                         <div class="col-md-3">
                             <label class="field-lbl">نوع العميل</label>
                             <select id="mType" class="form-select form-select-sm">
-                                <option value="individual">فرد</option>
-                                <option value="company">شركة</option>
+                                <option value="wholesale">جملة</option>
+                                <option value="retail">مفرق</option>
+                                <option value="super_wholesale">جملة الجملة</option>
                             </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="field-lbl">نمط التسعير</label>
+                            <div class="d-flex gap-1">
+                                <select id="mPricingPattern" class="form-select form-select-sm" style="flex:1">
+                                    <option value="">— بلا نمط —</option>
+                                    <?php foreach ($pricingPatterns as $pp): ?>
+                                        <option value="<?= $pp['id'] ?>"><?= htmlspecialchars($pp['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="button" class="btn btn-sm"
+                                    style="border-radius:7px;border:1px solid #16a34a;color:#16a34a;padding:4px 8px"
+                                    onclick="openAddPricingPattern()" title="نمط تسعير جديد"><i
+                                        class="bi bi-plus"></i></button>
+                            </div>
                         </div>
                         <div class="col-md-3">
                             <label class="field-lbl">الحالة</label>
@@ -941,6 +986,30 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
         </div>
     </div>
 
+    <!-- مودال إضافة نمط تسعير سريع -->
+    <div class="modal fade" id="pricingPatternModal" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content" style="border-radius:14px">
+                <div class="modal-header">
+                    <h6 class="modal-title fw-700"><i class="bi bi-tags me-2 text-success"></i>نمط تسعير جديد</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="field-lbl">اسم النمط <span class="req">*</span></label>
+                    <input type="text" id="ppName" class="form-control form-control-sm mb-2"
+                        placeholder="مثلاً: تجار الجملة الكبار">
+                    <label class="field-lbl">وصف (اختياري)</label>
+                    <input type="text" id="ppDescription" class="form-control form-control-sm">
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-light" data-bs-dismiss="modal">إلغاء</button>
+                    <button class="btn btn-sm fw-600" style="background:#16a34a;color:#fff"
+                        onclick="saveNewPricingPattern()">حفظ</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const sb = document.getElementById('sidebar'),
@@ -1010,7 +1079,8 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
         function resetForm() {
             ['mId', 'mName', 'mContact', 'mPhone', 'mEmail', 'mAddress', 'mTaxNo', 'mShip', 'mShipCode', 'mNotes']
                 .forEach(id => document.getElementById(id).value = '');
-            document.getElementById('mType').value = 'individual';
+            document.getElementById('mType').value = 'retail';
+            document.getElementById('mPricingPattern').value = '';
             document.getElementById('mStatus').value = 'active';
             document.getElementById('mAccId').value = '';
             document.getElementById('mPrepaidId').value = '';
@@ -1040,7 +1110,8 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                 document.getElementById('mId').value = c.id;
                 document.getElementById('mName').value = c.name;
                 document.getElementById('mContact').value = c.contact_person || '';
-                document.getElementById('mType').value = c.type || 'individual';
+                document.getElementById('mType').value = c.type || 'retail';
+                document.getElementById('mPricingPattern').value = c.pricing_pattern_id || '';
                 document.getElementById('mPhone').value = c.phone || '';
                 document.getElementById('mEmail').value = c.email || '';
                 document.getElementById('mAddress').value = c.address || '';
@@ -1090,6 +1161,7 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                 name,
                 contact_person: document.getElementById('mContact').value,
                 type: document.getElementById('mType').value,
+                pricing_pattern_id: document.getElementById('mPricingPattern').value,
                 phone: document.getElementById('mPhone').value,
                 email: document.getElementById('mEmail').value,
                 address: document.getElementById('mAddress').value,
@@ -1113,6 +1185,33 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
             });
         }
 
+        // ── نمط تسعير جديد (زر "+" جنب حقل نمط التسعير) — نفس نمط
+        // "إضافة فئة جديدة" بصفحة المنتجات بالضبط ──
+        let pricingPatternModal;
+        function openAddPricingPattern() {
+            document.getElementById('ppName').value = '';
+            document.getElementById('ppDescription').value = '';
+            if (!pricingPatternModal) pricingPatternModal = new bootstrap.Modal(document.getElementById('pricingPatternModal'));
+            pricingPatternModal.show();
+        }
+        function saveNewPricingPattern() {
+            const name = document.getElementById('ppName').value.trim();
+            if (!name) { toast('اسم نمط التسعير مطلوب', 'danger'); return; }
+            post({
+                _action: 'add_pricing_pattern',
+                name,
+                description: document.getElementById('ppDescription').value,
+            }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
+                const sel = document.getElementById('mPricingPattern');
+                const opt = document.createElement('option');
+                opt.value = d.id; opt.textContent = d.name; opt.selected = true;
+                sel.appendChild(opt);
+                pricingPatternModal.hide();
+                toast(d.msg || 'تمت الإضافة');
+            });
+        }
+
         function viewCustomer(id) {
             document.getElementById('vTitle').textContent = 'جارٍ التحميل...';
             document.getElementById('vSub').textContent = '';
@@ -1131,8 +1230,14 @@ $TYPE_MAP = ['individual' => 'فرد', 'company' => 'شركة'];
                 const st = d.data.stats || {};
                 document.getElementById('vTitle').textContent = c.name;
                 document.getElementById('vSub').textContent = TYPE_MAP[c.type] || '';
+                const TYPE_BADGE = {
+                    wholesale: '<span class="badge bg-warning-subtle text-warning">جملة</span>',
+                    retail: '<span class="badge bg-secondary-subtle text-secondary">مفرق</span>',
+                    super_wholesale: '<span class="badge bg-success-subtle text-success">جملة الجملة</span>',
+                };
                 const rows = [
-                    ['النوع', c.type === 'company' ? '<span class="badge bg-warning-subtle text-warning">شركة</span>' : '<span class="badge bg-secondary-subtle text-secondary">فرد</span>'],
+                    ['النوع', TYPE_BADGE[c.type] || '—'],
+                    ['نمط التسعير', c.pricing_pattern_name ? esc(c.pricing_pattern_name) : '—'],
                     ['جهة الاتصال', c.contact_person ? esc(c.contact_person) : '—'],
                     ['الهاتف', c.phone ? `<span dir="ltr">${esc(c.phone)}</span>` : '—'],
                     ['البريد', c.email ? `<a href="mailto:${esc(c.email)}" dir="ltr">${esc(c.email)}</a>` : '—'],

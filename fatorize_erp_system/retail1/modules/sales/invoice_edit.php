@@ -20,6 +20,7 @@ $TI = "sales_invoices_{$TS}";
 $TII = "sales_invoice_items_{$TS}";
 $TC = "customers_{$TS}";
 $TW = "warehouses_{$TS}";
+$TAC = "account_charts_{$TS}";
 $TWI = "warehouse_items_{$TS}";
 $TV = "product_variants_{$TS}";
 $TSZ = "product_sizes_{$TS}";
@@ -121,19 +122,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $q = trim($_POST['q'] ?? '');
             if (!$q)
                 throw new Exception('أدخل باركود أو اسم منتج');
+            $whId = (int) ($_POST['warehouse_id'] ?? 0);
 
             // بحث بالباركود
             $st = $pdo->prepare("
                 SELECT v.id AS variant_id, v.barcode, v.color_id,
                     p.id AS product_id, p.name AS product_name, p.model_number,
                     s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
-                    c.name AS color_name, c.hex_code AS color_hex
+                    c.name AS color_name, c.hex_code AS color_hex,
+                    COALESCE(wi.quantity, 0) AS stock_qty
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id=v.product_id
                 JOIN `{$TSZ}` s   ON s.id=v.size_id
                 LEFT JOIN `{$TCL}` c ON c.id=v.color_id
+                LEFT JOIN `{$TWI}` wi ON wi.variant_id=v.id AND wi.warehouse_id=?
                 WHERE v.barcode=? AND v.is_active=1 AND p.is_active=1");
-            $st->execute([$q]);
+            $st->execute([$whId, $q]);
             // ⚠ الباركود ممكن يكون مشترك بين كل مقاسات نفس الكروب — كان
             // LIMIT 1 يرجّع أول مقاس بس. هلق منرجع كل المطابقات
             // (group)، والواجهة بتدمجهم بنفس منطق mergeVariant().
@@ -146,16 +150,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     SELECT v.id AS variant_id, v.barcode, v.color_id,
                         p.id AS product_id, p.name AS product_name, p.model_number,
                         s.id AS size_id, s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
-                        c.name AS color_name, c.hex_code AS color_hex
+                        c.name AS color_name, c.hex_code AS color_hex,
+                        COALESCE(wi.quantity, 0) AS stock_qty
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id=v.product_id
                     JOIN `{$TSZ}` s   ON s.id=v.size_id
                     LEFT JOIN `{$TCL}` c ON c.id=v.color_id
+                    LEFT JOIN `{$TWI}` wi ON wi.variant_id=v.id AND wi.warehouse_id=?
                     WHERE (p.name LIKE ? OR p.model_number LIKE ?)
                         AND v.is_active=1 AND p.is_active=1
                     ORDER BY p.name, s.selling_price, s.age_type, s.sort_order
                     LIMIT 200");
-                $st2->execute(["%{$q}%", "%{$q}%"]);
+                $st2->execute([$whId, "%{$q}%", "%{$q}%"]);
                 echo json_encode(['ok' => true, 'type' => 'search', 'data' => $st2->fetchAll()]);
             }
         }
@@ -331,8 +337,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ──
-$customers = $pdo->query("SELECT id,name,phone FROM `{$TC}`
-    WHERE status='active' ORDER BY name")->fetchAll();
+$customers = $pdo->query("SELECT c.id, c.name, c.phone, c.discount_percentage,
+        rec.code AS rec_code, adv.code AS adv_code
+    FROM `{$TC}` c
+    LEFT JOIN `{$TAC}` rec ON rec.id = c.account_id
+    LEFT JOIN `{$TAC}` adv ON adv.id = c.prepaid_account_id
+    WHERE c.status='active' ORDER BY c.name")->fetchAll();
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
 $invNo = $existingInv['invoice_number'];
 
@@ -344,12 +354,14 @@ $invNo = $existingInv['invoice_number'];
 $stExItems = $pdo->prepare("
     SELECT ii.*, p.name AS product_name, p.model_number,
            v.color_id, s.size, s.age_type, s.packet_qty,
-           c.name AS color_name, c.hex_code AS color_hex
+           c.name AS color_name, c.hex_code AS color_hex,
+           COALESCE(wi.quantity, 0) AS stock_qty
     FROM `{$TII}` ii
     LEFT JOIN `{$TV}` v ON v.id = ii.variant_id
     LEFT JOIN `{$TPROD}` p ON p.id = ii.product_id
     LEFT JOIN `{$TSZ}` s ON s.id = v.size_id
     LEFT JOIN `{$TCL}` c ON c.id = v.color_id
+    LEFT JOIN `{$TWI}` wi ON wi.variant_id = ii.variant_id AND wi.warehouse_id = " . (int) ($existingInv['warehouse_id'] ?? 0) . "
     WHERE ii.invoice_id = ?
     ORDER BY ii.id");
 $stExItems->execute([$invId]);
@@ -392,7 +404,7 @@ foreach ($exItemsRaw as $it) {
     if ($it['size'] && !in_array($it['size'], $existingLineGroups[$key]['sizes'], true)) {
         $existingLineGroups[$key]['sizes'][] = $it['size'];
     }
-    $existingLineGroups[$key]['variants'][] = ['variant_id' => (int) $it['variant_id']];
+    $existingLineGroups[$key]['variants'][] = ['variant_id' => (int) $it['variant_id'], 'stock_qty' => (float) $it['stock_qty']];
 }
 $existingLines = array_values($existingLineGroups);
 $existingWarehouseId = $existingInv['warehouse_id'] ?? null;
@@ -572,6 +584,50 @@ $existingTaxPct = $afterDisc > 0
             font-size: .75rem
         }
 
+        /* قائمة بحث العميل المنسدلة */
+        .customer-dd {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            left: 0;
+            z-index: 50;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            max-height: 220px;
+            overflow-y: auto;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, .08);
+            margin-top: 2px;
+        }
+
+        .customer-dd-item {
+            padding: 6px 10px;
+            font-size: .8rem;
+            cursor: pointer;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .customer-dd-item:hover {
+            background: #f0fdf4;
+        }
+
+        .customer-dd-item .cname {
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .customer-dd-item .ccode {
+            font-size: .68rem;
+            color: #64748b;
+            direction: ltr;
+            display: inline-block;
+            margin-left: 8px;
+        }
+
+        .hidden-col {
+            display: none;
+        }
+
         .clr-dot {
             width: 12px;
             height: 12px;
@@ -703,17 +759,29 @@ $existingTaxPct = $afterDisc > 0
                                 <div class="col-md-4">
                                     <label class="field-lbl">العميل <span class="req">*</span></label>
                                     <div class="d-flex gap-1">
-                                        <select id="iCustomer" class="form-select form-select-sm" style="flex:1"
-                                            onchange="onCustomerChange()">
-                                            <option value="">— اختر العميل —</option>
-                                            <?php foreach ($customers as $c): ?>
-                                                        <option value="<?= $c['id'] ?>"
-                                                            data-phone="<?= htmlspecialchars($c['phone'] ?? '') ?>"
-                                                            <?= (int) $c['id'] === (int) $existingInv['customer_id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($c['name']) ?>
-                                                        </option>
-                                            <?php endforeach; ?>
-                                        </select>
+                                        <div class="position-relative" style="flex:1">
+                                            <input type="text" id="iCustomerSearch"
+                                                class="form-control form-control-sm"
+                                                placeholder="ابحث بالاسم أو رقم الحساب..." autocomplete="off"
+                                                oninput="filterCustomerDropdown()" onfocus="filterCustomerDropdown()"
+                                                onblur="setTimeout(()=>document.getElementById('customerDropdown').style.display='none',150)">
+                                            <select id="iCustomer" style="display:none" onchange="onCustomerChange(true)">
+                                                <option value="">— اختر العميل —</option>
+                                                <?php foreach ($customers as $c): ?>
+                                                            <option value="<?= $c['id'] ?>"
+                                                                data-phone="<?= htmlspecialchars($c['phone'] ?? '') ?>"
+                                                                data-discount="<?= (float) ($c['discount_percentage'] ?? 0) ?>"
+                                                                data-name="<?= htmlspecialchars($c['name']) ?>"
+                                                                data-rec="<?= htmlspecialchars($c['rec_code'] ?? '') ?>"
+                                                                data-adv="<?= htmlspecialchars($c['adv_code'] ?? '') ?>"
+                                                                <?= (int) $c['id'] === (int) $existingInv['customer_id'] ? 'selected' : '' ?>>
+                                                                <?= htmlspecialchars($c['name']) ?>
+                                                            </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <div id="customerDropdown" class="customer-dd" style="display:none">
+                                            </div>
+                                        </div>
                                         <button class="btn btn-sm"
                                             style="border-radius:7px;border:1px solid #16a34a;color:#16a34a;padding:4px 8px"
                                             onclick="openAddCustomer()" title="عميل جديد"><i
@@ -868,20 +936,22 @@ $existingTaxPct = $afterDisc > 0
                                             <th>بيان المنتج</th>
                                             <th>الموديل</th>
                                             <th>القياس</th>
-                                            <th class="text-center">عدد القطع بالباكيت</th>
+                                            <th class="text-center hidden-col">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
+                                            <th class="text-center" style="color:#7c3aed">المتوفر بالمخزون</th>
                                             <th class="text-center">عدد الكروبات</th>
-                                            <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر التكلفة</th>
-                                            <th class="text-center">سعر البيع</th>
+                                            <th class="text-center hidden-col">سعر التكلفة</th>
+                                            <th class="text-center hidden-col">سعر البيع</th>
+                                            <th class="text-center" style="color:#0891b2">سعر البيع بعملة الفاتورة</th>
                                             <th class="text-center">نسبة الفارق</th>
+                                            <th class="text-center">عدد المنتجات</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="linesBody">
                                         <tr id="emptyRow">
-                                            <td colspan="13" class="text-center text-muted py-4" style="font-size:.8rem">
+                                            <td colspan="15" class="text-center text-muted py-4" style="font-size:.8rem">
                                                 <i class="bi bi-barcode d-block mb-2"
                                                     style="font-size:1.5rem;opacity:.3"></i>
                                                 امسح باركود أو ابحث عن منتج
@@ -1073,16 +1143,18 @@ $existingTaxPct = $afterDisc > 0
             codeCur = opt?.dataset.code || 'USD';
             document.getElementById('iExRate').value = exRate;
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-            // ⚠ ما عاد في داعي نعيد حساب سعر أي بند — الأسعار (default_price/
-            // net_price) كلها بعملة الفرع أصلاً بالنظام الجديد. سعر الصرف
-            // هلق توثيقي بس (يُخزَّن مع الفاتورة)، وبيُستخدم فقط لعرض
-            // السطر الثانوي بعملة الفاتورة بالملخص.
+            // ⚠ قرار جديد يعكس السابق: net_price نفسه (عملة الفرع) ما
+            // بيتغيّر، بس عمود "سعر البيع بعملة الفاتورة" الجديد لازم
+            // يُعاد حسابه فوراً لكل الأسطر (نفس القيمة الأساسية × سعر
+            // الصرف الجديد).
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
 
         function onExRateChange() {
             exRate = Math.max(0.0001, parseFloat(document.getElementById('iExRate').value) || 1);
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
         // ⚠ بعكس invoice_new.php: ما ننادي onCurrencyChange() هون —
@@ -1111,13 +1183,53 @@ $existingTaxPct = $afterDisc > 0
         }
 
         // ── العميل ──
-        function onCustomerChange() {
+        function onCustomerChange(userInitiated) {
             const sel = document.getElementById('iCustomer');
             const opt = sel.options[sel.selectedIndex];
             const phone = opt.dataset.phone || '';
             const wrap = document.getElementById('custPhone');
             if (sel.value && phone) { document.getElementById('custPhoneTxt').textContent = phone; wrap.style.display = 'block'; }
             else wrap.style.display = 'none';
+            document.getElementById('iCustomerSearch').value = sel.value ? (opt.dataset.name || opt.textContent.trim()) : '';
+            // ⚠ نسبة الخصم العام تتعبّى من العميل بس لو المستخدم فعلياً
+            // غيّر العميل يدوياً (userInitiated=true) — مو بالتحميل
+            // الأولي للصفحة أو استعادة الجلسة، وإلا كانت رح تلغي نسبة
+            // الخصم المحفوظة أصلاً بالفاتورة بمجرد فتحها للتعديل.
+            if (userInitiated && sel.value && opt.dataset.discount !== undefined) {
+                document.getElementById('discPct').value = opt.dataset.discount || 0;
+                calcTotals();
+            }
+        }
+
+        // ── بحث العميل بالاسم أو رقم حساب الذمة/الدفعة المقدمة ──
+        function filterCustomerDropdown() {
+            const q = document.getElementById('iCustomerSearch').value.trim().toLowerCase();
+            const dd = document.getElementById('customerDropdown');
+            const sel = document.getElementById('iCustomer');
+            const opts = Array.from(sel.options).filter(o => o.value);
+            const matches = q ? opts.filter(o => {
+                const name = (o.dataset.name || o.textContent).toLowerCase();
+                const rec = (o.dataset.rec || '').toLowerCase();
+                const adv = (o.dataset.adv || '').toLowerCase();
+                return name.includes(q) || rec.includes(q) || adv.includes(q);
+            }) : opts;
+            if (!matches.length) {
+                dd.innerHTML = '<div class="customer-dd-item text-muted">لا نتائج</div>';
+                dd.style.display = '';
+                return;
+            }
+            dd.innerHTML = matches.slice(0, 50).map(o => `
+                <div class="customer-dd-item" onmousedown="selectCustomerFromDropdown('${o.value}')">
+                    <div class="cname">${o.dataset.name || o.textContent}</div>
+                    ${o.dataset.rec ? `<span class="ccode">ذمة: ${o.dataset.rec}</span>` : ''}
+                    ${o.dataset.adv ? `<span class="ccode">دفعة مقدمة: ${o.dataset.adv}</span>` : ''}
+                </div>`).join('');
+            dd.style.display = '';
+        }
+        function selectCustomerFromDropdown(id) {
+            document.getElementById('iCustomer').value = id;
+            document.getElementById('customerDropdown').style.display = 'none';
+            onCustomerChange(true);
         }
         function openAddCustomer() {
             document.getElementById('cName').value = '';
@@ -1133,7 +1245,8 @@ $existingTaxPct = $afterDisc > 0
                     if (!d.ok) { toast(d.msg, 'danger'); return; }
                     const sel = document.getElementById('iCustomer');
                     const opt = document.createElement('option');
-                    opt.value = d.id; opt.dataset.phone = d.phone || ''; opt.textContent = d.name; opt.selected = true;
+                    opt.value = d.id; opt.dataset.phone = d.phone || ''; opt.dataset.name = d.name;
+                    opt.textContent = d.name; opt.selected = true;
                     sel.appendChild(opt); onCustomerChange(); custModal.hide(); toast('تمت إضافة العميل');
                 });
         }
@@ -1149,7 +1262,8 @@ $existingTaxPct = $afterDisc > 0
         function doSearch() {
             const q = document.getElementById('scanInput').value.trim();
             if (!q) return;
-            post({ _action: 'search_product', q }).then(d => {
+            const warehouse_id = document.getElementById('iWarehouse').value;
+            post({ _action: 'search_product', q, warehouse_id }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
                 if (d.type === 'barcode') {
                     // ⚠ إضافة فورية تلقائية (متل السوبرماركت) — +1 لو
@@ -1299,6 +1413,16 @@ $existingTaxPct = $afterDisc > 0
         // بجدول product_sizes، مو مُستنتَج من مطابقة السعر/نوع العمر.
         function makeGrpKey(item) { return `${item.product_id}_${item.group_key}_${item.color_id || 0}`; }
 
+        // ⚠ عدد الباكيتات الكاملة المتوفرة لهالكروب بهالّون تحديداً —
+        // رقم واحد بس. الباكيت الكامل محتاج قطعة من كل مقاس بالكروب،
+        // فالمقاس الأقل مخزوناً هو الحاجز — نفس منطق "عدد الباكيتات"
+        // بمودال تفاصيل المنتج بالضبط.
+        function formatStockList(line) {
+            if (!line.variants.length) return '—';
+            const qtys = line.variants.map(v => parseFloat(v.stock_qty) || 0);
+            return Math.min(...qtys).toString();
+        }
+
         function addLine(item) {
             const gk = makeGrpKey(item);
             const exist = lines.find(l => l.grp_key === gk);
@@ -1351,21 +1475,25 @@ $existingTaxPct = $afterDisc > 0
         <td>${grpBadge}
             <div class="sizes-lbl mt-1" style="color:#334155">${line.sizes.join(' · ')} ${line.age_type}</div>
         </td>
-        <td class="text-center">
+        <td class="text-center hidden-col">
             <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
                 title="من إعدادات المنتج — للقراءة فقط">
         </td>
         <td><span>${line.color_name || '—'}</span></td>
+        <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(line)}</td>
         <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
-        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-        <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+        <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
             value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
             title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
-        <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+        <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
             value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
             onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+            value="${line.net_price > 0 ? (line.net_price * exRate).toFixed(4) : ''}" dir="ltr" placeholder="0.00"
+            onchange="updateLine('${gk}','net_price_doc',this.value)"></td>
         <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
         <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
@@ -1383,6 +1511,8 @@ $existingTaxPct = $afterDisc > 0
                 const row = document.getElementById(line.row_id);
                 if (row) {
                     row.querySelector('.sizes-lbl').textContent = line.sizes.join(' · ') + ' ' + line.age_type;
+                    const stockLbl = row.querySelector('.stock-lbl');
+                    if (stockLbl) stockLbl.textContent = formatStockList(line);
                     recalcLine(line, row);
                 }
                 // ⚠ قرار نهائي: البيع بالكروب — دمج متغيّر جديد ما بيغيّر
@@ -1397,6 +1527,13 @@ $existingTaxPct = $afterDisc > 0
             // ⚠ سعر التكلفة ثابت (readonly) — سعر البيع يقبل أي قيمة
             // موجبة (حتى لو أقل من التكلفة — بيع بخسارة قرار تجاري صريح).
             if (field === 'net_price') line.net_price = Math.max(0, parseFloat(val) || 0);
+            // ⚠ الحقل الفعلي المعروض/المُعدَّل بالواجهة صار "سعر البيع
+            // بعملة الفاتورة" — يتحوّل تلقائياً لعملة الفرع (net_price)
+            // بالقسمة على سعر الصرف الحالي. آلية الحفظ ما تغيّرت.
+            if (field === 'net_price_doc') {
+                const docVal = Math.max(0, parseFloat(val) || 0);
+                line.net_price = exRate > 0 ? docVal / exRate : docVal;
+            }
             const row = document.getElementById(line.row_id);
             recalcLine(line, row);
             calcTotals();
@@ -1418,6 +1555,10 @@ $existingTaxPct = $afterDisc > 0
             if (row) {
                 row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
                 row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
+                // ⚠ يُعاد حسابه بكل recalcLine، فيضل متزامن تلقائياً مع
+                // أي تغيير بسعر الصرف أو العملة.
+                const npdInput = row.querySelector('.npd-input');
+                if (npdInput) npdInput.value = line.net_price > 0 ? (line.net_price * exRate).toFixed(4) : '';
                 const vpLbl = row.querySelector('.vp-lbl');
                 if (vpLbl) {
                     const pct = line.variance_pct || 0;
@@ -1579,21 +1720,25 @@ $existingTaxPct = $afterDisc > 0
                     <td class="text-muted" dir="ltr">${l.model_number}</td>
                     <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>
                         <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
-                    <td class="text-center">
+                    <td class="text-center hidden-col">
                         <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
                             title="من إعدادات المنتج — للقراءة فقط">
                     </td>
                     <td><span>${l.color_name || '—'}</span></td>
+                    <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(l)}</td>
                     <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
                         onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
-                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-                    <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+                    <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
                         value="${l.default_price || ''}" dir="ltr" readonly
                         title="من الفاتورة الأصلية (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
-                    <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+                    <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
                         value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
                         onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+                    <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+                        value="${l.net_price > 0 ? (l.net_price * exRate).toFixed(4) : ''}" dir="ltr" placeholder="0.00"
+                        onchange="updateLine('${l.grp_key}','net_price_doc',this.value)"></td>
                     <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
                     <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
                     <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);

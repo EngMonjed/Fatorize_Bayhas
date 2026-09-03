@@ -486,7 +486,12 @@ if (!empty($_SESSION['branch_id'])) {
                         </button>
                     </div>
                 </div>
-                <div id="plBody"><div class="text-center py-5"><span class="spinner-border text-primary"></span></div></div>
+                <div id="plBody">
+                    <div class="text-center text-muted py-5" style="font-size:.85rem">
+                        <i class="bi bi-calendar-range d-block mb-2" style="font-size:1.8rem;opacity:.3"></i>
+                        اختر فترة (من-إلى) واضغط "عرض"، أو "الشهر الحالي" كاختصار
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════ التدفقات النقدية ═══════ -->
@@ -507,7 +512,12 @@ if (!empty($_SESSION['branch_id'])) {
                         </button>
                     </div>
                 </div>
-                <div id="cfBody"><div class="text-center py-5"><span class="spinner-border text-primary"></span></div></div>
+                <div id="cfBody">
+                    <div class="text-center text-muted py-5" style="font-size:.85rem">
+                        <i class="bi bi-calendar-range d-block mb-2" style="font-size:1.8rem;opacity:.3"></i>
+                        اختر فترة (من-إلى) واضغط "عرض"، أو "الشهر الحالي" كاختصار
+                    </div>
+                </div>
             </div>
 
         </div>
@@ -680,10 +690,12 @@ if (!empty($_SESSION['branch_id'])) {
         }
 
         // ── تحميل أولي ──
+        // الميزانية العمومية = لحظة زمنية، منطقي تفتح على "اليوم" تلقائياً.
+        // الأرباح/الخسائر والتدفقات النقدية = تقارير فترة، ما بتحمَّل
+        // تلقائياً أبداً — تضل فاضية لحد ما تختار المستخدم فترة بنفسه
+        // ويضغط "عرض" (أو زر "الشهر الحالي" كاختصار سريع).
         document.getElementById('bsDate').value = new Date().toISOString().split('T')[0];
         loadBalanceSheet();
-        setPlThisMonth();
-        setCfThisMonth();
         showReport('bs');
     </script>
 

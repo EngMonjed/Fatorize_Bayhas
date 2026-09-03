@@ -17,6 +17,7 @@ $TI = "sales_invoices_{$TS}";
 $TII = "sales_invoice_items_{$TS}";
 $TC = "customers_{$TS}";
 $TW = "warehouses_{$TS}";
+$TAC = "account_charts_{$TS}";
 $TWI = "warehouse_items_{$TS}";
 $TV = "product_variants_{$TS}";
 $TSZ = "product_sizes_{$TS}";
@@ -85,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $q = trim($_POST['q'] ?? '');
             if (!$q)
                 throw new Exception('أدخل باركود أو اسم منتج');
+            $whId = (int) ($_POST['warehouse_id'] ?? 0);
 
             // بحث بالباركود أولاً
             $st = $pdo->prepare("
@@ -92,13 +94,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     p.id AS product_id, p.name AS product_name, p.model_number,
                     s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                     s.base_currency_id AS price_base_currency_id,
-                    c.name AS color_name, c.hex_code AS color_hex
+                    c.name AS color_name, c.hex_code AS color_hex,
+                    COALESCE(wi.quantity, 0) AS stock_qty
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id = v.product_id
                 JOIN `{$TSZ}` s   ON s.id = v.size_id
                 LEFT JOIN `{$TCL}` c ON c.id = v.color_id
+                LEFT JOIN `{$TWI}` wi ON wi.variant_id = v.id AND wi.warehouse_id = ?
                 WHERE v.barcode = ? AND v.is_active=1 AND p.is_active=1");
-            $st->execute([$q]);
+            $st->execute([$whId, $q]);
             // ⚠ الباركود ممكن يكون مشترك بين كل مقاسات نفس الكروب (نفس
             // اللون)، مو خاص بمقاس وحيد — كان LIMIT 1 يقتل هالسلوك ويرجّع
             // أول مقاس بس. هلق منرجع كل المطابقات، والواجهة بتدمجهم بنفس
@@ -126,16 +130,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         p.id AS product_id, p.name AS product_name, p.model_number,
                         s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                         s.base_currency_id AS price_base_currency_id,
-                        c.name AS color_name, c.hex_code AS color_hex
+                        c.name AS color_name, c.hex_code AS color_hex,
+                        COALESCE(wi.quantity, 0) AS stock_qty
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id = v.product_id
                     JOIN `{$TSZ}` s   ON s.id = v.size_id
                     LEFT JOIN `{$TCL}` c ON c.id = v.color_id
+                    LEFT JOIN `{$TWI}` wi ON wi.variant_id = v.id AND wi.warehouse_id = ?
                     WHERE (p.name LIKE ? OR p.model_number LIKE ?)
                         AND v.is_active=1 AND p.is_active=1
                     ORDER BY p.name, s.group_key, s.age_type, s.sort_order
                     LIMIT 200");
-                $st2->execute(["%{$q}%", "%{$q}%"]);
+                $st2->execute([$whId, "%{$q}%", "%{$q}%"]);
                 $results = $st2->fetchAll();
                 foreach ($results as &$r) {
                     $r['price_base_currency_code'] = $currencyCodeById[(int) ($r['price_base_currency_id'] ?? 0)] ?? $branchCur['code'];
@@ -429,6 +435,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     'name' => $name,
                     'phone' => $phone,
                     'discount_percentage' => $discount,
+                    'rec_code' => $code,
+                    'adv_code' => $code2,
                     'msg' => 'تمت إضافة العميل وإنشاء حسابي الذمة والدفعة المقدمة ✅'
                 ]);
             } catch (Exception $e) {
@@ -445,8 +453,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ──────────────────────────────────────────────
-$customers = $pdo->query("SELECT id,name,phone,contact_person,discount_percentage FROM `{$TC}`
-    WHERE status='active' ORDER BY name")->fetchAll();
+$customers = $pdo->query("SELECT c.id, c.name, c.phone, c.contact_person, c.discount_percentage,
+        rec.code AS rec_code, adv.code AS adv_code
+    FROM `{$TC}` c
+    LEFT JOIN `{$TAC}` rec ON rec.id = c.account_id
+    LEFT JOIN `{$TAC}` adv ON adv.id = c.prepaid_account_id
+    WHERE c.status='active' ORDER BY c.name")->fetchAll();
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
 // ملاحظة: $currencies و$branchCur و$branchBaseRateVsAnchor و$currencyRateById
 // محسوبة مسبقاً بأعلى الملف (قبل معالج AJAX) — راجع التعليق هناك.
@@ -729,6 +741,53 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         .del-btn:hover {
             background: #dc2626;
             color: #fff
+        }
+
+        /* قائمة بحث العميل المنسدلة */
+        .customer-dd {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            left: 0;
+            z-index: 50;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            max-height: 220px;
+            overflow-y: auto;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, .08);
+            margin-top: 2px;
+        }
+
+        .customer-dd-item {
+            padding: 6px 10px;
+            font-size: .8rem;
+            cursor: pointer;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .customer-dd-item:hover {
+            background: #f0fdf4;
+        }
+
+        .customer-dd-item .cname {
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .customer-dd-item .ccode {
+            font-size: .68rem;
+            color: #64748b;
+            direction: ltr;
+            display: inline-block;
+            margin-left: 8px;
+        }
+
+        /* أعمدة مخفية بجدول البنود (عدد القطع بالباكيت، سعر التكلفة،
+           سعر البيع بعملة الفرع) — موجودة بالـDOM لسا (آلية الحفظ ما
+           تغيّرت)، بس مخفية بصرياً بقرار صريح. */
+        .hidden-col {
+            display: none;
         }
 
         /* color dot */
@@ -1027,17 +1086,27 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                 <div class="col-md-4">
                                     <label class="field-lbl">العميل</label>
                                     <div class="d-flex gap-1">
-                                        <select id="iCustomer" class="form-select form-select-sm" style="flex:1"
-                                            onchange="onCustomerChange()">
-                                            <option value="">— بدون عميل —</option>
-                                            <?php foreach ($customers as $sp): ?>
-                                                <option value="<?= $sp['id'] ?>"
-                                                    data-phone="<?= htmlspecialchars($sp['phone'] ?? '') ?>"
-                                                    data-discount="<?= (float) ($sp['discount_percentage'] ?? 0) ?>">
-                                                    <?= htmlspecialchars($sp['name']) ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
+                                        <div class="position-relative" style="flex:1">
+                                            <input type="text" id="iCustomerSearch" class="form-control form-control-sm"
+                                                placeholder="ابحث بالاسم أو رقم الحساب..." autocomplete="off"
+                                                oninput="filterCustomerDropdown()" onfocus="filterCustomerDropdown()"
+                                                onblur="setTimeout(()=>document.getElementById('customerDropdown').style.display='none',150)">
+                                            <select id="iCustomer" style="display:none" onchange="onCustomerChange()">
+                                                <option value="">— بدون عميل —</option>
+                                                <?php foreach ($customers as $sp): ?>
+                                                    <option value="<?= $sp['id'] ?>"
+                                                        data-phone="<?= htmlspecialchars($sp['phone'] ?? '') ?>"
+                                                        data-discount="<?= (float) ($sp['discount_percentage'] ?? 0) ?>"
+                                                        data-name="<?= htmlspecialchars($sp['name']) ?>"
+                                                        data-rec="<?= htmlspecialchars($sp['rec_code'] ?? '') ?>"
+                                                        data-adv="<?= htmlspecialchars($sp['adv_code'] ?? '') ?>">
+                                                        <?= htmlspecialchars($sp['name']) ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <div id="customerDropdown" class="customer-dd" style="display:none">
+                                            </div>
+                                        </div>
                                         <button class="btn btn-sm"
                                             style="border-radius:7px;border:1px solid #1e3a8a;color:#1e3a8a;padding:4px 8px"
                                             onclick="openCustomerModal()" title="عميل جديد"><i
@@ -1152,20 +1221,22 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                                             <th>بيان المنتج</th>
                                             <th>الموديل</th>
                                             <th>القياس</th>
-                                            <th class="text-center">عدد القطع بالباكيت</th>
+                                            <th class="text-center hidden-col">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
+                                            <th class="text-center" style="color:#7c3aed">المتوفر بالمخزون</th>
                                             <th class="text-center">عدد الكروبات</th>
-                                            <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر التكلفة</th>
-                                            <th class="text-center">سعر البيع</th>
+                                            <th class="text-center hidden-col">سعر التكلفة</th>
+                                            <th class="text-center hidden-col">سعر البيع</th>
+                                            <th class="text-center" style="color:#0891b2">سعر البيع بعملة الفاتورة</th>
                                             <th class="text-center">نسبة الفارق</th>
+                                            <th class="text-center">عدد المنتجات</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="linesBody">
                                         <tr id="emptyRow">
-                                            <td colspan="13" class="text-center text-muted py-4"
+                                            <td colspan="15" class="text-center text-muted py-4"
                                                 style="font-size:.8rem">
                                                 <i class="bi bi-barcode d-block mb-2"
                                                     style="font-size:1.5rem;opacity:.3"></i>
@@ -1437,9 +1508,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
     <script>
         // ── Sidebar ──
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() {sb.classList.add('open'); ov.classList.add('show');}
-        function sbClose() {sb.classList.remove('open'); ov.classList.remove('show');}
-        window.addEventListener('resize', () => {if (window.innerWidth > 991) sbClose();});
+        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
         function toggleGroup(g) {
             const o = g.classList.contains('open');
             document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
@@ -1470,14 +1541,18 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             codeCur = sel.value;
             document.getElementById('iExRate').value = exRate;
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-            // ⚠ جدول بنود الفاتورة صار بعملة الفرع الثابتة فقط (قرار
-            // صريح) — تغيير عملة الفاتورة ما عاد يأثر على أسعار البنود
-            // إطلاقاً، فحذفنا إعادة الحساب هون.
+            // ⚠ قرار جديد يعكس السابق: net_price نفسه (عملة الفرع) ما
+            // بيتغيّر بتغيير العملة/السعر — بس عمود "سعر البيع بعملة
+            // الفاتورة" الجديد لازم يُعاد حسابه فوراً لكل الأسطر (نفس
+            // القيمة الأساسية × سعر الصرف الجديد)، وإلا يضل عارض رقم
+            // قديم بعملة/سعر قدامى.
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
         function onExRateChange() {
             exRate = Math.max(0.0001, parseFloat(document.getElementById('iExRate').value) || 1);
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
         // تهيئة
@@ -1488,7 +1563,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         function post(data) {
             const fd = new FormData();
             Object.entries(data).forEach(([k, v]) => fd.append(k, v ?? ''));
-            return fetch(location.href, {method: 'POST', body: fd}).then(r => r.json());
+            return fetch(location.href, { method: 'POST', body: fd }).then(r => r.json());
         }
         function toast(msg, type = 'success') {
             const t = document.createElement('div');
@@ -1501,20 +1576,21 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         // ── بحث ──
         let _searchTimer = null;
         document.getElementById('scanInput').addEventListener('keydown', e => {
-            if (e.key === 'Enter') {e.preventDefault(); doSearch();}
+            if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
         });
         document.getElementById('scanInput').addEventListener('input', e => {
             clearTimeout(_searchTimer);
             const v = e.target.value.trim();
-            if (v.length >= 3) {_searchTimer = setTimeout(doSearch, 400);}
+            if (v.length >= 3) { _searchTimer = setTimeout(doSearch, 400); }
             else document.getElementById('searchResults').style.display = 'none';
         });
 
         function doSearch() {
             const q = document.getElementById('scanInput').value.trim();
             if (!q) return;
-            post({_action: 'search_product', q}).then(d => {
-                if (!d.ok) {toast(d.msg, 'danger'); return;}
+            const warehouse_id = document.getElementById('iWarehouse').value;
+            post({ _action: 'search_product', q, warehouse_id }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
                 if (d.type === 'barcode') {
                     // ⚠ قرار جديد (يلغي مسار المودال السابق لهالحالة تحديداً):
                     // مسح الباركود = إضافة فورية تلقائية، متل نظام السوبرماركت
@@ -1524,9 +1600,9 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     // (لو مشترك بين عدة مقاسات بنفس الكروب) تندمج بنفس السطر
                     // عبر mergeVariant() — بلا أي تغيير بالكمية المكتوبة.
                     const group = d.group && d.group.length ? d.group : [d.data];
-                    const gk = makeGrpKey({...group[0], selling_price: group[0].selling_price});
+                    const gk = makeGrpKey({ ...group[0], selling_price: group[0].selling_price });
                     const wasExisting = lines.some(l => l.grp_key === gk);
-                    group.forEach((v, i) => {if (i === 0) addLine(v); else mergeVariant(v);});
+                    group.forEach((v, i) => { if (i === 0) addLine(v); else mergeVariant(v); });
                     calcTotals();
                     document.getElementById('scanInput').value = '';
                     document.getElementById('scanInput').focus();
@@ -1567,10 +1643,10 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             const grouped = {};
             items.forEach(it => {
                 const pid = it.product_id;
-                if (!grouped[pid]) grouped[pid] = {name: it.product_name, model: it.model_number, grps: {}};
+                if (!grouped[pid]) grouped[pid] = { name: it.product_name, model: it.model_number, grps: {} };
                 // مفتاح الكروب: cost_price + age_type معاً
                 const gk = (it.selling_price || '0') + '_' + (it.age_type || 'سنة');
-                if (!grouped[pid].grps[gk]) grouped[pid].grps[gk] = {price: it.selling_price, age_type: it.age_type || 'سنة', variants: []};
+                if (!grouped[pid].grps[gk]) grouped[pid].grps[gk] = { price: it.selling_price, age_type: it.age_type || 'سنة', variants: [] };
                 grouped[pid].grps[gk].variants.push(it);
             });
 
@@ -1742,7 +1818,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
         function confirmSelection() {
             const checked = document.querySelectorAll('.sel-chk:checked');
-            if (!checked.length) {toast('اختر كروب واحد على الأقل', 'danger'); return;}
+            if (!checked.length) { toast('اختر كروب واحد على الأقل', 'danger'); return; }
             let added = 0;
             checked.forEach(chk => {
                 const key = chk.dataset.key;
@@ -1762,19 +1838,19 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     // يجي حصراً من الكتالوج (v.cost_price)، ما يتعدَّل هون
                     // إطلاقاً.
                     const sellPriceDirect = exRate > 0 ? pr / exRate : pr;
-                    const lineItem = {...v, sell_price_direct: sellPriceDirect, selling_price: rowDef.selling_price, cost_price: rowDef.cost_price};
+                    const lineItem = { ...v, sell_price_direct: sellPriceDirect, selling_price: rowDef.selling_price, cost_price: rowDef.cost_price };
                     if (vi === 0) addLine(lineItem);
                     else mergeVariant(lineItem);
                     added++;
                 });
                 // تعديل الكمية بعد الدمج
                 if (qty > 1) {
-                    const gk = makeGrpKey({...rowDef.variants[0], selling_price: rowDef.selling_price});
+                    const gk = makeGrpKey({ ...rowDef.variants[0], selling_price: rowDef.selling_price });
                     const line = lines.find(l => l.grp_key === gk);
                     if (line) {
                         line.qty = qty;
                         const row = document.getElementById(line.row_id);
-                        if (row) {row.querySelector('.q-input').value = qty; recalcLine(line, row);}
+                        if (row) { row.querySelector('.q-input').value = qty; recalcLine(line, row); }
                     }
                 }
             });
@@ -1794,6 +1870,17 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             return `${item.product_id}_${item.group_key}_${item.color_id || 0}`;
         }
 
+        // ⚠ عدد الباكيتات الكاملة المتوفرة لهالكروب بهالّون تحديداً —
+        // رقم واحد بس (مو قائمة لكل مقاس). الباكيت الكامل محتاج قطعة
+        // وحدة من كل مقاس بالكروب، فالمقاس الأقل مخزوناً هو الحاجز يلي
+        // بيحدد كم باكيت فيك تجهّز فعلياً — نفس منطق "عدد الباكيتات"
+        // بمودال تفاصيل المنتج بالضبط.
+        function formatStockList(line) {
+            if (!line.variants.length) return '—';
+            const qtys = line.variants.map(v => parseFloat(v.stock_qty) || 0);
+            return Math.min(...qtys).toString();
+        }
+
         function addLine(item) {
             const gk = makeGrpKey(item);
 
@@ -1802,7 +1889,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             if (exist) {
                 exist.qty++;
                 const row = document.getElementById('lgrp_' + gk.replace(/[^a-z0-9]/gi, '_'));
-                if (row) {row.querySelector('.q-input').value = exist.qty; recalcLine(exist, row);}
+                if (row) { row.querySelector('.q-input').value = exist.qty; recalcLine(exist, row); }
                 calcTotals();
                 toast('تمت زيادة الكمية');
                 return;
@@ -1878,21 +1965,25 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             ${grpBadge}
             <div class="sizes-lbl mt-1" style="color:#334155">${line.sizes.join(' · ')} ${line.age_type}</div>
         </td>
-        <td class="text-center">
+        <td class="text-center hidden-col">
             <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
                 title="من إعدادات المنتج — للقراءة فقط">
         </td>
         <td><span>${line.color_name || '—'}</span></td>
+        <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(line)}</td>
         <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
-        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-        <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+        <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
             value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
             title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
-        <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+        <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
             value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
             onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+            value="${line.net_price > 0 ? (line.net_price * exRate).toFixed(2) : ''}" dir="ltr" placeholder="0.00"
+            onchange="updateLine('${gk}','net_price_doc',this.value)"></td>
         <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
         <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
@@ -1915,6 +2006,8 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 const row = document.getElementById(line.row_id);
                 if (row) {
                     row.querySelector('.sizes-lbl').textContent = line.sizes.join(' · ') + ' ' + line.age_type;
+                    const stockLbl = row.querySelector('.stock-lbl');
+                    if (stockLbl) stockLbl.textContent = formatStockList(line);
                     recalcLine(line, row);
                 }
             }
@@ -1931,6 +2024,15 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             // أقل من التكلفة — بيع بخسارة قرار تجاري صريح، مو خطأ).
             if (field === 'net_price') {
                 line.net_price = Math.max(0, parseFloat(val) || 0);
+            }
+            // ⚠ الحقل الفعلي المعروض/المُعدَّل بالواجهة صار "سعر البيع
+            // بعملة الفاتورة" (npd-input) — التعديل هون بيتحوّل تلقائياً
+            // لعملة الفرع (net_price، المخزَّن فعلياً وتُبنى عليه كل
+            // الحسابات) بالقسمة على سعر الصرف الحالي. آلية الحفظ
+            // بالباك-إند ما تغيّرت إطلاقاً — لسا net_price بعملة الفرع.
+            if (field === 'net_price_doc') {
+                const docVal = Math.max(0, parseFloat(val) || 0);
+                line.net_price = exRate > 0 ? docVal / exRate : docVal;
             }
             const row = document.getElementById(line.row_id);
             recalcLine(line, row);
@@ -1960,6 +2062,11 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             if (row) {
                 row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
                 row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
+                // ⚠ سعر البيع بعملة الفاتورة = سعر البيع (عملة الفرع) ×
+                // سعر الصرف الحالي — يُعاد حسابه بكل recalcLine، فيضل
+                // متزامن تلقائياً مع أي تغيير بسعر الصرف أو العملة.
+                const npdInput = row.querySelector('.npd-input');
+                if (npdInput) npdInput.value = line.net_price > 0 ? (line.net_price * exRate).toFixed(4) : '';
                 const vpLbl = row.querySelector('.vp-lbl');
                 if (vpLbl) {
                     const pct = line.variance_pct || 0;
@@ -1996,26 +2103,20 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             const varianceTotal = lines.reduce((s, l) => s + (l.variance_value || 0) * (l.piece_count || 0), 0);
             // ٤) المبلغ بعد الفوارق = ٢ − ٣ (يساوي مجموع l.total أصلاً)
             const afterVariance = netNoVariance - varianceTotal;
-
             // ٥) نسبة الخصم العام للعميل
             const discPct = parseFloat(document.getElementById('discPct').value) || 0;
-
             // ٦-٧) خصم تعجيل الدفع — معلوماتي بس، محسوب من حقل ٤ مباشرة
             // (بلا تغيير — نفس القديم بالضبط)
             const hasSettle = document.getElementById('iHasSettleDisc').checked;
             const settlePct = hasSettle ? (parseFloat(document.getElementById('iSettleDiscPct').value) || 0) : 0;
             const settleAmt = afterVariance * settlePct / 100;
-
             // ٨) المبلغ الصافي بعد الخصوم والفوارق = ٤ − (٤×نسبة الخصم العام)
             const afterDisc = afterVariance * (1 - discPct / 100);
-
             // ٩-١٠) الضريبة العامة — على حقل ٨
             const taxPct = parseFloat(document.getElementById('taxPct').value) || 0;
             const taxAmt = afterDisc * taxPct / 100;
-
             // ١١) المبلغ الإجمالي = ٨ + ١٠ (الضريبة تُضاف، تأكيد صريح)
             const grandTotal = afterDisc + taxAmt;
-
             document.getElementById('sumLines').textContent = totalLines.toFixed(0);
             document.getElementById('sumGross').textContent = netNoVariance.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumLineDisc').textContent = (varianceTotal >= 0 ? '-' : '+') + Math.abs(varianceTotal).toFixed(2) + ' ' + BASE_CUR_SYM;
@@ -2025,21 +2126,18 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             document.getElementById('sumTax').textContent = '+' + taxAmt.toFixed(2) + ' ' + BASE_CUR_SYM;
             document.getElementById('sumTotal').textContent = grandTotal.toFixed(2) + ' ' + BASE_CUR_SYM;
         }
-
         // ── حفظ الفاتورة ──
         function saveInvoice(saveAs) {
-            if (!document.getElementById('iCustomer').value) {toast('يجب اختيار العميل', 'danger'); document.getElementById('iCustomer').focus(); return;}
-            if (!document.getElementById('iWarehouse').value) {toast('يجب اختيار المستودع', 'danger'); return;}
-            const valid = lines.filter(l => l.qty > 0 && l.default_price > 0);
-            if (!valid.length) {toast('يجب إضافة منتج واحد على الأقل بسعر وكمية', 'danger'); return;}
-
+            if (!document.getElementById('iCustomer').value) { toast('يجب اختيار العميل', 'danger'); document.getElementById('iCustomer').focus(); return; }
+            if (!document.getElementById('iWarehouse').value) { toast('يجب اختيار المستودع', 'danger'); return; }
+            const valid = lines.filter(l => l.qty > 0 && l.net_price > 0);
+            if (!valid.length) { toast('يجب إضافة منتج واحد على الأقل بسعر وكمية', 'danger'); return; }
             const btn = saveAs === 'confirmed'
                 ? document.querySelector('[onclick="saveInvoice(\'confirmed\')"]')
                 : document.querySelector('[onclick="saveInvoice(\'draft\')"]');
             const origHTML = btn.innerHTML;
             btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>جارٍ الحفظ...';
             btn.disabled = true;
-
             post({
                 _action: 'save_invoice',
                 customer_id: document.getElementById('iCustomer').value,
@@ -2055,7 +2153,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 discount_pct: document.getElementById('discPct').value,
                 tax_pct: document.getElementById('taxPct').value,
                 save_as: saveAs,
-                rows: JSON.stringify(valid.map(l => ({...l, variant_ids: l.variants.map(v => v.variant_id)}))),
+                rows: JSON.stringify(valid.map(l => ({ ...l, variant_ids: l.variants.map(v => v.variant_id) }))),
             }).then(d => {
                 btn.innerHTML = origHTML;
                 btn.disabled = false;
@@ -2077,7 +2175,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             } else {
                 try {
                     _camStream = await navigator.mediaDevices.getUserMedia({
-                        video: {facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720}}
+                        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
                     });
                     const video = document.getElementById('camVideo');
                     video.srcObject = _camStream;
@@ -2091,8 +2189,8 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
         }
 
         function stopCamera() {
-            if (_camStream) {_camStream.getTracks().forEach(t => t.stop()); _camStream = null;}
-            if (_camInterval) {cancelAnimationFrame(_camInterval); _camInterval = null;}
+            if (_camStream) { _camStream.getTracks().forEach(t => t.stop()); _camStream = null; }
+            if (_camInterval) { cancelAnimationFrame(_camInterval); _camInterval = null; }
         }
 
         function startBarcodeDetection() {
@@ -2118,7 +2216,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     detector.detect(canvas).then(codes => {
                         if (codes.length > 0) onBarcodeFound(codes[0].rawValue);
                         else _camInterval = requestAnimationFrame(processFrame);
-                    }).catch(() => {_camInterval = requestAnimationFrame(processFrame);});
+                    }).catch(() => { _camInterval = requestAnimationFrame(processFrame); });
                     return;
                 }
 
@@ -2129,7 +2227,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     const bmp = new window.ZXing.BinaryBitmap(new window.ZXing.HybridBinarizer(lum));
                     try {
                         const result = window._zxingReader.decode(bmp);
-                        if (result) {onBarcodeFound(result.getText()); return;}
+                        if (result) { onBarcodeFound(result.getText()); return; }
                     } catch (e) { }
                 }
                 _camInterval = requestAnimationFrame(processFrame);
@@ -2184,11 +2282,47 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 document.getElementById('spPhoneTxt').textContent = phone;
                 wrap.style.display = 'block';
             } else wrap.style.display = 'none';
+            // ⚠ مزامنة حقل البحث النصي بعد أي تغيير برمجي لقيمة القائمة
+            // المخفية (مثلاً استعادة sessionStorage) — بلا هالمزامنة،
+            // الحقل الظاهر يضل فاضي حتى لو في عميل محدَّد فعلياً.
+            document.getElementById('iCustomerSearch').value = sel.value ? (opt.dataset.name || opt.textContent.trim()) : '';
             // ⚠ نسبة الخصم العام تتعبّى تلقائياً من إعدادات العميل
             // (discount_percentage) — تضل قابلة للتعديل يدوياً بهالفاتورة
             // تحديداً بدون ما تأثر على إعداد العميل نفسه.
             document.getElementById('discPct').value = sel.value ? (opt.dataset.discount || 0) : 0;
             calcTotals();
+        }
+
+        // ── بحث العميل بالاسم أو رقم حساب الذمة/الدفعة المقدمة ──
+        function filterCustomerDropdown() {
+            const q = document.getElementById('iCustomerSearch').value.trim().toLowerCase();
+            const dd = document.getElementById('customerDropdown');
+            const sel = document.getElementById('iCustomer');
+            const opts = Array.from(sel.options).filter(o => o.value);
+            const matches = q ? opts.filter(o => {
+                const name = (o.dataset.name || o.textContent).toLowerCase();
+                const rec = (o.dataset.rec || '').toLowerCase();
+                const adv = (o.dataset.adv || '').toLowerCase();
+                return name.includes(q) || rec.includes(q) || adv.includes(q);
+            }) : opts;
+            if (!matches.length) {
+                dd.innerHTML = '<div class="customer-dd-item text-muted">لا نتائج</div>';
+                dd.style.display = '';
+                return;
+            }
+            dd.innerHTML = matches.slice(0, 50).map(o => `
+                <div class="customer-dd-item" onmousedown="selectCustomerFromDropdown('${o.value}')">
+                    <div class="cname">${o.dataset.name || o.textContent}</div>
+                    ${o.dataset.rec ? `<span class="ccode">ذمة: ${o.dataset.rec}</span>` : ''}
+                    ${o.dataset.adv ? `<span class="ccode">دفعة مقدمة: ${o.dataset.adv}</span>` : ''}
+                </div>`).join('');
+            dd.style.display = '';
+        }
+        function selectCustomerFromDropdown(id) {
+            const sel = document.getElementById('iCustomer');
+            sel.value = id;
+            document.getElementById('customerDropdown').style.display = 'none';
+            onCustomerChange();
         }
 
         function openCustomerModal() {
@@ -2201,7 +2335,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 
         function saveCustomer() {
             const name = document.getElementById('spName').value.trim();
-            if (!name) {toast('اسم العميل مطلوب', 'danger'); return;}
+            if (!name) { toast('اسم العميل مطلوب', 'danger'); return; }
             post({
                 _action: 'add_customer', name,
                 contact_person: document.getElementById('spContact').value,
@@ -2214,11 +2348,14 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                 discount_percentage: document.getElementById('spDiscount').value,
                 notes: document.getElementById('spNotes').value,
             }).then(d => {
-                if (!d.ok) {toast(d.msg, 'danger'); return;}
+                if (!d.ok) { toast(d.msg, 'danger'); return; }
                 const sel = document.getElementById('iCustomer');
                 const opt = document.createElement('option');
                 opt.value = d.id; opt.dataset.phone = d.phone || '';
                 opt.dataset.discount = d.discount_percentage || 0;
+                opt.dataset.name = d.name;
+                opt.dataset.rec = d.rec_code || '';
+                opt.dataset.adv = d.adv_code || '';
                 opt.textContent = d.name; opt.selected = true;
                 sel.appendChild(opt);
                 onCustomerChange();
@@ -2256,7 +2393,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
             sessionStorage.removeItem('inv_draft');
             try {
                 const s = JSON.parse(saved);
-                if (s.customer) document.getElementById('iCustomer').value = s.customer;
+                if (s.customer) { document.getElementById('iCustomer').value = s.customer; onCustomerChange(); }
                 if (s.warehouse) document.getElementById('iWarehouse').value = s.warehouse;
                 if (s.currency) document.getElementById('iCurrency').value = s.currency;
                 if (s.exRate) document.getElementById('iExRate').value = s.exRate;
@@ -2286,21 +2423,25 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     <td class="text-muted" dir="ltr">${l.model_number}</td>
                     <td><span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.68rem;padding:2px 8px;font-weight:600">كروب ${grpIdx + 1}</span>
                         <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
-                    <td class="text-center">
+                    <td class="text-center hidden-col">
                         <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
                             title="من إعدادات المنتج — للقراءة فقط">
                     </td>
                     <td><span>${l.color_name || '—'}</span></td>
+                    <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(l)}</td>
                     <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
                         onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
-                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-                    <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+                    <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
                         value="${l.default_price || ''}" dir="ltr" readonly
                         title="من بيانات المنتج (سعر التكلفة) — للقراءة فقط" placeholder="0.00"></td>
-                    <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
+                    <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
                         value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
                         onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+                    <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+                        value="${l.net_price > 0 ? (l.net_price * exRate).toFixed(4) : ''}" dir="ltr" placeholder="0.00"
+                        onchange="updateLine('${l.grp_key}','net_price_doc',this.value)"></td>
                     <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+                    <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
                     <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
                     <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
                         tbody.appendChild(tr);
@@ -2310,7 +2451,7 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
                     updateLinesCount();
                     toast('تم استعادة بيانات الفاتورة بعد التحديث ✅');
                 }
-            } catch (e) {console.error(e);}
+            } catch (e) { console.error(e); }
         })();
 
         // إغلاق نتائج البحث بالنقر خارجها

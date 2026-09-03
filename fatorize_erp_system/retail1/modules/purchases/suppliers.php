@@ -8,8 +8,19 @@ require_once __DIR__ . '/../../../config/database.php';
 require_once __DIR__ . '/../../../config/auth.php';
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('purchases.suppliers', 'view');
-$currentModule = 'purchases.suppliers';
+
+// ⚠ نفس نمط warehouse.php/movements.php بالضبط — صفحة مشتركة بين
+// موردي المنتجات وموردي المستهلكات (الجدول product_suppliers_{TS}
+// عام أصلاً، فيه عمود supplier_type). لازم نحدد السياق قبل فحص
+// الصلاحية، مش بعده.
+$tab = $_GET['tab'] ?? 'products';
+if (!in_array($tab, ['products', 'consumables'], true)) {
+    $tab = 'products';
+}
+$suppliersPermKey = $tab === 'consumables' ? 'expenses.consumable_suppliers' : 'purchases.suppliers';
+
+requirePermission($suppliersPermKey, 'view');
+$currentModule = $suppliersPermKey;
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 $TS = $_SESSION['table_suffix'];
 $TSP = "product_suppliers_{$TS}";
@@ -42,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         $act = $_POST['_action'];
 
         if ($act === 'save') {
-            requirePermission('purchases.suppliers', 'edit');
+            requirePermission($suppliersPermKey, 'edit');
             $id = (int) ($_POST['id'] ?? 0);
             $name = trim($_POST['name'] ?? '');
             $contact = trim($_POST['contact_person'] ?? '');
@@ -166,10 +177,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 pay.base_balance AS pay_base_balance, payCur.code AS pay_cur_code, payCur.symbol AS pay_cur_sym,
                 pre.code AS pre_code, pre.name AS pre_name, pre.balance AS pre_balance,
                 pre.base_balance AS pre_base_balance, preCur.code AS pre_cur_code, preCur.symbol AS pre_cur_sym,
-                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS purchase_count,
-                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') AS purchase_confirmed_count,
-                (SELECT COALESCE(SUM(pu.final_amount_base_currency),0) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') AS purchase_total_base,
-                (SELECT MAX(pu.purchase_date) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS last_purchase_date
+                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) +
+                (SELECT COUNT(*) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id) AS purchase_count,
+                (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') +
+                (SELECT COUNT(*) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id AND cp.status = 'confirmed') AS purchase_confirmed_count,
+                (SELECT COALESCE(SUM(pu.final_amount_base_currency),0) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') +
+                (SELECT COALESCE(SUM(cp.total_base),0) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id AND cp.status = 'confirmed') AS purchase_total_base,
+                GREATEST(
+                    COALESCE((SELECT MAX(pu.purchase_date) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id), '0000-00-00'),
+                    COALESCE((SELECT MAX(cp.invoice_date) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id), '0000-00-00')
+                ) AS last_purchase_date
                 FROM `{$TSP}` s
                 LEFT JOIN `{$TAC}` pay ON pay.id=s.account_id
                 LEFT JOIN `currencies` payCur ON payCur.id=pay.currency_id
@@ -192,7 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             echo json_encode(['ok' => true, 'status' => $new]);
             exit;
         } elseif ($act === 'delete') {
-            requirePermission('purchases.suppliers', 'delete');
+            requirePermission($suppliersPermKey, 'delete');
             $id = (int) $_POST['id'];
 
             $used = $pdo->prepare("SELECT COUNT(*) FROM `purchases_{$TS}` WHERE supplier_id=?");
@@ -230,13 +247,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ──
+// ⚠ فلترة حسب النوع المطابق للتبويب الحالي — نفس جدول الموردين
+// العام (product_suppliers_{TS}) بالنوعين، بعمود supplier_type
+$typeFilter = $tab === 'consumables' ? "('consumable','both')" : "('product','both')";
+
 $suppliers = $pdo->query("SELECT s.*,
     pay.code AS pay_code, pay.name AS pay_name, pay.balance AS pay_balance,
     pre.code AS pre_code, pre.name AS pre_name, pre.balance AS pre_balance,
-    (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) AS purchase_count
+    (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) +
+    (SELECT COUNT(*) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id) AS purchase_count
     FROM `{$TSP}` s
     LEFT JOIN `{$TAC}` pay ON pay.id=s.account_id
     LEFT JOIN `{$TAC}` pre ON pre.id=s.prepaid_account_id
+    WHERE s.supplier_type IN {$typeFilter}
     ORDER BY s.name")->fetchAll();
 
 // ⚠ can_delete: حذف حقيقي مسموح فقط لو صفر فواتير شراء + صفر رصيد
@@ -275,7 +298,7 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>الموردون — <?= htmlspecialchars($branchName) ?></title>
+    <title><?= $tab === 'consumables' ? 'موردو المستهلكات' : 'الموردون' ?> — <?= htmlspecialchars($branchName) ?></title>
     <link rel="icon" href="<?= BASE_PATH ?>/assets/images/logo.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -401,42 +424,72 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
     ?>
     <header class="topbar">
         <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
-        <span class="tb-title"><i class="bi bi-people me-1 text-primary"></i>إدارة الموردين</span>
+        <span class="tb-title"><i class="bi bi-people me-1 text-primary"></i><?= $tab === 'consumables' ? 'إدارة موردي المستهلكات' : 'إدارة الموردين' ?></span>
         <span class="tb-branch"><?= htmlspecialchars($branchName) ?></span>
         <?= renderBreadcrumb() ?>
     </header>
     <main class="main-content">
         <div class="content-body">
 
-            <!-- تبويبات -->
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="index.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt me-1"></i>فواتير المشتريات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="suppliers.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-people me-1"></i>إدارة الموردين
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="returns.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المشتريات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="orders.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-file-earmark-text me-1"></i>أوامر الشراء / طلبات عروض الأسعار
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-bar-chart me-1"></i>التقارير
-                    </a>
-                </li>
-            </ul>
+            <?php if ($tab === 'consumables'): ?>
+                <!-- الشريط الموحّد لقسم المستهلكات والمصاريف — يظهر بس بسياق المستهلكات -->
+                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumables.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-box-seam me-1"></i>المواد
+                            الاستهلاكية</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_purchases.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-cart-plus me-1"></i>فواتير
+                            الشراء</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_issues.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../inventory/warehouse.php?type=consumables"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>مستودعات
+                            المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../inventory/movements.php?tab=consumables"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-left-right me-1"></i>حركة المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_transfers.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-signpost-split me-1"></i>مناقلة بين المستودعات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/expenses.php"
+                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-wallet2 me-1"></i>إدارة
+                            المصاريف</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
+                            style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px"><i
+                                class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
+                </ul>
+            <?php else: ?>
+                <!-- تبويبات قسم المشتريات (منتجات) -->
+                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                    <li class="nav-item">
+                        <a class="nav-link fw-600" href="index.php" style="border:none;color:#64748b;font-size:.83rem">
+                            <i class="bi bi-receipt me-1"></i>فواتير المشتريات
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-600 active" href="suppliers.php?tab=products"
+                            style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
+                            <i class="bi bi-people me-1"></i>إدارة الموردين
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-600" href="returns.php" style="border:none;color:#64748b;font-size:.83rem">
+                            <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المشتريات
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-600" href="orders.php" style="border:none;color:#64748b;font-size:.83rem">
+                            <i class="bi bi-file-earmark-text me-1"></i>أوامر الشراء / طلبات عروض الأسعار
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
+                            <i class="bi bi-bar-chart me-1"></i>التقارير
+                        </a>
+                    </li>
+                </ul>
+            <?php endif; ?>
 
             <!-- إحصائيات -->
             <div class="row g-3 mb-4">
@@ -880,7 +933,7 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
             ['mId', 'mName', 'mContact', 'mPhone', 'mEmail', 'mAddress', 'mTax', 'mNotes']
                 .forEach(id => document.getElementById(id).value = '');
             document.getElementById('mType').value = 'wholesaler';
-            document.getElementById('mSupType').value = 'product';
+            document.getElementById('mSupType').value = <?= $tab === 'consumables' ? "'consumable'" : "'product'" ?>;
             document.getElementById('mCredit').value = '0';
             document.getElementById('mDiscount').value = '0';
             document.getElementById('mStatus').value = 'active';
@@ -1045,6 +1098,14 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
         }
 
         makeSortable(document.getElementById('suppliersTbl'));
+
+        // ⚠ فتح تلقائي لمودال "مورد جديد" لو الصفحة انفتحت برابط فيه
+        // &new=1 — يخدم زر "مورد جديد" بصفحة فاتورة الشراء (منتجات أو
+        // مستهلكات)، يلي بيفتح هالصفحة بتبويب جديد ويودّي مباشرة
+        // لمودال الإضافة، بدل ما يفتح قائمة الموردين فاضية بس
+        if (new URLSearchParams(location.search).get('new') === '1') {
+            openAdd();
+        }
     </script>
 </body>
 

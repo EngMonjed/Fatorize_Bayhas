@@ -30,6 +30,8 @@ $SETTINGS_MAP = [
     'settlement_discount_expense' => ['label' => 'خصم تعجيل استلام من العملاء المبيعات', 'group' => 'المبيعات', 'icon' => 'bi-lightning-charge', 'color' => '#dc2626', 'type' => 'expense'],
     // المشتريات
     'supplier_payable' => ['label' => 'ذمم الموردين (دائنون)', 'group' => 'المشتريات', 'icon' => 'bi-truck', 'color' => '#d97706', 'type' => 'liability'],
+    'supplier_forgiveness_income' => ['label' => 'مسامحة ديون الموردين', 'group' => 'المسامحة', 'icon' => 'bi-heart-fill', 'color' => '#16a34a', 'type' => 'revenue'],
+    'customer_forgiveness_expense' => ['label' => 'مسامحة ديون العملاء', 'group' => 'المسامحة', 'icon' => 'bi-heart', 'color' => '#dc2626', 'type' => 'expense'],
     // المستهلكات
     'consumable_expense' => ['label' => 'مصاريف المستهلكات', 'group' => 'المستهلكات', 'icon' => 'bi-box-seam', 'color' => '#0891b2', 'type' => 'expense'],
     'consumable_inventory' => ['label' => 'مخزون المستهلكات', 'group' => 'المستهلكات', 'icon' => 'bi-archive', 'color' => '#0891b2', 'type' => 'asset'],
@@ -50,7 +52,14 @@ $SETTINGS_MAP = [
 $SETTINGS_MAP['shipping_payable'] = ['label' => 'ذمم شركات الشحن (حساب أب)', 'group' => 'الشحن والنقل', 'icon' => 'bi-truck', 'color' => '#d97706', 'type' => 'liability'];
 $SETTINGS_MAP['shipping_advance'] = ['label' => 'الدفعات المقدمة لمزودي الخدمة', 'group' => 'الشحن والنقل', 'icon' => 'bi-cash-coin', 'color' => '#0891b2', 'type' => 'asset'];
 $SETTINGS_MAP['shipping_expense'] = ['label' => 'مصاريف الشحن والنقل', 'group' => 'الشحن والنقل', 'icon' => 'bi-box-arrow-up-right', 'color' => '#dc2626', 'type' => 'expense'];
+// النقليات
+$SETTINGS_MAP['transport_payable'] = ['label' => 'ذمم شركات النقل (حساب أب)', 'group' => 'الشحن والنقل', 'icon' => 'bi-truck-front', 'color' => '#d97706', 'type' => 'liability'];
+$SETTINGS_MAP['transport_advance'] = ['label' => 'الدفعات المقدمة لشركات النقل', 'group' => 'الشحن والنقل', 'icon' => 'bi-cash-coin', 'color' => '#0891b2', 'type' => 'asset'];
+$SETTINGS_MAP['transport_expense'] = ['label' => 'مصاريف النقل (الأجرة من المعمل)', 'group' => 'الشحن والنقل', 'icon' => 'bi-box-arrow-up-right', 'color' => '#dc2626', 'type' => 'expense'];
 
+// الجمارك — تُدار يدوياً عبر سندات القبض/الدفع، بدون ترحيل تلقائي
+$SETTINGS_MAP['customs_suspense'] = ['label' => 'أمانات الجمارك (قبض من الزبون / دفع للجمارك)', 'group' => 'الشحن والنقل', 'icon' => 'bi-bank2', 'color' => '#64748b', 'type' => 'liability'];
+$SETTINGS_MAP['customs_expense'] = ['label' => 'فروقات/مصاريف الجمارك', 'group' => 'الشحن والنقل', 'icon' => 'bi-receipt-cutoff', 'color' => '#dc2626', 'type' => 'expense'];
 // فروقات سعر الصرف — حسابين منفصلين عمداً (لا netting): الربح إيراد
 // والخسارة مصروف، كل وحدة بحسابها الخاص. تُستخدم بـtreasury.php عند
 // تصريف/تحويل مبلغ بين عملتين مختلفتين وسعر التفاوض الفعلي يختلف عن
@@ -177,6 +186,8 @@ $criticalKeys = [
     'consumable_inventory' => 'صرف المستهلكات (inventory/consumable_issues.php)',
     'salary_payable' => 'إنشاء حساب مستحقات فرعي عند إضافة موظف (hr/employees.php)',
     'employee_advance' => 'إنشاء حساب سلف فرعي عند إضافة موظف (hr/employees.php)',
+    'transport_payable' => 'قيد النقلية عند تحديث حالة التسليم (sales/sales_index.php)',
+    'transport_expense' => 'قيد النقلية عند تحديث حالة التسليم (sales/sales_index.php)',
 ];
 
 // ── جلب الإعدادات الحالية ──
@@ -360,7 +371,8 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
                     </a>
                 </li>
                 <li class="nav-item" data-href="account_settings.php">
-                    <a class="nav-link fw-600 active" href="account_settings.php" style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
+                    <a class="nav-link fw-600 active" href="account_settings.php"
+                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
                         <i class="bi bi-gear me-1"></i>إعدادات الربط
                     </a>
                 </li>
@@ -400,7 +412,8 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
                     </a>
                 </li>
                 <li class="nav-item" data-href="shipping_carriers.php">
-                    <a class="nav-link fw-600" href="shipping_carriers.php" style="border:none;color:#64748b;font-size:.83rem">
+                    <a class="nav-link fw-600" href="shipping_carriers.php"
+                        style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-truck me-1"></i>شركات الشحن
                     </a>
                 </li>
@@ -516,11 +529,11 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() {sb.classList.add('open'); ov.classList.add('show');}
-        function sbClose() {sb.classList.remove('open'); ov.classList.remove('show');}
-        window.addEventListener('resize', () => {if (window.innerWidth > 991) sbClose();});
-        function toggleGroup(g) {const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());}
-        document.querySelectorAll('.sb-group').forEach(g => {if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');});
+        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
+        function toggleGroup(g) { const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString()); }
+        document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
 
         function markChanged() {
             document.getElementById('changeIndicator').innerHTML = '<i class="bi bi-pencil text-warning me-1"></i>يوجد تغييرات غير محفوظة';
@@ -540,7 +553,7 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
             const fd = new FormData();
             fd.append('_action', 'save');
             fd.append('settings', JSON.stringify(settings));
-            fetch(location.href, {method: 'POST', body: fd}).then(r => r.json()).then(d => {
+            fetch(location.href, { method: 'POST', body: fd }).then(r => r.json()).then(d => {
                 document.getElementById('saveTxt').style.opacity = '1';
                 document.getElementById('saveSpin').style.display = 'none';
                 if (d.ok) {
@@ -552,7 +565,7 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
                 }
             });
         }
-    
+
     </script>
 
 </body>

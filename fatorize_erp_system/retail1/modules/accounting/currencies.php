@@ -41,6 +41,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     try {
         $act = $_POST['_action'];
 
+        $TS2 = $_SESSION['table_suffix'];
+        $TAC2 = "account_charts_{$TS2}";
+        $TIAS2 = "invoice_account_settings_{$TS2}";
 
         // ── حفظ عملة ──
         if ($act === 'save_currency') {
@@ -57,9 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (strlen($code) > 3)
                 throw new Exception('كود العملة 3 أحرف كحد أقصى');
 
-            $TS2 = $_SESSION['table_suffix'];
-            $TAC2 = "account_charts_{$TS2}";
-            $TIAS2 = "invoice_account_settings_{$TS2}";
 
             if ($id) {
                 $pdo->prepare("UPDATE currencies SET name=?,symbol=?,exchange_rate=?,status=? WHERE id=?")
@@ -186,13 +186,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $cashCount = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC2}` WHERE parent_id={$cashParent}")->fetchColumn();
             $bankCount = (int) $pdo->query("SELECT COUNT(*) FROM `{$TAC2}` WHERE parent_id={$bankParent}")->fetchColumn();
 
-            echo json_encode(['ok' => true, 'data' => [
-                'code' => $cur['code'], 'name' => $cur['name'],
-                'cash_code' => sprintf('1.1.1.%03d', $cashCount + 1),
-                'cash_name' => "صندوق {$cur['name']}",
-                'bank_code' => sprintf('1.1.2.%03d', $bankCount + 1),
-                'bank_name' => "بنك {$cur['name']}",
-            ]]);
+            echo json_encode([
+                'ok' => true,
+                'data' => [
+                    'code' => $cur['code'],
+                    'name' => $cur['name'],
+                    'cash_code' => sprintf('1.1.1.%03d', $cashCount + 1),
+                    'cash_name' => "صندوق {$cur['name']}",
+                    'bank_code' => sprintf('1.1.2.%03d', $bankCount + 1),
+                    'bank_name' => "بنك {$cur['name']}",
+                ]
+            ]);
         }
 
         // ── الربط الفعلي: إنشاء الحسابين بالأكواد المؤكَّدة (المقترحة أو المعدَّلة) ──
@@ -564,7 +568,8 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                     </a>
                 </li>
                 <li class="nav-item" data-href="account_settings.php">
-                    <a class="nav-link fw-600" href="account_settings.php" style="border:none;color:#64748b;font-size:.83rem">
+                    <a class="nav-link fw-600" href="account_settings.php"
+                        style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-gear me-1"></i>إعدادات الربط
                     </a>
                 </li>
@@ -599,12 +604,14 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                     </a>
                 </li>
                 <li class="nav-item" data-href="currencies.php">
-                    <a class="nav-link fw-600 active" href="currencies.php" style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
+                    <a class="nav-link fw-600 active" href="currencies.php"
+                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
                         <i class="bi bi-currency-exchange me-1"></i>العملات
                     </a>
                 </li>
                 <li class="nav-item" data-href="shipping_carriers.php">
-                    <a class="nav-link fw-600" href="shipping_carriers.php" style="border:none;color:#64748b;font-size:.83rem">
+                    <a class="nav-link fw-600" href="shipping_carriers.php"
+                        style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-truck me-1"></i>شركات الشحن
                     </a>
                 </li>
@@ -615,7 +622,8 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
             <div class="row g-3 mb-4">
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#eff6ff"><i class="bi bi-currency-exchange text-primary"></i></div>
+                        <div class="stat-icon" style="background:#eff6ff"><i
+                                class="bi bi-currency-exchange text-primary"></i></div>
                         <div>
                             <div class="stat-val"><?= count($currencies) ?></div>
                             <div class="stat-lbl">إجمالي العملات</div>
@@ -624,18 +632,22 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-check-circle text-success"></i></div>
+                        <div class="stat-icon" style="background:#f0fdf4"><i
+                                class="bi bi-check-circle text-success"></i></div>
                         <div>
-                            <div class="stat-val"><?= count(array_filter($currencies, fn($c) => $c['status'] === 'active')) ?></div>
+                            <div class="stat-val">
+                                <?= count(array_filter($currencies, fn($c) => $c['status'] === 'active')) ?></div>
                             <div class="stat-lbl">عملات نشطة</div>
                         </div>
                     </div>
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#f8fafc"><i class="bi bi-slash-circle text-secondary"></i></div>
+                        <div class="stat-icon" style="background:#f8fafc"><i
+                                class="bi bi-slash-circle text-secondary"></i></div>
                         <div>
-                            <div class="stat-val"><?= count(array_filter($currencies, fn($c) => $c['status'] !== 'active')) ?></div>
+                            <div class="stat-val">
+                                <?= count(array_filter($currencies, fn($c) => $c['status'] !== 'active')) ?></div>
                             <div class="stat-lbl">عملات معطّلة</div>
                         </div>
                     </div>
@@ -661,13 +673,15 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                             عملة)</span>
                     </span>
                     <div class="d-flex gap-2 ms-auto align-items-center">
-                        <button class="btn btn-sm fw-600" style="border-radius:9px;border:1px solid #1e3a8a;color:#1e3a8a"
-                            onclick="autoUpdateRates()" id="btnAutoUpdate" title="يتم جلب الأسعار من ExchangeRate-API مقابل <?= htmlspecialchars($baseCur['code']) ?>">
+                        <button class="btn btn-sm fw-600"
+                            style="border-radius:9px;border:1px solid #1e3a8a;color:#1e3a8a" onclick="autoUpdateRates()"
+                            id="btnAutoUpdate"
+                            title="يتم جلب الأسعار من ExchangeRate-API مقابل <?= htmlspecialchars($baseCur['code']) ?>">
                             <span id="autoTxt"><i class="bi bi-arrow-repeat me-1"></i>تحديث تلقائي</span>
                             <span id="autoSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
                         </button>
-                        <button class="btn btn-sm fw-600" style="border-radius:9px;background:#1e3a8a;color:#fff;border:none"
-                            onclick="openAdd()">
+                        <button class="btn btn-sm fw-600"
+                            style="border-radius:9px;background:#1e3a8a;color:#fff;border:none" onclick="openAdd()">
                             <i class="bi bi-plus-lg me-1"></i>إضافة عملة
                         </button>
                     </div>
@@ -914,15 +928,19 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                     <input type="hidden" id="linkCurrencyId">
                     <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem;border-radius:10px">
                         <i class="bi bi-info-circle me-1"></i>
-                        هيك رح يتنشئ حساب صندوق وحساب بنك جديدين بشجرة حساباتك — راجع الأكواد المقترحة أو عدّلها قبل التأكيد.
+                        هيك رح يتنشئ حساب صندوق وحساب بنك جديدين بشجرة حساباتك — راجع الأكواد المقترحة أو عدّلها قبل
+                        التأكيد.
                     </div>
                     <div id="linkFormBody">
-                        <div class="text-center py-3"><span class="spinner-border spinner-border-sm text-warning"></span></div>
+                        <div class="text-center py-3"><span
+                                class="spinner-border spinner-border-sm text-warning"></span></div>
                     </div>
                 </div>
                 <div class="modal-footer border-0 px-4 pb-4">
-                    <button class="btn btn-sm btn-light" style="border-radius:8px" data-bs-dismiss="modal">إلغاء</button>
-                    <button class="btn btn-sm fw-600" style="border-radius:8px;background:#d97706;color:#fff;min-width:110px"
+                    <button class="btn btn-sm btn-light" style="border-radius:8px"
+                        data-bs-dismiss="modal">إلغاء</button>
+                    <button class="btn btn-sm fw-600"
+                        style="border-radius:8px;background:#d97706;color:#fff;min-width:110px"
                         onclick="confirmLinkCurrency()" id="btnConfirmLink">
                         <span id="linkTxt"><i class="bi bi-check-circle me-1"></i>تأكيد الربط</span>
                         <span id="linkSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
@@ -1247,7 +1265,7 @@ $baseCur = reset($baseCur) ?: ['code' => 'USD', 'symbol' => '$'];
                 document.getElementById('btnAutoUpdate').disabled = false;
             }
         }
-    
+
     </script>
 
 </body>

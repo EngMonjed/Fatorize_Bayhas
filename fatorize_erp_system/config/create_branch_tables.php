@@ -34,7 +34,8 @@ const BRANCH_TEMPLATE_SUFFIX = 'ret';
  * مستقبلاً، **هون بالضبط المكان الوحيد يلي لازم تحدّثه يدوياً** —
  * كل شي تاني بالملف صار تلقائي.
  */
-function getFactoryOnlyTablesSql(string $s): array {
+function getFactoryOnlyTablesSql(string $s): array
+{
     return [
         "raw_materials_{$s}" => "CREATE TABLE IF NOT EXISTS `raw_materials_{$s}` (
             `id`        INT(11)       NOT NULL AUTO_INCREMENT,
@@ -113,7 +114,8 @@ function getFactoryOnlyTablesSql(string $s): array {
  * حتى يخلص الكل، بغض النظر عن ترتيب المصفوفة. هيك مقاوم لأي خلل
  * بترتيب/مستوى البيانات المصدر.
  */
-function getDefaultChartOfAccountsSeed(): array {
+function getDefaultChartOfAccountsSeed(): array
+{
     return [
         // جذور
         [1, '1', 'الأصول', null, null, 'asset', 'none', 1, 1],
@@ -177,7 +179,8 @@ function getDefaultChartOfAccountsSeed(): array {
  * (parent-first resolution) — بغض النظر عن ترتيب المصفوفة، وبعملة
  * الفرع الوظيفية الحقيقية (مو دايماً currency_id=1).
  */
-function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): void {
+function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): void
+{
     $table = "account_charts_{$s}";
     $rows = getDefaultChartOfAccountsSeed();
     $idMap = []; // old_id (بفرع البيع) => new_id (بالفرع الجديد)
@@ -192,7 +195,8 @@ function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): v
             [$oldId, $code, $name, $desc, $oldParentId, $type, $cashFlow, $isActive, $isLocked] = $row;
             $resolvedParentId = null;
             if ($oldParentId !== null) {
-                if (!isset($idMap[$oldParentId])) continue; // أبوه لسا ما انزرع
+                if (!isset($idMap[$oldParentId]))
+                    continue; // أبوه لسا ما انزرع
                 $resolvedParentId = $idMap[$oldParentId];
             }
             $level = $resolvedParentId === null ? 1 : null; // بيتحسب فعلياً تحت
@@ -201,9 +205,16 @@ function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): v
                 (code, name, description, parent_id, account_type, cash_flow_category, currency_id, level, is_active, is_locked)
                 VALUES (?,?,?,?,?,?,?,?,?,?)")
                 ->execute([
-                    $code, $name, $desc, $resolvedParentId, $type, $cashFlow, $baseCurrencyId,
+                    $code,
+                    $name,
+                    $desc,
+                    $resolvedParentId,
+                    $type,
+                    $cashFlow,
+                    $baseCurrencyId,
                     $resolvedParentId === null ? 1 : 0, // مؤقت، بنصححه تحت
-                    $isActive, $isLocked,
+                    $isActive,
+                    $isLocked,
                 ]);
             $newId = (int) $pdo->lastInsertId();
             if ($newId === 0) { // INSERT IGNORE تجاهل صف موجود مسبقاً — نجيب id الموجود
@@ -215,7 +226,8 @@ function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): v
             unset($remaining[$key]);
             $progressed = true;
         }
-        if (!$progressed) break; // بيانات فيها مرجع دائري أو أب مفقود — نوقف بأمان
+        if (!$progressed)
+            break; // بيانات فيها مرجع دائري أو أب مفقود — نوقف بأمان
     }
 
     // تصحيح عمود level الحقيقي بناءً على عمق كل حساب فعلياً (مو تخمين وقت الإدخال)
@@ -228,7 +240,8 @@ function seedDefaultChartOfAccounts(PDO $pdo, string $s, int $baseCurrencyId): v
 }
 
 /** فئات المستهلكات الافتراضية */
-function seedDefaultConsumableCategories(PDO $pdo, string $s): void {
+function seedDefaultConsumableCategories(PDO $pdo, string $s): void
+{
     $table = "consumable_categories_{$s}";
     $rows = [
         ['مواد غذائية', 'bi-lightning-charge', '#0891b2', '#e0f7fa', 10],
@@ -243,7 +256,8 @@ function seedDefaultConsumableCategories(PDO $pdo, string $s): void {
 }
 
 /** وحدات قياس المستهلكات الافتراضية */
-function seedDefaultConsumableUnits(PDO $pdo, string $s): void {
+function seedDefaultConsumableUnits(PDO $pdo, string $s): void
+{
     $table = "consumable_units_{$s}";
     $units = ['قطعة', 'كيلوغرام', 'غرام', 'لتر', 'مليلتر', 'متر', 'علبة', 'كيس', 'فاتورة', 'صندوق', 'كونة', 'ورقة'];
     foreach ($units as $name) {
@@ -254,16 +268,17 @@ function seedDefaultConsumableUnits(PDO $pdo, string $s): void {
 /**
  * الدالة الرئيسية — تُستدعى من branch_add.php / branches.php
  */
-function createBranchTables(PDO $pdo, string $tableSuffix, string $branchType): array {
-    $errors  = [];
+function createBranchTables(PDO $pdo, string $tableSuffix, string $branchType): array
+{
+    $errors = [];
     $created = [];
-    $s       = strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', $tableSuffix));
+    $s = strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', $tableSuffix));
 
     if (empty($s)) {
-        return ['ok' => false, 'error' => 'table_suffix غير صالح'];
+        return ['ok' => false, 'created' => [], 'errors' => ['table_suffix غير صالح']];
     }
     if ($s === BRANCH_TEMPLATE_SUFFIX) {
-        return ['ok' => false, 'error' => "لاحقة '" . BRANCH_TEMPLATE_SUFFIX . "' محجوزة لفرع القالب المرجعي نفسه"];
+        return ['ok' => false, 'created' => [], 'errors' => ["لاحقة '" . BRANCH_TEMPLATE_SUFFIX . "' محجوزة لفرع القالب المرجعي نفسه — جداوله الأصل، ما بيحتاج زر الإنشاء"]];
     }
 
     $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
@@ -327,10 +342,10 @@ function createBranchTables(PDO $pdo, string $tableSuffix, string $branchType): 
     $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
 
     return [
-        'ok'      => empty($errors),
+        'ok' => empty($errors),
         'created' => $created,
-        'errors'  => $errors,
-        'suffix'  => $s,
-        'type'    => $branchType,
+        'errors' => $errors,
+        'suffix' => $s,
+        'type' => $branchType,
     ];
 }

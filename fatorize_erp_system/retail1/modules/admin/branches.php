@@ -116,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $br = $row->fetch();
             if (!$br)
                 throw new Exception('الفرع غير موجود');
-            require_once __DIR__ . '/../../../../config/create_branch_tables.php';
+            require_once __DIR__ . '/../../../config/create_branch_tables.php';
             $result = createBranchTables($pdo, $br['table_suffix'], $br['branch_type']);
             if ($result['ok']) {
                 echo json_encode([
@@ -127,8 +127,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             } else {
                 echo json_encode([
                     'ok' => false,
-                    'msg' => 'بعض الجداول لم تُنشأ',
-                    'errors' => $result['errors'],
+                    'msg' => 'بعض الجداول لم تُنشأ: ' . implode(' | ', $result['errors'] ?? ['سبب غير معروف']),
+                    'errors' => $result['errors'] ?? [],
                 ]);
             }
         } elseif ($act === 'toggle_status') {
@@ -644,7 +644,8 @@ $months = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو
                                 <div class="col-md-6">
                                     <label class="form-label-sm">
                                         العملة الوظيفية للفرع (Functional Currency)
-                                        <i class="bi bi-lock-fill text-muted" title="مجمّدة — تُحدَّد مرة واحدة عند إنشاء الفرع ولا تتغيّر بعدها"></i>
+                                        <i class="bi bi-lock-fill text-muted"
+                                            title="مجمّدة — تُحدَّد مرة واحدة عند إنشاء الفرع ولا تتغيّر بعدها"></i>
                                     </label>
                                     <!-- ⚠ مقفولة عمداً: هالحقل يمثّل العملة الوظيفية للفرع (IAS 21) —
                                          مجمّدة عند الإنشاء، مختلفة تماماً عن "عملة التقارير" (تلك

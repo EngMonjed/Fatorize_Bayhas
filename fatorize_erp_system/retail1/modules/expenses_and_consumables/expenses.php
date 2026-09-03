@@ -64,17 +64,60 @@ function resolveCurrencyId(PDO $pdo, string $code): int
 // المستخدمة بملفي المستهلكات (راجع تعليقها هناك للتفصيل الكامل).
 // بتحل محل التحديث اليدوي القديم (كان يفترض دايماً "مدين=+/دائن=-"
 // بدون فحص طبيعة الحساب الفعلية، وما كان يحدّث عمود balance إطلاقاً)
-function postAccountBalance(PDO $pdo, string $TAC, int $accountId, float $debit, float $credit): void
-{
-    $acc = $pdo->prepare("SELECT account_type FROM `{$TAC}` WHERE id=?");
+function postAccountBalance(
+    PDO $pdo,
+    string $TAC,
+    int $accountId,
+
+    float $originalDebit,
+    float $originalCredit,
+
+    float $baseDebit,
+    float $baseCredit
+): void {
+    $acc = $pdo->prepare("
+        SELECT account_type
+        FROM `{$TAC}`
+        WHERE id = ?
+    ");
     $acc->execute([$accountId]);
-    $row = $acc->fetch();
-    if (!$row)
+
+    $row = $acc->fetch(PDO::FETCH_ASSOC);
+
+    if (!$row) {
         return;
-    $isDebitNormal = in_array($row['account_type'], ['asset', 'expense']);
-    $delta = $isDebitNormal ? ($debit - $credit) : ($credit - $debit);
-    $pdo->prepare("UPDATE `{$TAC}` SET base_balance = base_balance + ?, balance = balance + ?, updated_at = NOW() WHERE id=?")
-        ->execute([$delta, $delta, $accountId]);
+    }
+
+    $isDebitNormal = in_array(
+        $row['account_type'],
+        ['asset', 'expense'],
+        true
+    );
+
+    // حركة الحساب بعملة الحساب
+    $delta = $isDebitNormal
+        ? ($originalDebit - $originalCredit)
+        : ($originalCredit - $originalDebit);
+
+    // حركة الحساب بالعملة الأساسية للفرع
+    $baseDelta = $isDebitNormal
+        ? ($baseDebit - $baseCredit)
+        : ($baseCredit - $baseDebit);
+
+    $stmt = $pdo->prepare("
+        UPDATE `{$TAC}`
+        SET
+            balance = balance + ?,
+            base_balance = base_balance + ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+
+    $stmt->execute([
+        $delta,
+        $baseDelta,
+        $accountId
+    ]);
 }
 
 function genEntryNo(PDO $pdo, string $table): string
@@ -139,14 +182,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,?,0,?,?,?,?,?)")
                     ->execute([$jeId, $expAccId, $amtBase, $amtOrig, $amtBase, $desc, $currencyId, $rate]);
-                postAccountBalance($pdo, $TAC, $expAccId, $amtBase, 0);
+                postAccountBalance($pdo, $TAC, $expAccId, $amtOrig, 0, $amtBase, 0);
 
                 // دائن: حساب الصندوق/الدفع
                 $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,
                     original_amount,base_amount,description,currency_id,exchange_rate)
                     VALUES (?,?,0,?,?,?,?,?,?)")
                     ->execute([$jeId, $cashAccId, $amtBase, $amtOrig, $amtBase, $desc, $currencyId, $rate]);
-                postAccountBalance($pdo, $TAC, $cashAccId, 0, $amtBase);
+                postAccountBalance($pdo, $TAC, $cashAccId, 0, $amtOrig, 0, $amtBase);
 
                 // حفظ المصروف
                 $pdo->prepare("INSERT INTO `{$TE}` (expense_account_id,cash_account_id,
@@ -202,9 +245,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by)
                         VALUES (?,?,?,?,1,?,?,'posted','expense_cancel',?,?)")
                         ->execute([
-                            $revNo, date('Y-m-d'),
+                            $revNo,
+                            date('Y-m-d'),
                             'إلغاء مصروف — عكس قيد رقم ' . $exp['journal_entry_id'],
-                            $branchBaseCurrencyId, $origTotal, $origTotal, $id, $_SESSION['user_id']
+                            $branchBaseCurrencyId,
+                            $origTotal,
+                            $origTotal,
+                            $id,
+                            $_SESSION['user_id']
                         ]);
                     $revId = (int) $pdo->lastInsertId();
 
@@ -213,11 +261,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             original_amount,base_amount,description,currency_id,exchange_rate)
                             VALUES (?,?,?,?,?,?,?,?,?)")
                             ->execute([
-                                $revId, $ln['account_id'],
-                                $ln['credit'], $ln['debit'], // عكس الاتجاه
-                                $ln['original_amount'], $ln['base_amount'],
-                                'عكس — إلغاء مصروف', $ln['currency_id'], $ln['exchange_rate']
+                                $revId,
+                                $ln['account_id'],
+                                $ln['credit'],          // عكس debit
+                                $ln['debit'],           // عكس credit
+                                $ln['original_amount'], // تبقى القيمة الأصلية نفسها
+                                $ln['base_amount'],     // تبقى القيمة الأساسية نفسها
+                                'عكس — إلغاء مصروف',
+                                $ln['currency_id'],
+                                $ln['exchange_rate']
                             ]);
+                        // ⚠ استدعاء صحيح ومبسّط — نفس التوقيع بالضبط
+                        // المستخدم بباقي الملفات (٥ باراميترات فقط:
+                        // pdo, جدول الحسابات, معرّف الحساب, مدين, دائن).
+                        // كان هون قبل هالإصلاح بيمرّر ٧ قيم لدالة بتاخذ
+                        // ٥ بس، بحسبة غير منطقية (original_amount مضروب
+                        // بـ1/-1) — كان عملياً بيكسر تحديث الرصيد بالكامل
+                        // عند إلغاء أي مصروف.
                         postAccountBalance($pdo, $TAC, (int) $ln['account_id'], (float) $ln['credit'], (float) $ln['debit']);
                     }
                 }
@@ -231,6 +291,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $pdo->rollBack();
                 throw $e;
             }
+        } elseif ($act === 'get_expense') {
+            $id = (int) ($_POST['id'] ?? 0);
+            $st = $pdo->prepare("SELECT e.*,
+                ea.code AS exp_code, ea.name AS exp_name,
+                ca.code AS cash_code, ca.name AS cash_name,
+                je.entry_number, je.status AS je_status
+                FROM `{$TE}` e
+                LEFT JOIN `{$TAC}` ea ON ea.id = e.expense_account_id
+                LEFT JOIN `{$TAC}` ca ON ca.id = e.cash_account_id
+                LEFT JOIN `{$TJE}` je ON je.id = e.journal_entry_id
+                WHERE e.id = ?");
+            $st->execute([$id]);
+            $exp = $st->fetch();
+            if (!$exp)
+                throw new Exception('المصروف غير موجود');
+            echo json_encode(['ok' => true, 'data' => $exp]);
         } else
             throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
@@ -240,13 +316,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 }
 
 // ── بيانات الصفحة ──
-$dateFrom = $_GET['from'] ?? date('Y-m-01');
-$dateTo = $_GET['to'] ?? date('Y-m-d');
+// ⚠ لا فلترة افتراضية بالتاريخ — الصفحة بتفتح على كل المصاريف المسجّلة
+// (كانت تُقيَّد تلقائياً بالشهر الحالي، فكانت تخفي مصاريف فترات
+// سابقة بدون ما يلاحظ المستخدم إنه في فلتر أصلاً مفعّل)
+$dateFrom = $_GET['from'] ?? '';
+$dateTo = $_GET['to'] ?? '';
 $accF = (int) ($_GET['acc'] ?? 0);
 $search = trim($_GET['q'] ?? '');
 
-$where = 'WHERE e.expense_date BETWEEN ? AND ?';
-$params = [$dateFrom, $dateTo];
+$where = 'WHERE 1=1';
+$params = [];
+if ($dateFrom) {
+    $where .= ' AND e.expense_date >= ?';
+    $params[] = $dateFrom;
+}
+if ($dateTo) {
+    $where .= ' AND e.expense_date <= ?';
+    $params[] = $dateTo;
+}
 if ($accF) {
     $where .= ' AND e.expense_account_id=?';
     $params[] = $accF;
@@ -500,8 +587,8 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                         style="border:none;border-bottom:2px solid #f59e0b;color:#f59e0b;font-size:.83rem;margin-bottom:-2px"><i
                             class="bi bi-wallet2 me-1"></i>إدارة المصاريف</a></li>
                 <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
-                        style="border:none;color:#64748b;font-size:.83rem"><i
-                            class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
+                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-people me-1"></i>موردو
+                        المستهلكات</a></li>
             </ul>
 
             <!-- إحصائيات -->
@@ -521,7 +608,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                         <div class="stat-icon" style="background:#fee2e2"><i class="bi bi-calendar-day text-danger"></i>
                         </div>
                         <div>
-                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?> <?= number_format($stats['today_base'], 2) ?></div>
+                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                <?= number_format($stats['today_base'], 2) ?>
+                            </div>
                             <div class="stat-lbl">مصاريف اليوم</div>
                         </div>
                     </div>
@@ -531,7 +620,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                         <div class="stat-icon" style="background:#fee2e2"><i
                                 class="bi bi-calendar-month text-danger"></i></div>
                         <div>
-                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?> <?= number_format($stats['month_base'], 2) ?></div>
+                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                <?= number_format($stats['month_base'], 2) ?>
+                            </div>
                             <div class="stat-lbl">مصاريف الشهر</div>
                         </div>
                     </div>
@@ -541,7 +632,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                         <div class="stat-icon" style="background:#fee2e2"><i
                                 class="bi bi-currency-dollar text-danger"></i></div>
                         <div>
-                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?> <?= number_format($stats['total_base'], 2) ?></div>
+                            <div class="stat-val n"><?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                <?= number_format($stats['total_base'], 2) ?>
+                            </div>
                             <div class="stat-lbl">الإجمالي الكلي</div>
                         </div>
                     </div>
@@ -597,7 +690,8 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                 <th style="color:#16a34a">حساب الدفع</th>
                                 <th>العملة</th>
                                 <th class="text-end">المبلغ</th>
-                                <th class="text-end">بعملة الفرع (<?= htmlspecialchars($branchBaseCurrencySymbol) ?>)</th>
+                                <th class="text-end">بعملة الفرع (<?= htmlspecialchars($branchBaseCurrencySymbol) ?>)
+                                </th>
                                 <th>القيد</th>
                                 <th style="text-align:center" data-no-sort>إجراءات</th>
                             </tr>
@@ -628,7 +722,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                         <?= htmlspecialchars($exp['description'] ?? '—') ?>
                                     </td>
                                     <td>
-                                        <div style="font-size:.78rem;color:#16a34a"><?= htmlspecialchars($exp['cash_name']) ?></div>
+                                        <div style="font-size:.78rem;color:#16a34a">
+                                            <?= htmlspecialchars($exp['cash_name']) ?>
+                                        </div>
                                         <div style="font-size:.7rem;color:#94a3b8" dir="ltr">
                                             <?= htmlspecialchars($exp['cash_code']) ?>
                                         </div>
@@ -637,7 +733,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                     <td class="n text-end fw-600"><?= $sym ?>
                                         <?= number_format($exp['amount_original'], 2) ?>
                                     </td>
-                                    <td class="n text-end fw-600 text-danger"><?= htmlspecialchars($branchBaseCurrencySymbol) ?> <?= number_format($exp['amount_base'], 2) ?>
+                                    <td class="n text-end fw-600 text-danger">
+                                        <?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                        <?= number_format($exp['amount_base'], 2) ?>
                                     </td>
                                     <td>
                                         <?php if (($exp['status'] ?? 'active') === 'cancelled'): ?>
@@ -654,7 +752,11 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <div class="d-flex justify-content-center">
+                                        <div class="d-flex justify-content-center gap-1">
+                                            <button class="act-btn" onclick="viewExpense(<?= $exp['id'] ?>)"
+                                                title="عرض التفاصيل" style="color:#0891b2;border-color:#a5f3fc">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
                                             <?php if (($exp['status'] ?? 'active') !== 'cancelled'): ?>
                                                 <button class="act-btn danger" onclick="cancelExpense(<?= $exp['id'] ?>)"
                                                     title="إلغاء وعكس القيد">
@@ -672,7 +774,8 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                     <td colspan="6" class="fw-600 text-end" style="font-size:.8rem;color:#64748b">الإجمالي
                                         (الفترة المحددة)</td>
                                     <td class="n fw-600 text-end text-danger">
-                                        <?= htmlspecialchars($branchBaseCurrencySymbol) ?> <?= number_format(array_sum(array_column(array_filter($expenses, fn($e) => ($e['status'] ?? 'active') !== 'cancelled'), 'amount_base')), 2) ?>
+                                        <?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                        <?= number_format(array_sum(array_column(array_filter($expenses, fn($e) => ($e['status'] ?? 'active') !== 'cancelled'), 'amount_base')), 2) ?>
                                     </td>
                                     <td colspan="2"></td>
                                 </tr>
@@ -709,13 +812,26 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-3">
+                            <label class="field-lbl">العملة</label>
+                            <select id="eCurr" class="form-select form-select-sm" onchange="onExpCurrChange()">
+                                <?php foreach ($allCurrencies as $c): ?>
+                                    <option value="<?= htmlspecialchars($c['code']) ?>"
+                                        data-rate="<?= $c['exchange_rate'] ?>">
+                                        <?= htmlspecialchars($c['code']) ?>     <?= htmlspecialchars($c['symbol']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
                             <label class="field-lbl">حساب الدفع <span class="req">*</span></label>
                             <select id="eCashAcc" class="form-select form-select-sm">
                                 <option value="">— الصندوق/البنك —</option>
                                 <?php foreach ($cashAccounts as $a): ?>
-                                    <option value="<?= $a['id'] ?>" data-currency="<?= htmlspecialchars($a['currency_code'] ?? '') ?>">
-                                        <?= htmlspecialchars($a['code'] . ' — ' . $a['name']) ?><?= $a['currency_code'] ? ' (' . htmlspecialchars($a['currency_code']) . ')' : '' ?>
+                                    <option value="<?= $a['id'] ?>"
+                                        data-currency="<?= htmlspecialchars($a['currency_code'] ?? '') ?>">
+                                        <?= htmlspecialchars($a['code'] . ' — ' . $a['name']) ?>
+                                        <?= $a['currency_code'] ? ' (' . htmlspecialchars($a['currency_code']) . ')' : '' ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -724,16 +840,6 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                             <label class="field-lbl">التاريخ <span class="req">*</span></label>
                             <input type="date" id="eDate" class="form-control form-control-sm"
                                 value="<?= date('Y-m-d') ?>">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="field-lbl">العملة</label>
-                            <select id="eCurr" class="form-select form-select-sm" onchange="onExpCurrChange()">
-                                <?php foreach ($allCurrencies as $c): ?>
-                                    <option value="<?= htmlspecialchars($c['code']) ?>" data-rate="<?= $c['exchange_rate'] ?>">
-                                        <?= htmlspecialchars($c['code']) ?> <?= htmlspecialchars($c['symbol']) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
                         </div>
                         <div class="col-md-3" id="eRateWrap">
                             <label class="field-lbl">سعر الصرف</label>
@@ -755,7 +861,9 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                                 style="background:#fef9ee;border-radius:8px;padding:10px 16px;font-size:.8rem;display:flex;justify-content:space-between;align-items:center">
                                 <span style="color:#92400e"><i class="bi bi-info-circle me-1"></i>المبلغ
                                     بعملة الفرع:</span>
-                                <span id="eUsdPreview" class="n fw-600 text-danger"><?= htmlspecialchars($branchBaseCurrencySymbol) ?> 0.00</span>
+                                <span id="eUsdPreview"
+                                    class="n fw-600 text-danger"><?= htmlspecialchars($branchBaseCurrencySymbol) ?>
+                                    0.00</span>
                             </div>
                         </div>
                         <div class="col-12">
@@ -781,10 +889,27 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
         </div>
     </div>
 
+    <!-- ══ مودال عرض تفاصيل المصروف ══ -->
+    <div class="modal fade" id="viewExpModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content" style="border-radius:16px;border:none">
+                <div class="modal-header py-3 px-4 border-0"
+                    style="background:linear-gradient(135deg,#92400e,#d97706);border-radius:16px 16px 0 0">
+                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-eye me-2"></i>تفاصيل المصروف</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body px-4 py-3" id="vExpBody">
+                    <div class="text-center py-4"><span class="spinner-border text-warning"></span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
         const expModal = new bootstrap.Modal(document.getElementById('expModal'));
+        const viewExpModal = new bootstrap.Modal(document.getElementById('viewExpModal'));
         const BASE_CUR_CODE = <?= json_encode($branchBaseCurrency) ?>;
         const BASE_CUR_SYM = <?= json_encode($branchBaseCurrencySymbol) ?>;
         const CASH_ACCOUNTS = <?= json_encode(array_values($cashAccounts)) ?>;
@@ -895,6 +1020,61 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
             });
         }
 
+        function viewExpense(id) {
+            viewExpModal.show();
+            document.getElementById('vExpBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-warning"></span></div>';
+            post({ _action: 'get_expense', id }).then(d => {
+                if (!d.ok) { toast(d.msg, 'danger'); viewExpModal.hide(); return; }
+                const e = d.data;
+                const isCancelled = (e.status || 'active') === 'cancelled';
+                const statusBadge = isCancelled
+                    ? '<span class="badge bg-danger-subtle text-danger"><i class="bi bi-x-circle me-1"></i>ملغى</span>'
+                    : (e.entry_number
+                        ? '<span class="badge bg-success-subtle text-success"><i class="bi bi-check me-1"></i>قيد مرحّل</span>'
+                        : '<span class="badge bg-secondary-subtle text-secondary">بلا قيد</span>');
+
+                document.getElementById('vExpBody').innerHTML = `
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <small style="color:#64748b">حساب المصروف</small>
+            <div class="fw-600" style="color:#dc2626">${e.exp_code || ''} — ${e.exp_name || '—'}</div>
+          </div>
+          <div class="col-md-6">
+            <small style="color:#64748b">حساب الدفع</small>
+            <div class="fw-600" style="color:#16a34a">${e.cash_code || ''} — ${e.cash_name || '—'}</div>
+          </div>
+          <div class="col-md-4">
+            <small style="color:#64748b">التاريخ</small>
+            <div>${e.expense_date}</div>
+          </div>
+          <div class="col-md-4">
+            <small style="color:#64748b">العملة</small>
+            <div><span class="badge bg-secondary-subtle text-secondary">${e.currency}</span>
+              ${parseFloat(e.exchange_rate) !== 1 ? `<small style="color:#94a3b8"> (سعر الصرف: ${parseFloat(e.exchange_rate).toFixed(4)})</small>` : ''}</div>
+          </div>
+          <div class="col-md-4">
+            <small style="color:#64748b">الحالة</small>
+            <div>${statusBadge}</div>
+          </div>
+          ${e.description ? `<div class="col-12"><small style="color:#64748b">الوصف</small><div>${e.description}</div></div>` : ''}
+          ${e.entry_number ? `<div class="col-12"><small style="color:#64748b">رقم القيد المحاسبي</small><div class="fw-600" dir="ltr">${e.entry_number}</div></div>` : ''}
+        </div>
+        <div style="background:#fef9ee;border-radius:10px;padding:12px 16px">
+          <div class="d-flex justify-content-between mb-1" style="font-size:.85rem">
+            <span style="color:#64748b">المبلغ الأصلي</span>
+            <span class="n fw-600">${e.currency} ${parseFloat(e.amount_original).toFixed(2)}</span>
+          </div>
+          <div class="d-flex justify-content-between" style="font-size:.9rem;font-weight:700;border-top:1px solid #fde68a;padding-top:6px;margin-top:4px">
+            <span>بعملة الفرع</span>
+            <span class="n" style="color:#d97706">${BASE_CUR_SYM} ${parseFloat(e.amount_base).toFixed(2)}</span>
+          </div>
+        </div>
+        ${isCancelled ? `<div class="mt-3" style="background:#fef2f2;border-radius:8px;padding:8px 12px;font-size:.78rem;color:#dc2626">
+            <i class="bi bi-info-circle me-1"></i>أُلغي بتاريخ ${e.cancelled_at || '—'}
+          </div>` : ''}`;
+            });
+        }
+
         function cancelExpense(id) {
             if (!confirm('إلغاء هذا المصروف؟\nسيبقى السجل ظاهراً بحالة "ملغى"، ويُنشأ قيد عكسي جديد (القيد الأصلي لا يُحذف).')) return;
             post({ _action: 'cancel_expense', id }).then(d => {
@@ -902,7 +1082,7 @@ $branchBaseCurrencySymbol = $CURR_SYM[$branchBaseCurrency] ?? '$';
                 else toast(d.msg, 'danger');
             });
         }
-    
+
         // ══════════════════════════════════════════════════════════
         // فرز الجداول بالنقر على رأس العمود — عام لأي جدول بالصفحة
         // ══════════════════════════════════════════════════════════

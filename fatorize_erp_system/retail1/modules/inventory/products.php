@@ -361,7 +361,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 $categories = $pdo->query("SELECT * FROM `{$TC}` WHERE is_active=1 ORDER BY parent_id, id")->fetchAll();
 
 // مستودعات الفرع — فقط المتخصصة بالمنتجات (نفس تصنيف warehouse_type
-// الموجود بـwarehouse.php)، مش كل مستودعات المنتجات (كان يظهر مستودع المستهلكات هون بالغلط)
+// الموجود بـwarehouse.php)، مش كل المستودعات (كان يظهر مستودع المستهلكات هون بالغلط)
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='products' ORDER BY id")->fetchAll();
 
 // فلتر
@@ -877,7 +877,7 @@ $catColors = [
                 <li class="nav-item">
                     <a class="nav-link fw-600" href="warehouse.php?type=products"
                         style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-building me-1"></i>مستودعات المنتجات
+                        <i class="bi bi-building me-1"></i>المستودعات
                     </a>
                 </li>
                 <li class="nav-item">
@@ -1833,46 +1833,43 @@ $catColors = [
                         const totalRem = perPacket ? totalPieces % perPacket : 0;
 
                         return `<div class="grp-block">
-                    <!-- ① الهوية + السعر -->
-                    <div class="d-flex align-items-start gap-2 mb-2">
+                    <!-- ① سطر واحد: الكروب + مقاساته + عدد الباكيتات + السعر -->
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
                         <span style="background:${bg};color:${clr};border:1px solid ${br};border-radius:12px;font-size:.7rem;padding:1px 8px;font-weight:700;flex-shrink:0">
                             الكروب ${i + 1}
                         </span>
-                        <div style="flex:1;min-width:0">
-                            <div class="d-flex flex-wrap gap-1">${szTags}
-                            <span style="font-size:.68rem;color:#94a3b8;margin-top:3px">${perPacket} قطع بالباكيت الواحد</span></div>
-                        </div>
+                        <div class="d-flex flex-wrap gap-1">${szTags}</div>
+
+                        <!-- عدد الباكيتات — بالوسط، بنفسجي -->
+                        <span class="d-flex align-items-center gap-1" style="margin-right:auto;margin-left:auto">
+                            <i class="bi bi-boxes" style="color:${totalPackets > 0 ? '#7c3aed' : '#cbd5e1'};font-size:.9rem"></i>
+                            <span style="font-size:.95rem;font-weight:700;color:${totalPackets > 0 ? '#6d28d9' : '#cbd5e1'}">${totalPackets}</span>
+                            <span style="font-size:.75rem;font-weight:600;color:${totalPackets > 0 ? '#7c3aed' : '#cbd5e1'}">باكيت</span>
+                            ${totalRem > 0 ? `<span style="font-size:.66rem;color:#d97706;background:#fffbeb;border-radius:6px;padding:0 5px">+${totalRem}</span>` : ''}
+                        </span>
+
+                        <!-- السعر — آخر السطر، أسود غامق -->
                         <div style="text-align:left;flex-shrink:0">
-                            <div style="font-size:.85rem;font-weight:700;color:#1e293b">${sellVal.toFixed(2)} ${recCur.symbol}</div>
+                            <div style="font-size:.9rem;font-weight:700;color:#0f172a">${sellVal.toFixed(2)} ${recCur.symbol}</div>
                             ${liveHtml}
                             ${costVal !== null ? `<div style="font-size:.68rem;color:#94a3b8;margin-top:1px">شراء: ${costVal.toFixed(2)} ${recCur.symbol}</div>` : ''}
                         </div>
                     </div>
-                    <!-- ② إجمالي مخزون الكروب — الباكيت بارز، القطع مساعد -->
-                    <div class="d-flex align-items-center gap-2" style="background:${totalPackets > 0 ? '#f5f3ff' : '#f8fafc'};border:1px solid ${totalPackets > 0 ? '#ddd6fe' : '#e2e8f0'};border-radius:10px;padding:6px 10px">
-                        <i class="bi bi-boxes" style="color:${totalPackets > 0 ? '#7c3aed' : '#94a3b8'};font-size:1rem"></i>
-                        <span style="font-size:1rem;font-weight:700;color:${totalPackets > 0 ? '#6d28d9' : '#94a3b8'}">${totalPackets}</span>
-                        <span style="font-size:.72rem;color:#64748b">باكيت</span>
-                        ${totalRem > 0 ? `<span style="font-size:.68rem;color:#d97706;background:#fffbeb;border-radius:6px;padding:1px 6px">+${totalRem} قطعة</span>` : ''}
-                        <span style="margin-right:auto;font-size:.74rem;color:${totalPieces > 0 ? '#16a34a' : '#dc2626'};font-weight:600">
-                            ${totalPieces} قطعة مفردة
-                        </span>
-                    </div>
 
-                    <!-- ③ تفصيل الألوان — صفوف مستقلة، أسهل بالمسح البصري -->
+                    <!-- ② الألوان — كلها بسطر واحد أفقي (شرائح متتالية) -->
                     ${(g.colors_qty && g.colors_qty.length) ? `
-                        <div class="mt-2 pt-2" style="border-top:1px dashed #e2e8f0">
+                        <div class="d-flex flex-wrap align-items-center gap-2 mt-2 pt-2" style="border-top:1px dashed #e2e8f0">
                             ${g.colors_qty.map(c => {
-                            const cPackets = perPacket ? Math.floor(c.qty / perPacket) : 0;
-                            const cRem = perPacket ? c.qty % perPacket : 0;
-                            return `<div class="d-flex align-items-center gap-2" style="padding:3px 2px;font-size:.74rem">
-                                    <span style="width:11px;height:11px;border-radius:50%;background:${c.hex};border:1px solid rgba(0,0,0,.12);flex-shrink:0"></span>
-                                    <span style="color:#475569;flex:1;min-width:0">${c.name}</span>
-                                    <span style="font-weight:700;color:${cPackets > 0 ? '#6d28d9' : '#94a3b8'}">${cPackets} باكيت</span>
-                                    ${cRem > 0 ? `<span style="font-size:.66rem;color:#d97706">+${cRem}</span>` : ''}
-                                    <span style="color:#94a3b8;font-size:.7rem;min-width:58px;text-align:left">(${c.qty} قطعة)</span>
-                                </div>`;
-                        }).join('')}
+                                const cPackets = perPacket ? Math.floor(c.qty / perPacket) : 0;
+                                const cRem = perPacket ? c.qty % perPacket : 0;
+                                return `<span class="d-flex align-items-center gap-1" style="font-size:.74rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:2px 8px">
+                                    <span style="width:10px;height:10px;border-radius:50%;background:${c.hex};border:1px solid rgba(0,0,0,.12);flex-shrink:0"></span>
+                                    <span style="color:#475569">${c.name}</span>
+                                    <b style="color:${cPackets > 0 ? '#6d28d9' : '#cbd5e1'}">${cPackets}</b>
+                                    <span style="color:${cPackets > 0 ? '#7c3aed' : '#cbd5e1'};font-weight:600;font-size:.7rem">باكيت</span>
+                                    ${cRem > 0 ? `<span style="font-size:.64rem;color:#d97706">+${cRem}</span>` : ''}
+                                </span>`;
+                            }).join('')}
                         </div>` : ''}
                 </div>`;
                     }).join('') || '<div class="text-muted" style="font-size:.78rem">لا توجد قياسات</div>';

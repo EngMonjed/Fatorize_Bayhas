@@ -91,31 +91,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 AND payment_status IN ('pending','partial')
                 ORDER BY invoice_date");
             $st->execute([$custId]);
-            echo json_encode(['ok' => true, 'data' => $st->fetchAll()]);
+            $invoices = $st->fetchAll();
+
+            // ── "رصيد سابق" = رصيد حساب العميل الكامل − مجموع أرصدة الفواتير
+            // المفتوحة أعلاه. يمثّل أي مبلغ غير مرتبط بفاتورة محدَّدة (غالباً
+            // الرصيد الافتتاحي المسجَّل بقيد مباشر بصفحة admin/opening_balances.php
+            // — مش فاتورة له حالة مدفوع/غير مدفوع مستقلة، فما ينلقط بالاستعلام
+            // فوق) — أو أي تسوية يدوية قديمة تانية غير مفسَّرة. ──
+            $extra = null;
+            $custAcc = $pdo->prepare("SELECT c.account_id, ac.base_balance FROM `{$TC}` c
+                LEFT JOIN `{$TAC}` ac ON ac.id = c.account_id WHERE c.id=?");
+            $custAcc->execute([$custId]);
+            $custAcc = $custAcc->fetch();
+            if ($custAcc && $custAcc['account_id']) {
+                $sumInvoices = array_sum(array_column($invoices, 'balance_amount'));
+                $diff = round((float) $custAcc['base_balance'] - $sumInvoices, 2);
+                if ($diff > 0.01) {
+                    $extra = ['balance_amount' => $diff];
+                }
+            }
+            echo json_encode(['ok' => true, 'data' => $invoices, 'extra' => $extra]);
         }
 
-        // ── حفظ سند قبض ──
+        // ── حفظ سند قبض (مع دعم المسامحة الاختيارية) ──
         elseif ($act === 'save_receipt') {
             requirePermission('finance.receipts', 'create');
             $custId = (int) $_POST['customer_id'];
             $date = $_POST['receipt_date'] ?? date('Y-m-d');
-            $amount = (float) $_POST['amount'];
+            $amount = (float) $_POST['amount']; // النقد الفعلي المقبوض فقط — لا يشمل أي مبلغ مُسامَح فيه
             $currency = $_POST['currency'] ?? 'USD';
             $rate = max(0.0001, (float) ($_POST['exchange_rate'] ?? 1));
             $method = $_POST['payment_method'] ?? 'cash';
             $cashAccId = (int) ($_POST['cash_account_id'] ?? 0) ?: null;
             $notes = trim($_POST['notes'] ?? '');
             $allocs = json_decode($_POST['allocations'] ?? '[]', true);
+            // كل عنصر: {invoice_id, amount, type} — type: 'cash' (افتراضي) أو 'forgive'
+            $cashAllocs = array_values(array_filter($allocs, fn($a) => ($a['type'] ?? 'cash') === 'cash'));
+            $forgiveAllocs = array_values(array_filter($allocs, fn($a) => ($a['type'] ?? 'cash') === 'forgive'));
+            $totalForgive = round(array_sum(array_column($forgiveAllocs, 'amount')), 2);
 
             if (!$custId)
                 throw new Exception('يجب اختيار العميل');
-            if ($amount <= 0)
-                throw new Exception('المبلغ يجب أن يكون أكبر من صفر');
+            if ($amount <= 0 && $totalForgive <= 0)
+                throw new Exception('المبلغ يجب أن يكون أكبر من صفر، أو حدّد مبلغ مسامحة على الأقل');
+
+            // 🔴 المسامحة قرار مالي أخطر من قبض نقدي عادي (خسارة فعلية على
+            // الشركة) — تتطلب صلاحية "confirm"، مش "create" بس. نفس مبدأ
+            // ترحيل فاتورة يحتاج confirm منفصلة عن create بكل النظام.
+            if ($totalForgive > 0) {
+                requirePermission('finance.receipts', 'confirm');
+            }
 
             $amountBase = $amount / $rate;
 
-            // 🔴 نفس إصلاح payments.php — journal_entries/journal_entry_items
-            // فيهم currency_id رقمي مش عمود currency نصي.
             $currIdSt = $pdo->prepare("SELECT id FROM currencies WHERE code=? LIMIT 1");
             $currIdSt->execute([$currency]);
             $currId = (int) $currIdSt->fetchColumn();
@@ -123,17 +151,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $currId = (int) ($pdo->query("SELECT id FROM currencies WHERE is_base=1 LIMIT 1")->fetchColumn() ?: 1);
             }
 
-            // التحقق من مجموع التوزيع
-            $totalAlloc = array_sum(array_column($allocs, 'amount'));
-            if ($totalAlloc > $amountBase + 0.01)
-                throw new Exception('مجموع التوزيع (' . number_format($totalAlloc, 2) . ') أكبر من مبلغ السند (' . number_format($amountBase, 2) . ')');
+            // التحقق من مجموع توزيع الجزء النقدي بس — المسامحة منفصلة
+            // تماماً، ما تنافس مبلغ السند النقدي المقبوض فعلياً
+            $totalCashAlloc = array_sum(array_column($cashAllocs, 'amount'));
+            if ($totalCashAlloc > $amountBase + 0.01)
+                throw new Exception('مجموع توزيع النقد (' . number_format($totalCashAlloc, 2) . ') أكبر من مبلغ السند (' . number_format($amountBase, 2) . ')');
 
-            // جلب اسم العميل + حساب الذمة المخصص فيه (customers.php بينشئه
-            // تلقائياً لكل عميل جديد تحت حساب "ذمم العملاء" الأب)
             $cSt = $pdo->prepare("SELECT name, account_id FROM `{$TC}` WHERE id=?");
             $cSt->execute([$custId]);
             $custRow = $cSt->fetch();
             $custName = $custRow['name'] ?? '';
+
+            $accCustomer = null;
+            if (!empty($custRow['account_id'])) {
+                $accCustomer = $pdo->query("SELECT * FROM `{$TAC}` WHERE id=" . (int) $custRow['account_id'])->fetch();
+            }
+            if (!$accCustomer) {
+                $accCustomer = getSettingAccount($pdo, $TIAS, 'customer_receivable', $TAC);
+            }
+
+            // ⚠ نتحقق من جهوزية حساب المسامحة قبل أي كتابة فعلية — أفضل
+            // نفشل بدري وواضح بدل ما نبلش transaction ونضطر نتراجع بالنص
+            $accForgive = null;
+            if ($totalForgive > 0) {
+                $accForgive = getSettingAccount($pdo, $TIAS, 'customer_forgiveness_expense', $TAC);
+                if (!$accForgive)
+                    throw new Exception('حساب "مسامحة ديون العملاء" مش مضبوط بإعدادات الربط المحاسبي');
+                if (!$accCustomer)
+                    throw new Exception('هذا العميل ما إله حساب ذمة مخصص — لا يمكن تسجيل مسامحة');
+            }
 
             $pdo->beginTransaction();
             try {
@@ -157,15 +203,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     ]);
                 $rcpId = (int) $pdo->lastInsertId();
 
-                // توزيع على الفواتير
-                foreach ($allocs as $al) {
+                // توزيع الجزء النقدي على الفواتير (منطق أصلي بدون تغيير)
+                foreach ($cashAllocs as $al) {
                     $invId = (int) $al['invoice_id'];
                     $alAmt = (float) $al['amount'];
                     if (!$invId || $alAmt <= 0)
                         continue;
                     $pdo->prepare("INSERT INTO `{$TRI}` (receipt_id,invoice_id,allocated_amount)
                         VALUES (?,?,?)")->execute([$rcpId, $invId, $alAmt]);
-                    // تحديث الفاتورة
                     $pdo->prepare("UPDATE `{$TSI}` SET
                         paid_amount=paid_amount+?,
                         balance_amount=GREATEST(0,balance_amount-?),
@@ -176,96 +221,133 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         ->execute([$alAmt, $alAmt, $alAmt, $invId]);
                 }
 
-                // ── إنشاء قيد محاسبي تلقائي ──
-                // 🔴 كان يستخدم دايماً الحساب الأب المشترك (customer_receivable
-                // بالإعدادات) لكل العملاء، فرصيد أي عميل بمفرده كان غير قابل
-                // للمعرفة من شجرة الحسابات (بس المجموع الكلي). customers.php
-                // أصلاً بينشئ حساب ذمة مخصص لكل عميل (customers.account_id) —
-                // صار يُستخدم هون مباشرة. الرجوع للحساب الأب المشترك محفوظ فقط
-                // كـ fallback للعملاء القدام يلي انشأوا قبل هالميزة (بدون
-                // account_id مضبوط).
-                $accCustomer = null;
-                if (!empty($custRow['account_id'])) {
-                    $accCustomer = $pdo->query("SELECT * FROM `{$TAC}` WHERE id=" . (int) $custRow['account_id'])->fetch();
-                }
-                if (!$accCustomer) {
-                    $accCustomer = getSettingAccount($pdo, $TIAS, 'customer_receivable', $TAC);
-                }
-                // 🔴 كان دايماً يرجع افتراضياً لحساب cash_usd بغض النظر عن عملة السند
-                // المختارة فعلياً — لو السند بعملة تانية (SYP/TRY) وما اختار المستخدم
-                // حساب صندوق محدد، كان القيد ينحط غلط على حساب الصندوق بالدولار.
-                $accCash = $cashAccId ?
-                    $pdo->query("SELECT * FROM `{$TAC}` WHERE id={$cashAccId}")->fetch() :
-                    getSettingAccount($pdo, $TIAS, 'cash_' . strtolower($currency), $TAC);
+                // ── القيد المحاسبي للنقد الفعلي (بس لو في مبلغ نقدي > 0) ──
+                $accCash = null;
+                $jeCreated = false;
+                if ($amount > 0) {
+                    $accCash = $cashAccId ?
+                        $pdo->query("SELECT * FROM `{$TAC}` WHERE id={$cashAccId}")->fetch() :
+                        getSettingAccount($pdo, $TIAS, 'cash_' . strtolower($currency), $TAC);
 
-                if ($cashAccId && $accCash) {
-                    $accCurCode = $pdo->prepare("SELECT code FROM currencies WHERE id=?");
-                    $accCurCode->execute([$accCash['currency_id'] ?? 0]);
-                    $accCurCode = $accCurCode->fetchColumn();
-                    if ($accCurCode && $accCurCode !== $currency) {
-                        throw new Exception("عملة حساب الصندوق المختار ({$accCurCode}) لا تطابق عملة السند ({$currency})");
+                    if ($cashAccId && $accCash) {
+                        $accCurCode = $pdo->prepare("SELECT code FROM currencies WHERE id=?");
+                        $accCurCode->execute([$accCash['currency_id'] ?? 0]);
+                        $accCurCode = $accCurCode->fetchColumn();
+                        if ($accCurCode && $accCurCode !== $currency) {
+                            throw new Exception("عملة حساب الصندوق المختار ({$accCurCode}) لا تطابق عملة السند ({$currency})");
+                        }
+                    }
+
+                    if ($accCustomer && $accCash) {
+                        $jeNo = genEntryNo($pdo, $TJE);
+                        $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,
+                            exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by)
+                            VALUES (?,?,?,?,?,?,?,'draft','receipt',?,?)")
+                            ->execute([
+                                $jeNo,
+                                $date,
+                                "قبض من العميل {$custName} — سند {$rcpNo}",
+                                $currId,
+                                $rate,
+                                $amountBase,
+                                $amountBase,
+                                $rcpId,
+                                $_SESSION['user_id']
+                            ]);
+                        $jeId = (int) $pdo->lastInsertId();
+
+                        // مدين: الصندوق/البنك
+                        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,
+                            original_amount,base_amount,description,currency_id,exchange_rate)
+                            VALUES (?,?,?,0,?,?,?,?,?)")
+                            ->execute([
+                                $jeId,
+                                $accCash['id'],
+                                $amountBase,
+                                $amount,
+                                $amountBase,
+                                "قبض — {$rcpNo}",
+                                $currId,
+                                $rate
+                            ]);
+                        // دائن: ذمم العملاء
+                        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,
+                            original_amount,base_amount,description,currency_id,exchange_rate)
+                            VALUES (?,?,0,?,?,?,?,?,?)")
+                            ->execute([
+                                $jeId,
+                                $accCustomer['id'],
+                                $amountBase,
+                                $amount,
+                                $amountBase,
+                                "ذمة — {$custName}",
+                                $currId,
+                                $rate
+                            ]);
+
+                        $pdo->prepare("UPDATE `{$TR}` SET journal_entry_id=? WHERE id=?")->execute([$jeId, $rcpId]);
+                        $jeCreated = true;
                     }
                 }
 
-                if ($accCustomer && $accCash) {
-                    $jeNo = genEntryNo($pdo, $TJE);
+                // ── قيد المسامحة المنفصل (لو في مسامحة) — دايماً بعملة الفرع
+                // الأساسية مباشرة (مش معاملة نقدية، فلا داعي لتحويل عملة) ──
+                $forgiveCreated = false;
+                if ($totalForgive > 0) {
+                    $fJeNo = genEntryNo($pdo, $TJE);
+                    $fDesc = "مسامحة دين للعميل {$custName} — سند {$rcpNo}" . ($notes ? " — {$notes}" : '');
                     $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,
                         exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by)
-                        VALUES (?,?,?,?,?,?,?,'draft','receipt',?,?)")
-                        ->execute([
-                            $jeNo,
-                            $date,
-                            "قبض من العميل {$custName} — سند {$rcpNo}",
-                            $currId,
-                            $rate,
-                            $amountBase,
-                            $amountBase,
-                            $rcpId,
-                            $_SESSION['user_id']
-                        ]);
-                    $jeId = (int) $pdo->lastInsertId();
+                        VALUES (?,?,?,1,1,?,?,'draft','receipt_forgiveness',?,?)")
+                        ->execute([$fJeNo, $date, $fDesc, $totalForgive, $totalForgive, $rcpId, $_SESSION['user_id']]);
+                    $fJeId = (int) $pdo->lastInsertId();
 
-                    // مدين: الصندوق/البنك
+                    // مدين: مصروف مسامحة ديون العملاء
                     $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,
                         original_amount,base_amount,description,currency_id,exchange_rate)
-                        VALUES (?,?,?,0,?,?,?,?,?)")
-                        ->execute([
-                            $jeId,
-                            $accCash['id'],
-                            $amountBase,
-                            $amount,
-                            $amountBase,
-                            "قبض — {$rcpNo}",
-                            $currId,
-                            $rate
-                        ]);
-                    // دائن: ذمم العملاء
+                        VALUES (?,?,?,0,?,?,?,1,1)")
+                        ->execute([$fJeId, $accForgive['id'], $totalForgive, $totalForgive, $totalForgive, "مسامحة — {$rcpNo}"]);
+                    // دائن: ذمة العميل المحدَّد
                     $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,
                         original_amount,base_amount,description,currency_id,exchange_rate)
-                        VALUES (?,?,0,?,?,?,?,?,?)")
-                        ->execute([
-                            $jeId,
-                            $accCustomer['id'],
-                            $amountBase,
-                            $amount,
-                            $amountBase,
-                            "ذمة — {$custName}",
-                            $currId,
-                            $rate
-                        ]);
+                        VALUES (?,?,0,?,?,?,?,1,1)")
+                        ->execute([$fJeId, $accCustomer['id'], $totalForgive, $totalForgive, $totalForgive, "مسامحة ذمة — {$custName}"]);
+                    $forgiveCreated = true;
 
-                    $pdo->prepare("UPDATE `{$TR}` SET journal_entry_id=? WHERE id=?")->execute([$jeId, $rcpId]);
+                    // تحديث الفواتير المُسامَح فيها (invoice_id=0 = "رصيد سابق"،
+                    // ما إله فاتورة حقيقية لتحديثها — بس القيد فوق كافي)
+                    foreach ($forgiveAllocs as $al) {
+                        $invId = (int) $al['invoice_id'];
+                        $alAmt = (float) $al['amount'];
+                        if (!$invId || $alAmt <= 0)
+                            continue;
+                        $pdo->prepare("INSERT INTO `{$TRI}` (receipt_id,invoice_id,allocated_amount)
+                            VALUES (?,?,?)")->execute([$rcpId, $invId, $alAmt]);
+                        $noteText = 'تم التسامح بمبلغ ' . number_format($alAmt, 2) . " ضمن سند {$rcpNo}" . ($notes ? " — {$notes}" : '');
+                        $pdo->prepare("UPDATE `{$TSI}` SET
+                            paid_amount=paid_amount+?,
+                            balance_amount=GREATEST(0,balance_amount-?),
+                            payment_status=CASE
+                                WHEN balance_amount-? <= 0.01 THEN 'paid'
+                                ELSE 'partial' END,
+                            notes=CONCAT(COALESCE(notes,''), CASE WHEN COALESCE(notes,'')='' THEN '' ELSE '\n' END, ?)
+                            WHERE id=?")
+                            ->execute([$alAmt, $alAmt, $alAmt, $noteText, $invId]);
+                    }
                 }
 
                 $pdo->commit();
-                echo json_encode(['ok' => true, 'id' => $rcpId, 'no' => $rcpNo, 'je_created' => ($accCustomer && $accCash)]);
+                echo json_encode([
+                    'ok' => true, 'id' => $rcpId, 'no' => $rcpNo,
+                    'je_created' => $jeCreated, 'forgive_created' => $forgiveCreated, 'forgiven' => $totalForgive
+                ]);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
             }
         }
 
-        // ── ترحيل سند ──
+        // ── ترحيل سند (يشمل قيد المسامحة المنفصل لو موجود) ──
         elseif ($act === 'post_receipt') {
             requirePermission('finance.receipts', 'confirm');
             $id = (int) $_POST['id'];
@@ -279,10 +361,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $pdo->beginTransaction();
             try {
-                // ترحيل القيد المحاسبي
-                if ($rcp['journal_entry_id']) {
+                // القيد النقدي الرئيسي + قيد المسامحة المنفصل (لو موجود) —
+                // كلاهما يترحّل سوا بضغطة "ترحيل" وحدة
+                $jeIds = [];
+                if ($rcp['journal_entry_id'])
+                    $jeIds[] = (int) $rcp['journal_entry_id'];
+                $fJeSt = $pdo->prepare("SELECT id FROM `{$TJE}` WHERE reference_type='receipt_forgiveness' AND reference_id=? AND status='draft'");
+                $fJeSt->execute([$id]);
+                $fJeId = $fJeSt->fetchColumn();
+                if ($fJeId)
+                    $jeIds[] = (int) $fJeId;
+
+                foreach ($jeIds as $jeIdToPost) {
                     $items = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
-                    $items->execute([$rcp['journal_entry_id']]);
+                    $items->execute([$jeIdToPost]);
                     foreach ($items->fetchAll() as $item) {
                         $net = $item['debit'] - $item['credit'];
                         $ownNet = ((float) $item['debit'] > 0) ? (float) $item['original_amount'] : -(float) $item['original_amount'];
@@ -294,19 +386,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                             ->execute([$net, $item['currency_id'], $ownNet, $net, $item['account_id']]);
                     }
                     $pdo->prepare("UPDATE `{$TJE}` SET status='posted',posted_at=NOW(),posted_by=? WHERE id=?")
-                        ->execute([$_SESSION['user_id'], $rcp['journal_entry_id']]);
+                        ->execute([$_SESSION['user_id'], $jeIdToPost]);
                 }
                 $pdo->prepare("UPDATE `{$TR}` SET status='posted',updated_by=?,updated_at=NOW() WHERE id=?")
                     ->execute([$_SESSION['user_id'], $id]);
                 $pdo->commit();
-                echo json_encode(['ok' => true, 'msg' => 'تم ترحيل سند القبض وتحديث الأرصدة']);
+                $msg = 'تم ترحيل سند القبض وتحديث الأرصدة' . ($fJeId ? ' (بما فيها قيد المسامحة)' : '');
+                echo json_encode(['ok' => true, 'msg' => $msg]);
             } catch (Exception $e) {
                 $pdo->rollBack();
                 throw $e;
             }
         }
 
-        // ── إلغاء سند ──
+        // ── إلغاء سند (يعكس قيد المسامحة المنفصل كمان لو موجود) ──
         elseif ($act === 'cancel_receipt') {
             requirePermission('finance.receipts', 'edit');
             $id = (int) $_POST['id'];
@@ -320,7 +413,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $pdo->beginTransaction();
             try {
-                // عكس التوزيع على الفواتير
+                // عكس التوزيع على الفواتير (نقد + مسامحة سوا — الجدول نفسه
+                // يخزّن الاثنين، والتأثير الرقمي على الفاتورة نفس الشي بغض
+                // النظر عن الطريقة. ملاحظة "تم التسامح" بالفاتورة تبقى كسجل
+                // تاريخي حتى بعد الإلغاء، بدل محاولة حذفها من النص)
                 $allocs = $pdo->prepare("SELECT * FROM `{$TRI}` WHERE receipt_id=?");
                 $allocs->execute([$id]);
                 foreach ($allocs->fetchAll() as $al) {
@@ -331,23 +427,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         WHERE id=?")
                         ->execute([$al['allocated_amount'], $al['allocated_amount'], $al['allocated_amount'], $al['invoice_id']]);
                 }
-                // عكس القيد المحاسبي إذا مرحّل
-                if ($rcp['journal_entry_id'] && $rcp['status'] === 'posted') {
-                    $items = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
-                    $items->execute([$rcp['journal_entry_id']]);
-                    foreach ($items->fetchAll() as $item) {
-                        $net = $item['debit'] - $item['credit'];
-                        $ownNet = ((float) $item['debit'] > 0) ? (float) $item['original_amount'] : -(float) $item['original_amount'];
-                        $pdo->prepare("UPDATE `{$TAC}` SET
-                                base_balance=base_balance-?,
-                                balance=balance-(CASE WHEN currency_id=? THEN ? ELSE ? END),
-                                updated_at=NOW()
-                            WHERE id=?")
-                            ->execute([$net, $item['currency_id'], $ownNet, $net, $item['account_id']]);
+
+                // عكس أي قيود مرتبطة (النقدي + المسامحة) — القيود الدرافت
+                // (لم تُرحَّل بعد) ما أثّرت على أي رصيد أصلاً، فبس تُعلَّم
+                // كملغاة بدون رياضيات عكسية؛ القيود المرحَّلة فقط تحتاج عكس
+                // فعلي للأرصدة.
+                $jeIds = [];
+                if ($rcp['journal_entry_id'])
+                    $jeIds[] = (int) $rcp['journal_entry_id'];
+                $fJeSt = $pdo->prepare("SELECT id FROM `{$TJE}` WHERE reference_type='receipt_forgiveness' AND reference_id=?");
+                $fJeSt->execute([$id]);
+                $fJeId = $fJeSt->fetchColumn();
+                if ($fJeId)
+                    $jeIds[] = (int) $fJeId;
+
+                foreach ($jeIds as $jeIdToCancel) {
+                    if ($rcp['status'] === 'posted') {
+                        $items = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
+                        $items->execute([$jeIdToCancel]);
+                        foreach ($items->fetchAll() as $item) {
+                            $net = $item['debit'] - $item['credit'];
+                            $ownNet = ((float) $item['debit'] > 0) ? (float) $item['original_amount'] : -(float) $item['original_amount'];
+                            $pdo->prepare("UPDATE `{$TAC}` SET
+                                    base_balance=base_balance-?,
+                                    balance=balance-(CASE WHEN currency_id=? THEN ? ELSE ? END),
+                                    updated_at=NOW()
+                                WHERE id=?")
+                                ->execute([$net, $item['currency_id'], $ownNet, $net, $item['account_id']]);
+                        }
                     }
                     $pdo->prepare("UPDATE `{$TJE}` SET status='cancelled',cancelled_at=NOW(),cancelled_by=? WHERE id=?")
-                        ->execute([$_SESSION['user_id'], $rcp['journal_entry_id']]);
+                        ->execute([$_SESSION['user_id'], $jeIdToCancel]);
                 }
+
                 $pdo->prepare("UPDATE `{$TR}` SET status='cancelled',updated_by=?,updated_at=NOW() WHERE id=?")
                     ->execute([$_SESSION['user_id'], $id]);
                 $pdo->commit();
@@ -371,6 +483,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 FROM `{$TRI}` ri JOIN `{$TSI}` si ON si.id=ri.invoice_id WHERE ri.receipt_id=?");
             $allocs->execute([$id]);
             $rcp['allocations'] = $allocs->fetchAll();
+
+            $fJe = $pdo->prepare("SELECT total_debit,status,description FROM `{$TJE}` WHERE reference_type='receipt_forgiveness' AND reference_id=?");
+            $fJe->execute([$id]);
+            $rcp['forgiveness'] = $fJe->fetch() ?: null;
+
             echo json_encode(['ok' => true, 'data' => $rcp]);
         } else
             throw new Exception('إجراء غير معروف');
@@ -613,7 +730,7 @@ $rcpNo = genReceiptNo($pdo, $TR);
 
         .inv-alloc-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 90px 80px 90px 80px;
+            grid-template-columns: minmax(0, 1fr) 90px 80px 78px 90px 80px;
             gap: 6px;
             align-items: center;
             padding: 6px 8px;
@@ -626,6 +743,38 @@ $rcpNo = genReceiptNo($pdo, $TR);
         .inv-alloc-row.selected {
             background: #eff6ff;
             border: 1px solid #bfdbfe
+        }
+
+        .inv-alloc-row.forgiven {
+            background: #fffbeb;
+            border: 1px solid #fde68a
+        }
+
+        .type-toggle {
+            display: flex;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+            font-size: .65rem
+        }
+
+        .type-toggle button {
+            flex: 1;
+            border: none;
+            background: #fff;
+            color: #64748b;
+            padding: 3px 2px;
+            cursor: pointer
+        }
+
+        .type-toggle button.active[data-type="cash"] {
+            background: #16a34a;
+            color: #fff
+        }
+
+        .type-toggle button.active[data-type="forgive"] {
+            background: #d97706;
+            color: #fff
         }
 
         .alloc-input {
@@ -985,12 +1134,16 @@ $rcpNo = genReceiptNo($pdo, $TR);
                             <span id="rAmtUsd" class="n fw-600 text-success ms-1"><?= $baseSym ?> 0.00</span>
                         </div>
                         <div>
-                            <span style="color:#64748b">موزَّع:</span>
+                            <span style="color:#64748b">موزَّع (نقد):</span>
                             <span id="rAllocated" class="n fw-600 text-primary ms-1"><?= $baseSym ?> 0.00</span>
                         </div>
                         <div>
                             <span style="color:#64748b">متبقي للتوزيع:</span>
                             <span id="rRemaining" class="n fw-600 ms-1"><?= $baseSym ?> 0.00</span>
+                        </div>
+                        <div id="rForgiveWrap" style="display:none">
+                            <span style="color:#d97706"><i class="bi bi-heart-fill me-1"></i>مسامحة:</span>
+                            <span id="rForgiven" class="n fw-600 ms-1" style="color:#d97706"><?= $baseSym ?> 0.00</span>
                         </div>
                     </div>
 
@@ -1123,13 +1276,18 @@ $rcpNo = genReceiptNo($pdo, $TR);
 
         function updateAllocBar(amtUsd) {
             if (!amtUsd) amtUsd = parseFloat(document.getElementById('rAmount').value || 0) / parseFloat(document.getElementById('rRate').value || 1);
-            let allocated = 0;
-            document.querySelectorAll('.alloc-input').forEach(inp => { allocated += parseFloat(inp.value || 0); });
+            let allocated = 0, forgiven = 0;
+            document.querySelectorAll('.alloc-input').forEach(inp => {
+                const v = parseFloat(inp.value || 0);
+                if (inp.dataset.type === 'forgive') forgiven += v; else allocated += v;
+            });
             const remaining = amtUsd - allocated;
             document.getElementById('rAllocated').textContent = BASE_SYM + ' ' + allocated.toFixed(2);
             const remEl = document.getElementById('rRemaining');
             remEl.textContent = BASE_SYM + ' ' + remaining.toFixed(2);
             remEl.style.color = remaining < -0.01 ? '#dc2626' : (remaining < 0.01 ? '#16a34a' : '#f59e0b');
+            document.getElementById('rForgiveWrap').style.display = forgiven > 0 ? '' : 'none';
+            document.getElementById('rForgiven').textContent = BASE_SYM + ' ' + forgiven.toFixed(2);
         }
 
         function loadCustomerInvoices() {
@@ -1139,7 +1297,7 @@ $rcpNo = genReceiptNo($pdo, $TR);
             post({ _action: 'get_customer_invoices', customer_id: custId }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
                 _invoices = d.data;
-                if (!_invoices.length) {
+                if (!_invoices.length && !d.extra) {
                     document.getElementById('invoicesList').innerHTML = '<div class="text-center text-muted py-3" style="font-size:.8rem"><i class="bi bi-check-circle-fill text-success me-1"></i>لا توجد فواتير مستحقة لهذا العميل</div>';
                     return;
                 }
@@ -1147,36 +1305,77 @@ $rcpNo = genReceiptNo($pdo, $TR);
                     + '<span style="font-size:.7rem;color:#64748b;font-weight:600">الفاتورة</span>'
                     + '<span style="font-size:.7rem;color:#64748b;font-weight:600;text-align:center">الإجمالي</span>'
                     + '<span style="font-size:.7rem;color:#dc2626;font-weight:600;text-align:center">المستحق</span>'
-                    + '<span style="font-size:.7rem;color:#16a34a;font-weight:600;text-align:center">توزيع ($)</span>'
+                    + '<span style="font-size:.7rem;color:#64748b;font-weight:600;text-align:center">النوع</span>'
+                    + '<span style="font-size:.7rem;color:#16a34a;font-weight:600;text-align:center">توزيع (' + BASE_SYM + ')</span>'
                     + '<span></span></div>';
-                _invoices.forEach(inv => {
-                    html += `<div class="inv-alloc-row" id="irow_${inv.id}">
+
+                function rowHtml(id, label, dateOrHint, total, balance) {
+                    return `<div class="inv-alloc-row" id="irow_${id}">
                 <div>
-                    <div class="fw-600 n" style="direction:ltr;font-size:.78rem;color:#1e3a8a">${inv.invoice_number}</div>
-                    <div style="color:#94a3b8;font-size:.68rem">${inv.invoice_date}</div>
+                    <div class="fw-600 n" style="direction:ltr;font-size:.78rem;color:#1e3a8a">${label}</div>
+                    <div style="color:#94a3b8;font-size:.68rem">${dateOrHint}</div>
                 </div>
-                <div class="n text-center">${BASE_SYM} ${parseFloat(inv.total_amount).toFixed(2)}</div>
-                <div class="n text-center text-danger fw-600">${BASE_SYM} ${parseFloat(inv.balance_amount).toFixed(2)}</div>
-                <input type="number" class="alloc-input" id="alloc_${inv.id}"
-                    data-invoice="${inv.id}" data-balance="${inv.balance_amount}"
+                <div class="n text-center">${total !== null ? BASE_SYM + ' ' + parseFloat(total).toFixed(2) : '—'}</div>
+                <div class="n text-center text-danger fw-600">${BASE_SYM} ${parseFloat(balance).toFixed(2)}</div>
+                <div class="type-toggle" id="type_${id}">
+                    <button type="button" data-type="cash" class="active" onclick="setAllocType(${id},'cash')">نقد</button>
+                    <button type="button" data-type="forgive" onclick="setAllocType(${id},'forgive')">مسامحة</button>
+                </div>
+                <input type="number" class="alloc-input" id="alloc_${id}"
+                    data-invoice="${id}" data-balance="${balance}" data-type="cash"
                     min="0" step="0.01" placeholder="0.00"
-                    oninput="onAllocInput(${inv.id})">
+                    oninput="onAllocInput(${id})">
                 <button class="btn btn-sm" style="border-radius:6px;border:1px solid #e2e8f0;font-size:.68rem;padding:2px 6px;color:#64748b"
-                    onclick="setFullBalance(${inv.id})">الكل</button>
+                    onclick="setFullBalance(${id})">الكل</button>
             </div>`;
+                }
+
+                _invoices.forEach(inv => {
+                    html += rowHtml(inv.id, inv.invoice_number, inv.invoice_date, inv.total_amount, inv.balance_amount);
                 });
+                if (d.extra) {
+                    html += rowHtml(0, 'رصيد سابق', 'غير مرتبط بفاتورة محدَّدة (يشمل الرصيد الافتتاحي)', null, d.extra.balance_amount);
+                }
                 document.getElementById('invoicesList').innerHTML = html;
             });
         }
 
+        // ── تبديل نوع التوزيع لكل صف: نقد (افتراضي) أو مسامحة ──
+        function setAllocType(invId, type) {
+            const wrap = document.getElementById('type_' + invId);
+            wrap.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+            const inp = document.getElementById('alloc_' + invId);
+            const prevType = inp.dataset.type;
+            inp.dataset.type = type;
+            // تبديل لـ"مسامحة": تعبئة كامل المستحق تلقائياً (أسرع للحالة
+            // الشائعة — مسامحة كامل المبلغ)، قابل للتعديل لمسامحة جزئية بعدين
+            if (type === 'forgive' && prevType !== 'forgive') {
+                inp.value = parseFloat(inp.dataset.balance).toFixed(2);
+            }
+            // رجوع لـ"نقد": تصفير القيمة (منعاً لأي مبلغ متروك بالغلط)
+            if (type === 'cash' && prevType === 'forgive') {
+                inp.value = '';
+            }
+            document.getElementById('irow_' + invId).classList.toggle('forgiven', type === 'forgive' && parseFloat(inp.value || 0) > 0);
+            document.getElementById('irow_' + invId).classList.toggle('selected', type === 'cash' && parseFloat(inp.value || 0) > 0);
+            updateAllocBar();
+        }
+
         function setFullBalance(invId) {
             const inp = document.getElementById('alloc_' + invId);
-            const amtUsd = parseFloat(document.getElementById('rAmount').value || 0) / parseFloat(document.getElementById('rRate').value || 1);
-            let allocated = 0;
-            document.querySelectorAll('.alloc-input').forEach(i => { if (parseInt(i.dataset.invoice) !== invId) allocated += parseFloat(i.value || 0); });
-            const remaining = amtUsd - allocated;
             const balance = parseFloat(inp.dataset.balance);
-            inp.value = Math.min(balance, remaining).toFixed(2);
+            if (inp.dataset.type === 'forgive') {
+                // المسامحة ما تنافس المبلغ النقدي — تاخد كامل المستحق مباشرة
+                inp.value = balance.toFixed(2);
+            } else {
+                const amtUsd = parseFloat(document.getElementById('rAmount').value || 0) / parseFloat(document.getElementById('rRate').value || 1);
+                let allocated = 0;
+                document.querySelectorAll('.alloc-input').forEach(i => {
+                    if (i.dataset.type === 'cash' && parseInt(i.dataset.invoice) !== invId) allocated += parseFloat(i.value || 0);
+                });
+                const remaining = amtUsd - allocated;
+                inp.value = Math.min(balance, remaining).toFixed(2);
+            }
             onAllocInput(invId);
         }
 
@@ -1184,7 +1383,10 @@ $rcpNo = genReceiptNo($pdo, $TR);
             const inp = document.getElementById('alloc_' + invId);
             const balance = parseFloat(inp.dataset.balance);
             if (parseFloat(inp.value) > balance) inp.value = balance.toFixed(2);
-            document.getElementById('irow_' + invId).classList.toggle('selected', parseFloat(inp.value || 0) > 0);
+            const hasAmt = parseFloat(inp.value || 0) > 0;
+            const isForgive = inp.dataset.type === 'forgive';
+            document.getElementById('irow_' + invId).classList.toggle('selected', hasAmt && !isForgive);
+            document.getElementById('irow_' + invId).classList.toggle('forgiven', hasAmt && isForgive);
             updateAllocBar();
         }
 
@@ -1192,7 +1394,7 @@ $rcpNo = genReceiptNo($pdo, $TR);
             const allocs = [];
             document.querySelectorAll('.alloc-input').forEach(inp => {
                 const amt = parseFloat(inp.value || 0);
-                if (amt > 0) allocs.push({ invoice_id: inp.dataset.invoice, amount: amt });
+                if (amt > 0) allocs.push({ invoice_id: inp.dataset.invoice, amount: amt, type: inp.dataset.type || 'cash' });
             });
             return allocs;
         }
@@ -1200,8 +1402,10 @@ $rcpNo = genReceiptNo($pdo, $TR);
         function saveReceipt(andPost) {
             const custId = document.getElementById('rCust').value;
             const amount = parseFloat(document.getElementById('rAmount').value || 0);
+            const allocations = getAllocations();
+            const hasForgive = allocations.some(a => a.type === 'forgive');
             if (!custId) { toast('يجب اختيار العميل', 'danger'); return; }
-            if (amount <= 0) { toast('يجب إدخال مبلغ أكبر من صفر', 'danger'); return; }
+            if (amount <= 0 && !hasForgive) { toast('يجب إدخال مبلغ أكبر من صفر، أو تحديد مسامحة على الأقل', 'danger'); return; }
 
             const btn = document.getElementById('btnSaveRcp');
             document.getElementById('saveRcpTxt').style.opacity = '0';
@@ -1218,20 +1422,21 @@ $rcpNo = genReceiptNo($pdo, $TR);
                 payment_method: document.getElementById('rMethod').value,
                 cash_account_id: document.getElementById('rCashAcc').value,
                 notes: document.getElementById('rNotes').value,
-                allocations: JSON.stringify(getAllocations()),
+                allocations: JSON.stringify(allocations),
             }).then(d => {
                 document.getElementById('saveRcpTxt').style.opacity = '1';
                 document.getElementById('saveRcpSpin').style.display = 'none';
                 btn.disabled = false;
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
-                const jeMsg = d.je_created ? ' (قيد محاسبي تلقائي ✅)' : '';
+                const jeMsg = d.je_created ? ' (قيد نقدي تلقائي ✅)' : '';
+                const fMsg = d.forgive_created ? ` — مسامحة ${BASE_SYM} ${parseFloat(d.forgiven).toFixed(2)} 🕊️` : '';
                 if (andPost) {
                     post({ _action: 'post_receipt', id: d.id }).then(p => {
-                        if (p.ok) { toast('✅ تم حفظ السند وترحيله — ' + d.no + jeMsg); rcpModal.hide(); setTimeout(() => location.reload(), 800); }
+                        if (p.ok) { toast('✅ تم حفظ السند وترحيله — ' + d.no + jeMsg + fMsg); rcpModal.hide(); setTimeout(() => location.reload(), 800); }
                         else toast(p.msg, 'danger');
                     });
                 } else {
-                    toast('✅ تم حفظ السند — ' + d.no + jeMsg); rcpModal.hide(); setTimeout(() => location.reload(), 800);
+                    toast('✅ تم حفظ السند — ' + d.no + jeMsg + fMsg); rcpModal.hide(); setTimeout(() => location.reload(), 800);
                 }
             });
         }
@@ -1267,6 +1472,10 @@ $rcpNo = genReceiptNo($pdo, $TR);
             ${r.currency !== BASE_CODE ? `<div class="n" style="font-size:.78rem;color:#94a3b8">= ${BASE_SYM} ${parseFloat(r.amount_base).toFixed(2)}</div>` : ''}
         </div>
         ${allocHtml ? `<div style="font-size:.78rem;font-weight:700;color:#1e293b;margin-bottom:6px"><i class="bi bi-receipt me-1"></i>توزيع على الفواتير</div>${allocHtml}` : '<div style="font-size:.78rem;color:#94a3b8;text-align:center">بدون توزيع على فواتير</div>'}
+        ${r.forgiveness ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;text-align:center;margin-top:10px">
+            <div style="font-size:.75rem;color:#92400e"><i class="bi bi-heart-fill me-1"></i>مبلغ مُسامَح فيه (${r.forgiveness.status === 'posted' ? 'مرحّل' : 'مسودة'})</div>
+            <div class="n fw-600" style="font-size:1.1rem;color:#d97706">${BASE_SYM} ${parseFloat(r.forgiveness.total_debit).toFixed(2)}</div>
+        </div>` : ''}
         ${r.notes ? `<div style="background:#f8fafc;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:.78rem;color:#64748b">${r.notes}</div>` : ''}
         ${r.status === 'draft' ? `<div style="margin-top:12px;display:flex;gap:8px">
             <button class="btn btn-sm fw-600" style="border-radius:8px;background:#16a34a;color:#fff;flex:1;font-size:.8rem"
