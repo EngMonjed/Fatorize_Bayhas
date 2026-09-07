@@ -74,8 +74,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             if ($limit > 0) {
                 // آخر N عملية: نجيبها بترتيب عكسي، وبعدين نرجّعها لترتيب زمني عادي
-                $st = $pdo->prepare("SELECT ji.*, je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
+                $st = $pdo->prepare("SELECT ji.*, cur.code AS cur_code, cur.symbol AS cur_sym,
+                    je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
+                    LEFT JOIN currencies cur ON cur.id = ji.currency_id
                     WHERE ji.account_id = ? AND je.status = 'posted'
                     ORDER BY je.entry_date DESC, je.id DESC LIMIT {$limit}");
                 $st->execute([$accId]);
@@ -102,8 +104,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $where .= " AND je.entry_date <= ?";
                     $params[] = $dateTo;
                 }
-                $st = $pdo->prepare("SELECT ji.*, je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
+                $st = $pdo->prepare("SELECT ji.*, cur.code AS cur_code, cur.symbol AS cur_sym,
+                    je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
+                    LEFT JOIN currencies cur ON cur.id = ji.currency_id
                     WHERE {$where}
                     ORDER BY je.entry_date, je.id");
                 $st->execute($params);
@@ -116,6 +120,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $r['running_balance'] = $running;
             }
             unset($r);
+
+            // ── الرصيد الفعلي حسب كل عملة حقيقية — محسوب مباشرة من
+            // original_amount (المبلغ الحقيقي بعملته الأصلية وقت كل
+            // عملية)، مش من تحويل base_amount لعملة الفرع. هذا مستقل عن
+            // فلتر التاريخ/العدد فوق — دايماً يعكس الصورة الكاملة الحالية. ──
+            $byCurrSt = $pdo->prepare("SELECT ji.currency_id, cur.code, cur.symbol,
+                    SUM(CASE WHEN ji.debit > 0 THEN ji.original_amount ELSE -ji.original_amount END) AS net
+                FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
+                LEFT JOIN currencies cur ON cur.id = ji.currency_id
+                WHERE ji.account_id = ? AND je.status = 'posted'
+                GROUP BY ji.currency_id, cur.code, cur.symbol
+                HAVING ABS(net) > 0.005");
+            $byCurrSt->execute([$accId]);
+            $byCurrency = $byCurrSt->fetchAll();
 
             echo json_encode([
                 'ok' => true,
@@ -133,7 +151,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 ],
                 'opening_balance' => $opening,
                 'movements' => $rows,
-                'closing_balance' => $running
+                'closing_balance' => $running,
+                'by_currency' => $byCurrency
             ]);
         } else
             throw new Exception('إجراء غير معروف');
@@ -339,6 +358,13 @@ if (!empty($_SESSION['branch_id'])) {
                 <?php endif; ?>
             </div>
 
+            <div id="byCurrencyWrap" class="mb-3" style="display:none">
+                <div style="font-size:.78rem;font-weight:700;color:#1e293b;margin-bottom:8px">
+                    <i class="bi bi-cash-stack me-1 text-primary"></i>الرصيد الفعلي حسب العملة الحقيقية (غير محوَّل)
+                </div>
+                <div class="row g-2" id="byCurrencyCards"></div>
+            </div>
+
             <div class="tbl-wrap mb-3 no-print">
                 <div class="tbl-hdr">
                     <label class="field-lbl mb-0">من</label>
@@ -414,25 +440,56 @@ if (!empty($_SESSION['branch_id'])) {
             }).then(d => {
                 if (!d.ok) { document.getElementById('stBody').innerHTML = ''; toast(d.msg); return; }
                 const sym = d.entity.acc_sym;
-                const rows = (d.movements || []).map(m => `
+
+                // ── الرصيد الفعلي حسب كل عملة حقيقية (مستقل عن فلتر
+                // التاريخ — دايماً الصورة الكاملة الحالية) ──
+                const byCurWrap = document.getElementById('byCurrencyWrap');
+                const byCur = d.by_currency || [];
+                if (byCur.length) {
+                    byCurWrap.style.display = '';
+                    document.getElementById('byCurrencyCards').innerHTML = byCur.map(c => `
+                <div class="col-6 col-md-3">
+                    <div class="kpi-card">
+                        <div class="kpi-val n" style="color:${c.net >= 0 ? '#16a34a' : '#dc2626'}">
+                            ${c.symbol || ''} ${fmt(c.net)}
+                        </div>
+                        <div class="kpi-lbl">${c.code || 'عملة غير معروفة'}</div>
+                    </div>
+                </div>`).join('');
+                } else {
+                    byCurWrap.style.display = 'none';
+                }
+
+                const rows = (d.movements || []).map(m => {
+                    const rsym = m.cur_sym || sym;
+                    const realDebit = m.debit > 0 ? rsym + ' ' + fmt(m.original_amount) : '—';
+                    const realCredit = m.credit > 0 ? rsym + ' ' + fmt(m.original_amount) : '—';
+                    return `
             <tr>
                 <td class="n" style="font-size:.78rem">${m.entry_date}</td>
                 <td class="n fw-600" style="direction:ltr;font-size:.78rem;color:#1e3a8a">${m.entry_number}</td>
                 <td style="font-size:.78rem">
                     ${REF_LABELS[m.reference_type] || ''} ${m.description || m.entry_desc || ''}
+                    ${m.cur_code ? `<span class="badge" style="font-size:.62rem;background:#eff6ff;color:#1e3a8a">${m.cur_code}</span>` : ''}
                 </td>
-                <td class="n text-end" style="font-size:.8rem;color:#1e3a8a">${m.debit > 0 ? sym + ' ' + fmt(m.debit) : '—'}</td>
-                <td class="n text-end" style="font-size:.8rem;color:#16a34a">${m.credit > 0 ? sym + ' ' + fmt(m.credit) : '—'}</td>
+                <td class="n text-end" style="font-size:.8rem;color:#1e3a8a">${realDebit}</td>
+                <td class="n text-end" style="font-size:.8rem;color:#16a34a">${realCredit}</td>
                 <td class="n text-end fw-600" style="font-size:.8rem;color:${m.running_balance >= 0 ? '#16a34a' : '#dc2626'}">${sym} ${fmt(m.running_balance)}</td>
-            </tr>`).join('');
+            </tr>`;
+                }).join('');
 
                 document.getElementById('stBody').innerHTML = `
+            <div class="alert alert-warning py-2 mb-2 no-print" style="font-size:.72rem;border-radius:8px">
+                <i class="bi bi-info-circle me-1"></i>
+                عمودا "مدين"/"دائن" بيعرضوا المبلغ الحقيقي بعملة كل عملية كما سُجِّلت فعلياً (مو محوَّلة) — عمود "الرصيد التراكمي" لوحده بعملة الفرع (<?= htmlspecialchars($baseSym) ?>) لأنه بيجمع عمليات بعملات مختلفة سوا.
+            </div>
             <div class="tbl-wrap">
                 <div class="table-responsive">
                     <table class="mtbl">
                         <thead>
                             <tr><th>التاريخ</th><th>رقم القيد</th><th>البيان</th>
-                                <th class="text-end">مدين</th><th class="text-end">دائن</th><th class="text-end">الرصيد التراكمي</th></tr>
+                                <th class="text-end">مدين (بعملته الحقيقية)</th><th class="text-end">دائن (بعملته الحقيقية)</th>
+                                <th class="text-end">الرصيد التراكمي (بعملة الفرع)</th></tr>
                         </thead>
                         <tbody>
                             ${rows || `<tr><td colspan="6" class="text-center text-muted py-4" style="font-size:.82rem">لا توجد حركة بهذه الفترة</td></tr>`}

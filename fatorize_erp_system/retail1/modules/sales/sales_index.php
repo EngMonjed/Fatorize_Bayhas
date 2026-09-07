@@ -34,12 +34,19 @@ $TAC = "account_charts_{$TS}";
 $TJE2 = "journal_entries_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
-// شركات الشحن (نفس جدول المشتريات العام)
+// شركات النقلية والشحن — من الجداول الجديدة الخاصة بالفرع (حسب
+// آلية الشحن/الجمارك — الجدول العام القديم shipping_carriers أُلغي)
 try {
-    $shippingCarriers = $pdo->query("SELECT id,name,contact_person,phone,payable_account_id
-        FROM shipping_carriers WHERE status='active' ORDER BY name")->fetchAll();
+    $transportCarriers = $pdo->query("SELECT id,name,contact_person,phone,payable_account_id
+        FROM `transport_carriers_{$TS}` WHERE status='active' ORDER BY name")->fetchAll();
 } catch (Exception $e) {
-    $shippingCarriers = [];
+    $transportCarriers = [];
+}
+try {
+    $shippingCarriersNew = $pdo->query("SELECT id,name,contact_person,phone,payable_account_id
+        FROM `shipping_carriers_{$TS}` WHERE status='active' ORDER BY name")->fetchAll();
+} catch (Exception $e) {
+    $shippingCarriersNew = [];
 }
 
 // المستودعات + العملات — لمودال التأكيد
@@ -47,27 +54,6 @@ try {
     $modalWarehouses = $pdo->query("SELECT id,name FROM `{$TW}` WHERE is_active=1 ORDER BY name")->fetchAll();
 } catch (Exception $e) {
     $modalWarehouses = [];
-}
-try {
-    $modalCurrencies = $pdo->query("SELECT id,code,symbol FROM currencies ORDER BY is_base DESC")->fetchAll();
-} catch (Exception $e) {
-    $modalCurrencies = [];
-}
-
-// حسابات الصندوق/البنك المتاحة للتحصيل — نفس منطق المشتريات بالضبط،
-// بس نستثني حسابات "الدفعات المقدمة من العملاء" (customers.prepaid_account_id)
-// بدل حسابات دفعاتنا المقدمة للموردين — لأنها بتنضاف لكل فاتورة على
-// حدة كخيار إضافي (حساب دفعة العميل بالذات)، مش ضمن القائمة العامة.
-try {
-    $cashAccounts = $pdo->query("SELECT ac.id,ac.code,ac.name,ac.balance,ac.base_balance,
-        c.code AS cur_code, c.symbol AS cur_sym
-        FROM `{$TAC}` ac
-        LEFT JOIN currencies c ON c.id=ac.currency_id
-        WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
-          AND ac.id NOT IN (SELECT prepaid_account_id FROM `{$TC}` WHERE prepaid_account_id IS NOT NULL)
-        ORDER BY ac.code")->fetchAll();
-} catch (Exception $e) {
-    $cashAccounts = [];
 }
 
 // رمز عملة الفرع الأساسية — لعرض المبالغ المحوَّلة بالجدول والإحصائيات
@@ -903,124 +889,63 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                             </div>
                         </div>
 
-                        <!-- ── بانر خصم تعجيل الدفع ── -->
+                        <!-- ── بانر خصم تعجيل الدفع (إعلامي بس — بلا زر تطبيق،
+                        بما إنه التحصيل صار خارج مودال التأكيد) ── -->
                         <div class="col-12" id="cSettleDiscBanner" style="display:none">
                             <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 14px;font-size:.8rem"
                                 class="d-flex align-items-center flex-wrap gap-2">
                                 <i class="bi bi-lightning-charge-fill" style="color:#16a34a"></i>
                                 <span id="cSettleDiscText" class="text-success fw-600"></span>
-                                <button type="button" class="btn btn-sm btn-success ms-auto" id="cSettleDiscBtn"
-                                    style="border-radius:8px;font-size:.75rem" onclick="applySettlementDiscount()">
-                                    <i class="bi bi-check2 me-1"></i>تحصيل كامل بالخصم الآن
-                                </button>
                             </div>
                         </div>
 
-                        <!-- ── تكلفة التوصيل للعميل ── -->
+                        <!-- ── النقلية والشحن والجمارك (ربط توثيقي بس — بلا أي
+                        مبلغ/قيد محاسبي هون؛ تكلفة النقل/الشحن تُسجَّل
+                        كمصروف منفصل بصفحة المصاريف والمستهلكات) ── -->
                         <div class="col-12">
                             <label class="form-label small fw-600 text-secondary mb-1">
-                                <i class="bi bi-truck me-1 text-warning"></i>تكلفة التوصيل للعميل
+                                <i class="bi bi-truck me-1 text-warning"></i>ربط النقلية والشحن (اختياري)
                             </label>
                             <div class="row g-2">
-                                <div class="col-12 col-md-4">
-                                    <div class="btn-group w-100 mb-2" role="group">
-                                        <input type="radio" class="btn-check" name="shippingOn" id="shipOnUs" value="us"
-                                            checked onchange="updateTotal()">
-                                        <label class="btn btn-sm btn-outline-danger fw-600" for="shipOnUs"
-                                            style="border-radius:8px 0 0 8px">
-                                            <i class="bi bi-arrow-down-circle me-1"></i>علينا (نتحمّلها كمصروف)
-                                        </label>
-                                        <input type="radio" class="btn-check" name="shippingOn" id="shipOnThem"
-                                            value="them" onchange="updateTotal()">
-                                        <label class="btn btn-sm btn-outline-success fw-600" for="shipOnThem"
-                                            style="border-radius:0 8px 8px 0">
-                                            <i class="bi bi-arrow-up-circle me-1"></i>على العميل (يدفعها هو)
-                                        </label>
-                                    </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small text-muted mb-1">شركة النقلية</label>
+                                    <select id="cTransportCarrier" class="form-select form-select-sm">
+                                        <option value="">— بلا نقلية —</option>
+                                        <?php foreach ($transportCarriers as $tc): ?>
+                                            <option value="<?= $tc['id'] ?>">
+                                                <?= htmlspecialchars($tc['name']) ?>
+                                                <?php if ($tc['contact_person']): ?>(<?= htmlspecialchars($tc['contact_person']) ?>)<?php endif; ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
                                 </div>
-                                <div class="col-7 col-md-4" id="shippingAmtWrap">
-                                    <div class="input-group input-group-sm">
-                                        <input type="number" id="cShipping" class="form-control" placeholder="0.00"
-                                            min="0" step="0.01" oninput="updateTotal()">
-                                        <select id="cShippingCur" class="form-select" style="max-width:85px"
-                                            onchange="onShippingCurChange()">
-                                            <?php foreach ($modalCurrencies as $cur): ?>
-                                                <option value="<?= $cur['code'] ?>"><?= $cur['code'] ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small text-muted mb-1">شركة الشحن</label>
+                                    <select id="cShippingCarrierNew" class="form-select form-select-sm">
+                                        <option value="">— بلا شركة شحن —</option>
+                                        <?php foreach ($shippingCarriersNew as $sc): ?>
+                                            <option value="<?= $sc['id'] ?>">
+                                                <?= htmlspecialchars($sc['name']) ?>
+                                                <?php if ($sc['contact_person']): ?>(<?= htmlspecialchars($sc['contact_person']) ?>)<?php endif; ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
                                 </div>
-                                <div class="col-12 col-md-4" id="shippingRateWrap" style="display:none">
-                                    <div class="input-group input-group-sm">
-                                        <span class="input-group-text" style="font-size:.72rem" id="shippingRateLbl">1
-                                            ? =</span>
-                                        <input type="number" id="cShippingRate" class="form-control" min="0.0001"
-                                            step="0.0001" placeholder="سعر الصرف" oninput="updateTotal()">
-                                    </div>
-                                    <div class="form-text" style="font-size:.68rem">
-                                        عملة التوصيل مختلفة عن عملة الفاتورة وعملة الفرع — أدخل سعر الصرف الفعلي
-                                        وقت هالشحنة يدوياً
-                                    </div>
-                                </div>
-                                <div class="col-5 col-md-4" id="shippingAmtWrap2">
-                                    <div class="input-group input-group-sm">
-                                        <select id="cShippingCarrier" class="form-select form-select-sm"
-                                            onchange="onCarrierChange(this)">
-                                            <option value="">— شركة التوصيل —</option>
-                                            <?php foreach ($shippingCarriers as $sc): ?>
-                                                <option value="<?= $sc['id'] ?>"
-                                                    data-name="<?= htmlspecialchars($sc['name'], ENT_QUOTES) ?>"
-                                                    data-phone="<?= htmlspecialchars($sc['phone'] ?? '', ENT_QUOTES) ?>"
-                                                    data-payable-id="<?= $sc['payable_account_id'] ?? 0 ?>">
-                                                    <?= htmlspecialchars($sc['name']) ?>
-                                                    <?php if ($sc['contact_person']): ?>(<?= htmlspecialchars($sc['contact_person']) ?>)<?php endif; ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                            <?php if (empty($shippingCarriers)): ?>
-                                                <option value="" disabled>لا توجد شركات — أضف من الإعدادات</option>
-                                            <?php endif; ?>
-                                        </select>
-                                        <a href="<?= BASE_PATH ?>/retail1/modules/accounting/shipping_carriers.php"
-                                            target="_blank" class="btn btn-sm btn-outline-warning"
-                                            style="padding:3px 7px" title="إدارة شركات التوصيل">
-                                            <i class="bi bi-box-arrow-up-right"></i>
-                                        </a>
-                                    </div>
-                                    <input type="hidden" id="cShippingDesc">
-                                    <input type="hidden" id="cShippingPayableId">
-                                </div>
-                                <!-- طريقة دفع التوصيل -->
-                                <div class="col-12" id="shippingPayWrap">
-                                    <div class="btn-group w-100" role="group">
-                                        <input type="radio" class="btn-check" name="shippingPay" id="shipPayCash"
-                                            value="cash" checked onchange="onShipPayChange()">
-                                        <label class="btn btn-sm btn-outline-success fw-600" for="shipPayCash"
-                                            style="border-radius:8px 0 0 8px;font-size:.75rem">
-                                            <i class="bi bi-cash me-1"></i>دفع نقدي (يُخصم من الصندوق)
-                                        </label>
-                                        <input type="radio" class="btn-check" name="shippingPay" id="shipPayCredit"
-                                            value="credit" onchange="onShipPayChange()">
-                                        <label class="btn btn-sm btn-outline-warning fw-600" for="shipPayCredit"
-                                            style="border-radius:0 8px 8px 0;font-size:.75rem">
-                                            <i class="bi bi-clock-history me-1"></i>آجل (ذمة شركة التوصيل)
+                                <div class="col-12">
+                                    <div class="form-check">
+                                        <input type="checkbox" class="form-check-input" id="cHasCustoms"
+                                            onchange="document.getElementById('customsCostWrap').style.display=this.checked?'':'none';updateTotal()">
+                                        <label class="form-check-label small fw-600" for="cHasCustoms">
+                                            <i class="bi bi-file-earmark-text me-1 text-danger"></i>يوجد جمارك؟
                                         </label>
                                     </div>
-                                    <div id="shipCashAccWrap" class="mt-1">
-                                        <select id="cShipCashAccount" class="form-select form-select-sm">
-                                            <option value="">— حساب الصندوق —</option>
-                                            <?php foreach ($cashAccounts as $ca): ?>
-                                                <option value="<?= $ca['id'] ?>"
-                                                    data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>">
-                                                    <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                                    (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div id="shipCreditNote" class="mt-1"
-                                        style="display:none;font-size:.72rem;color:#d97706;background:#fffbeb;border-radius:6px;padding:4px 8px">
-                                        <i class="bi bi-info-circle me-1"></i>
-                                        سيُسجَّل المبلغ كذمة لشركة التوصيل بشجرة الحسابات
+                                    <div id="customsCostWrap" style="display:none" class="mt-1">
+                                        <input type="number" id="cCustomsCost" class="form-control form-control-sm"
+                                            min="0" step="0.01" placeholder="أجور الجمارك" oninput="updateTotal()">
+                                        <div class="form-text" style="font-size:.68rem">
+                                            بيانات فقط — ما بتُضاف لإجمالي الفاتورة، وما بترحّل أي قيد تلقائي
+                                            (تُسوَّى لاحقاً من صفحات المقبوضات/المدفوعات العامة)
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1044,70 +969,6 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                                     التحميل...</span>
                             </div>
                             <input type="hidden" id="cWarehouse">
-                        </div>
-
-                        <!-- ── تحصيل جزئي ── -->
-                        <div class="col-12">
-                            <label class="form-label small fw-600 text-secondary mb-1">
-                                <i class="bi bi-cash me-1 text-success"></i>تحصيل جزئي عند التسليم
-                                <span style="font-size:.68rem;color:#94a3b8">(اختياري)</span>
-                            </label>
-                            <div class="row g-2">
-                                <div class="col-md-5">
-                                    <div class="input-group input-group-sm">
-                                        <input type="number" id="cPaidAmt" class="form-control fw-600"
-                                            placeholder="0.00" min="0" step="0.01" oninput="onPaidChange()">
-                                        <select id="cPaidCur" class="form-select" style="max-width:85px"
-                                            onchange="_cPaidRateTouched=false; onPaidChange()">
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="col-md-7" id="cPaidRateWrap" style="display:none">
-                                    <div class="input-group input-group-sm">
-                                        <span class="input-group-text" style="font-size:.73rem" id="cPaidRateLabel">1 ?
-                                            =</span>
-                                        <input type="number" id="cPaidRate" class="form-control fw-600" min="0.000001"
-                                            step="0.0001" dir="ltr" oninput="_cPaidRateTouched=true; updateTotal()">
-                                        <span class="input-group-text" id="cPaidRateSuffix"
-                                            style="font-size:.73rem"></span>
-                                        <button type="button" class="btn btn-sm btn-outline-success"
-                                            style="border-radius:0 7px 7px 0" onclick="fetchPaidRate()"
-                                            title="تحديث السعر من جدول العملات">
-                                            <i class="bi bi-arrow-repeat" id="paidRateIcon"></i>
-                                        </button>
-                                    </div>
-                                    <div id="cPaidRateHint" style="font-size:.7rem;color:#64748b;margin-top:3px"></div>
-                                </div>
-                                <div class="col-12" id="cPaidConvertWrap" style="display:none">
-                                    <div style="background:#f0fdf4;border-radius:7px;padding:5px 10px;font-size:.78rem">
-                                        <i class="bi bi-arrow-left-right me-1 text-success"></i>
-                                        المبلغ بعملة الفاتورة:
-                                        <strong id="cPaidConverted" style="color:#16a34a">—</strong>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- حساب التحصيل -->
-                        <div class="col-md-6">
-                            <label class="form-label small fw-600 text-secondary mb-1">
-                                <i class="bi bi-safe me-1"></i>حساب التحصيل (صندوق / بنك / دفعة مقدمة من العميل)
-                            </label>
-                            <select id="cCashAccount" class="form-select form-select-sm"
-                                onchange="onCashAccountChange()">
-                                <option value="">— اختر حساب التحصيل —</option>
-                                <?php foreach ($cashAccounts as $ca): ?>
-                                    <option value="<?= $ca['id'] ?>"
-                                        data-cur="<?= htmlspecialchars($ca['cur_code'] ?? '') ?>"
-                                        data-balance="<?= (float) $ca['balance'] ?>"
-                                        data-sym="<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>" data-type="regular">
-                                        <?= htmlspecialchars($ca['code'] . ' — ' . $ca['name']) ?>
-                                        (<?= htmlspecialchars($ca['cur_sym'] ?? '') ?>)
-                                    </option>
-                                <?php endforeach; ?>
-                                <!-- خيار حساب الدفعة المقدمة الخاص بعميل هالفاتورة ينضاف ديناميكياً -->
-                            </select>
-                            <div id="cCashAccBalanceHint" style="font-size:.72rem;margin-top:4px"></div>
                         </div>
 
                         <!-- صورة الفاتورة -->
@@ -1145,18 +1006,6 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                                 <div id="cTotSummary">
                                     <!-- يتم بناؤه ديناميكياً في updateTotal() -->
                                 </div>
-                            </div>
-                        </div>
-
-                        <!-- تسوية فروقات التقريب الصغيرة -->
-                        <div class="col-12">
-                            <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="cExactSettle">
-                                <label class="form-check-label" for="cExactSettle"
-                                    style="font-size:.78rem;cursor:pointer">
-                                    <i class="bi bi-check2-circle me-1 text-success"></i>
-                                    اعتبار الفاتورة محصَّلة بالكامل (تسوية فروقات التقريب الصغيرة تلقائياً، حتى ٠.٠١$)
-                                </label>
                             </div>
                         </div>
 
@@ -1242,23 +1091,19 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 // استثناء: بتختلف فعلياً حسب تكلفة كل مقاس بذاته، فتضل تُجمع.
                 const grpMap = {};
                 (inv.items || []).forEach(it => {
-                    // ⚠ group_key مصدر الحقيقة الوحيد للتجميع — الألوان
-                    // المختلفة بنفس الكروب تندمج بصف واحد الآن (قرار
-                    // جديد)، بلا فصل باللون بالمفتاح.
-                    const k = `${it.product_id || it.item_name}_${it.group_key}`;
+                    // ⚠ قرار مُراجَع: الألوان تنفصل بصف مستقل من جديد
+                    // (مو مدموجة) — group_key لسا مصدر الحقيقة الوحيد
+                    // لدمج المقاسات المختلفة بنفس اللون، بس اللون نفسه
+                    // صار جزء من مفتاح الصف.
+                    const k = `${it.product_id || it.item_name}_${it.group_key}_${it.color_id || it.color || ''}`;
                     if (!grpMap[k]) grpMap[k] = {
                         item_name: it.item_name, model_number: it.model_number || '—',
-                        unit_price: parseFloat(it.unit_price), colors: [], stocks: [],
+                        unit_price: parseFloat(it.unit_price), color: it.color || '—', stock: it.stock_qty != null ? it.stock_qty : '—',
                         qty: parseFloat(it.quantity), total: 0,
                         sizes: [], cost_total: 0
                     };
                     grpMap[k].cost_total += (parseFloat(it.cost_price_base || 0) * parseFloat(it.quantity));
                     if (it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
-                    const colorLabel = it.color || '—';
-                    if (!grpMap[k].colors.includes(colorLabel)) {
-                        grpMap[k].colors.push(colorLabel);
-                        grpMap[k].stocks.push(it.stock_qty != null ? it.stock_qty : '—');
-                    }
                 });
                 Object.values(grpMap).forEach(g => {g.total = g.qty * g.unit_price * (g.sizes.length || 1);});
                 const grpRows = Object.values(grpMap).sort((a, b) => a.unit_price - b.unit_price);
@@ -1279,8 +1124,8 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 <td><div class="fw-600" style="font-size:.8rem">${g.item_name}</div></td>
                 <td style="font-size:.73rem;color:#64748b" dir="ltr">${g.model_number}</td>
                 <td>${badge}<div style="font-size:.72rem;font-weight:600;color:#334155;margin-top:2px">${g.sizes.join(' · ')}</div></td>
-                <td class="text-center" style="font-size:.73rem;color:#16a34a">${g.colors.join(' · ')}</td>
-                <td class="n text-center" style="color:#7c3aed;font-size:.73rem" dir="ltr">${g.stocks.join(' · ')}</td>
+                <td class="text-center" style="font-size:.73rem;color:#16a34a">${g.color}</td>
+                <td class="n text-center" style="color:#7c3aed;font-size:.73rem" dir="ltr">${g.stock}</td>
                 <td class="n text-center fw-600">${g.qty.toFixed(0)}</td>
                 <td class="n text-center">${symDoc} ${g.unit_price.toFixed(4)}</td>
                 <td class="n text-end fw-600">${symDoc} ${g.total.toFixed(2)}</td>
@@ -1347,8 +1192,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
         }
 
         // ── تأكيد ──
-        let _cId = 0, _cTotal = 0, _cCurSym = '$', _cInvoiceData = null, _cSettleDiscAmt = 0;
-        let _cPaidRateTouched = false;
+        let _cId = 0, _cTotal = 0, _cCurSym = '$', _cInvoiceData = null;
 
         function float(v) {return parseFloat(v) || 0;}
 
@@ -1366,19 +1210,14 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             document.getElementById('cCurSym').value = sym;
             document.getElementById('cInvTotal').value = total;
             document.getElementById('cReceiveDate').value = '<?= date('Y-m-d') ?>';
-            document.getElementById('cShipping').value = '';
-            document.getElementById('cShippingCarrier').value = '';
-            document.getElementById('cShippingDesc').value = '';
-            document.getElementById('cShippingPayableId').value = '';
-            document.getElementById('shippingPayWrap').style.display = 'none';
-            document.getElementById('shipCreditNote').style.display = 'none';
-            document.getElementById('cShipCashAccount').value = '';
-            document.getElementById('cPaidAmt').value = '';
+            document.getElementById('cTransportCarrier').value = '';
+            document.getElementById('cShippingCarrierNew').value = '';
+            document.getElementById('cHasCustoms').checked = false;
+            document.getElementById('cCustomsCost').value = '';
+            document.getElementById('customsCostWrap').style.display = 'none';
+            document.getElementById('customsCostWrap').style.display = 'none';
             document.getElementById('cNotes').value = '';
             document.getElementById('cWarehouse').value = '';
-            document.getElementById('cCashAccount').value = '';
-            document.getElementById('cExactSettle').checked = false;
-            _cPaidRateTouched = false;
             document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="9" class="text-center p-3"><span class="spinner-border spinner-border-sm"></span></td></tr>';
             clearImg();
             confirmModal.show();
@@ -1388,15 +1227,6 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 const p = d.data;
                 _cInvoiceData = p;
 
-                // ⚠ عملة التحصيل محصورة بخيارين بس: عملة الفاتورة نفسها،
-                // أو عملة الفرع الأساسية — نفس قرار المشتريات بالضبط.
-                (function populatePaidCurOptions() {
-                    const sel = document.getElementById('cPaidCur');
-                    const invC = p.currency_code || 'USD';
-                    const baseC = p.base_currency_code || 'USD';
-                    const opts = invC === baseC ? [invC] : [invC, baseC];
-                    sel.innerHTML = opts.map(c => `<option value="${c}">${c}</option>`).join('');
-                })();
                 const sym2 = p.currency_symbol || '$';
                 const cur = p.currency_code || 'USD';
                 const fmt = n => new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
@@ -1409,18 +1239,14 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 // مفصولة بعد الآن). group_key مصدر الحقيقة الوحيد للتجميع.
                 const groups = {};
                 (p.items || []).forEach(it => {
-                    const key = (it.product_id || it.item_name || it.id) + '_' + it.group_key;
+                    // ⚠ قرار مُراجَع: الألوان تنفصل بصف مستقل من جديد.
+                    const key = (it.product_id || it.item_name || it.id) + '_' + it.group_key + '_' + (it.color_id || it.color || '');
                     if (!groups[key]) groups[key] = {
                         name: it.item_name || ('بند #' + it.id), model_number: it.model_number || '—',
-                        sizes: [], colors: [], stocks: [],
+                        sizes: [], color: it.color || '—', stock: it.stock_qty != null ? it.stock_qty : '—',
                         qty: parseFloat(it.quantity), unit: parseFloat(it.unit_price), total: 0
                     };
                     if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
-                    const colorLabel = it.color || '—';
-                    if (!groups[key].colors.includes(colorLabel)) {
-                        groups[key].colors.push(colorLabel);
-                        groups[key].stocks.push(it.stock_qty != null ? it.stock_qty : '—');
-                    }
                 });
                 Object.values(groups).forEach(g => {g.total = g.qty * g.unit * (g.sizes.length || 1);});
                 let rows = '', i = 1;
@@ -1430,8 +1256,8 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 <td style="padding:5px 10px;font-weight:600">${g.name}</td>
                 <td style="padding:5px 10px;text-align:center;font-size:.73rem;color:#64748b" dir="ltr">${g.model_number}</td>
                 <td style="padding:5px 10px;text-align:center;font-size:.73rem">${g.sizes.join(' · ') || '—'}</td>
-                <td style="padding:5px 10px;text-align:center;color:#16a34a;font-size:.73rem">${g.colors.join(' · ')}</td>
-                <td style="padding:5px 10px;text-align:center;color:#7c3aed;font-size:.73rem" dir="ltr">${g.stocks.join(' · ')}</td>
+                <td style="padding:5px 10px;text-align:center;color:#16a34a;font-size:.73rem">${g.color}</td>
+                <td style="padding:5px 10px;text-align:center;color:#7c3aed;font-size:.73rem" dir="ltr">${g.stock}</td>
                 <td style="padding:5px 10px;text-align:center">${g.qty}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr">${sym2} ${fmt(g.unit)}</td>
                 <td style="padding:5px 10px;text-align:left;direction:ltr;font-weight:600">${sym2} ${fmt(g.total)}</td>
@@ -1450,21 +1276,19 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 _cCurSym = sym2; _cTotal = parseFloat(p.final_amount) || 0;
                 updateTotal();
 
-                // ── خصم تعجيل الدفع (عرض/اقتراح بس — القرار النهائي بالسيرفر وقت التأكيد) ──
+                // ── خصم تعجيل الدفع (بانر إعلامي بس — التحصيل الفعلي صار
+                // خارج مودال التأكيد كلياً، عبر صفحات المقبوضات العامة) ──
                 const settlePct = parseFloat(p.settlement_discount_pct || 0);
                 const banner = document.getElementById('cSettleDiscBanner');
-                _cSettleDiscAmt = 0;
                 if (settlePct > 0 && p.due_date) {
                     const today = new Date().toISOString().slice(0, 10);
                     const stillEligible = today <= p.due_date;
-                    _cSettleDiscAmt = parseFloat(p.final_amount) * settlePct / 100;
-                    const discountedTotal = parseFloat(p.final_amount) - _cSettleDiscAmt;
+                    const discountedTotal = parseFloat(p.final_amount) * (1 - settlePct / 100);
                     if (stillEligible) {
                         banner.style.display = '';
                         document.getElementById('cSettleDiscText').innerHTML =
-                            `خصم تعجيل دفع ${settlePct}% متاح لو حصّلت الفاتورة كاملة اليوم (قبل ${p.due_date}) —
+                            `خصم تعجيل دفع ${settlePct}% متاح لو حصّلت الفاتورة كاملة قبل ${p.due_date} —
                              المبلغ بعد الخصم: <strong>${sym2} ${fmt(discountedTotal)}</strong> بدل ${sym2} ${fmt(p.final_amount)}`;
-                        document.getElementById('cSettleDiscBtn').style.display = '';
                     } else {
                         banner.style.display = '';
                         banner.querySelector('div').style.background = '#fef2f2';
@@ -1472,220 +1296,46 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                         document.getElementById('cSettleDiscText').className = 'text-danger fw-600';
                         document.getElementById('cSettleDiscText').innerHTML =
                             `فات موعد خصم تعجيل الدفع (${settlePct}%) — كان لازم التحصيل قبل ${p.due_date}. المبلغ الكامل مستحق الآن.`;
-                        document.getElementById('cSettleDiscBtn').style.display = 'none';
                     }
                 } else {
                     banner.style.display = 'none';
                 }
-
-                // إضافة خيار حساب الدفعة المقدمة الخاص بعميل هالفاتورة بالتحديد
-                const cashSel = document.getElementById('cCashAccount');
-                cashSel.querySelectorAll('option[data-type="advance"]').forEach(o => o.remove());
-                if (p.advance_account) {
-                    const av = p.advance_account;
-                    const opt = document.createElement('option');
-                    opt.value = av.id;
-                    opt.dataset.cur = av.cur_code || '';
-                    opt.dataset.balance = av.balance || 0;
-                    opt.dataset.sym = av.cur_sym || '';
-                    opt.dataset.type = 'advance';
-                    opt.textContent = `🔸 دفعة مقدمة — ${p.customer_name} (الرصيد: ${Number(av.balance).toFixed(2)} ${av.cur_sym || ''})`;
-                    cashSel.appendChild(opt);
-                }
-                document.getElementById('cCashAccBalanceHint').innerHTML = '';
-
-                onShippingCurChange();
-                filterAccountsByCurrency('cCashAccount', document.getElementById('cPaidCur').value);
             });
-        }
-
-        function applySettlementDiscount() {
-            if (!_cInvoiceData || !_cSettleDiscAmt) return;
-            const invCur = _cInvoiceData.currency_code || 'USD';
-            document.getElementById('cPaidCur').value = invCur;
-            const discountedTotal = parseFloat(_cInvoiceData.final_amount) - _cSettleDiscAmt;
-            document.getElementById('cPaidAmt').value = discountedTotal.toFixed(2);
-            onPaidChange();
-            document.getElementById('cExactSettle').checked = true;
-            toast('✅ تم تعبئة المبلغ بعد خصم التعجيل — بقي تختار حساب التحصيل وتضغط تأكيد اليوم بالذات');
-        }
-
-        function onCashAccountChange() {
-            const sel = document.getElementById('cCashAccount');
-            const opt = sel.options[sel.selectedIndex];
-            const hint = document.getElementById('cCashAccBalanceHint');
-            if (!opt || !opt.value) {hint.innerHTML = ''; return;}
-
-            const balance = parseFloat(opt.dataset.balance || 0);
-            const sym = opt.dataset.sym || '';
-            const isAdvance = opt.dataset.type === 'advance';
-            const paidAmt = parseFloat(document.getElementById('cPaidAmt')?.value || 0);
-
-            if (isAdvance && paidAmt > 0 && paidAmt > balance) {
-                hint.innerHTML = `<i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>
-                    <span class="text-danger fw-600">رصيد الدفعة المقدمة من العميل صفر أو غير كافٍ
-                    (المتاح: ${balance.toFixed(2)} ${sym}) — قلّل المبلغ أو اختر حساب صندوق/بنك للباقي</span>`;
-                return;
-            }
-            let color, icon;
-            if (balance > 0) {color = '#16a34a'; icon = 'bi-wallet2';}
-            else if (balance < 0) {color = '#dc2626'; icon = 'bi-exclamation-circle';}
-            else {color = '#ca8a04'; icon = 'bi-dash-circle';}
-            hint.innerHTML = `<i class="bi ${icon} me-1" style="color:${color}"></i>
-                الرصيد الحالي: <strong style="color:${color}">${balance.toFixed(2)} ${sym}</strong>`;
-        }
-
-        function filterAccountsByCurrency(selectId, currencyCode) {
-            const sel = document.getElementById(selectId);
-            if (!sel) return;
-            let stillValid = false;
-            Array.from(sel.options).forEach(opt => {
-                if (!opt.value) {opt.style.display = ''; return;}
-                const show = !currencyCode || opt.dataset.cur === currencyCode;
-                opt.style.display = show ? '' : 'none';
-                if (show && opt.value === sel.value) stillValid = true;
-            });
-            if (!stillValid) sel.value = '';
-        }
-
-        function onShippingCurChange() {
-            filterAccountsByCurrency('cShipCashAccount', document.getElementById('cShippingCur').value);
-            const shipCur = document.getElementById('cShippingCur').value;
-            const invCur = _cInvoiceData?.currency_code || 'USD';
-            const baseCur = _cInvoiceData?.base_currency_code || 'USD';
-            const wrap = document.getElementById('shippingRateWrap');
-            const isThirdCur = shipCur && shipCur !== invCur && shipCur !== baseCur;
-            wrap.style.display = isThirdCur ? '' : 'none';
-            if (isThirdCur) document.getElementById('shippingRateLbl').textContent = `1 ${baseCur} =`;
-            updateTotal();
-        }
-
-        function onPaidChange() {
-            const paidCur = document.getElementById('cPaidCur').value;
-            const invCur = _cInvoiceData?.currency_code || 'USD';
-            const baseCur = _cInvoiceData?.base_currency_code || 'USD';
-            const rateWrap = document.getElementById('cPaidRateWrap');
-            const convertWrap = document.getElementById('cPaidConvertWrap');
-            filterAccountsByCurrency('cCashAccount', paidCur);
-            if (paidCur && paidCur !== invCur) {
-                rateWrap.style.display = '';
-                document.getElementById('cPaidRateLabel').textContent = '1 ' + baseCur + ' =';
-                document.getElementById('cPaidRateSuffix').textContent = invCur;
-                if (!_cPaidRateTouched) {
-                    document.getElementById('cPaidRate').value = (parseFloat(_cInvoiceData?.exchange_rate) || 1).toFixed(4);
-                }
-                convertWrap.style.display = '';
-            } else {
-                rateWrap.style.display = 'none';
-                convertWrap.style.display = 'none';
-                document.getElementById('cPaidRate').value = '1';
-            }
-            updateTotal();
-            onCashAccountChange();
-        }
-
-        async function fetchPaidRate() {
-            const invCur = _cInvoiceData?.currency_code || 'USD';
-            const baseCur = _cInvoiceData?.base_currency_code || 'USD';
-            const icon = document.getElementById('paidRateIcon');
-            icon.classList.add('spin');
-            try {
-                const d = await post({_action: 'get_currency_rate', from: baseCur, to: invCur});
-                if (d.ok && d.rate) {
-                    document.getElementById('cPaidRate').value = d.rate.toFixed(4);
-                    _cPaidRateTouched = false;
-                    document.getElementById('cPaidRateHint').innerHTML =
-                        '<i class="bi bi-check-circle-fill text-success me-1"></i>1 ' + baseCur + ' = ' + d.rate.toFixed(4) + ' ' + invCur + ' (من جدول العملات — قابل للتعديل يدوياً)';
-                    updateTotal();
-                } else {
-                    document.getElementById('cPaidRateHint').innerHTML =
-                        '<i class="bi bi-exclamation-triangle text-warning me-1"></i>' + (d.msg || 'غير متوفر') + ' — أدخل السعر يدوياً';
-                }
-            } catch (e) {
-                document.getElementById('cPaidRateHint').innerHTML =
-                    '<i class="bi bi-wifi-off text-danger me-1"></i>تعذّر الجلب — أدخل السعر يدوياً';
-            } finally {icon.classList.remove('spin');}
-        }
-
-        function onCarrierChange(sel) {
-            const opt = sel.options[sel.selectedIndex];
-            document.getElementById('cShippingDesc').value = opt.value ? opt.dataset.name : '';
-            document.getElementById('cShippingPayableId').value = opt.value ? (opt.dataset.payableId || '') : '';
-            const hasShip = parseFloat(document.getElementById('cShipping').value) || 0;
-            document.getElementById('shippingPayWrap').style.display =
-                (opt.value && hasShip > 0 && document.querySelector('input[name="shippingOn"]:checked')?.value === 'us') ? '' : 'none';
-        }
-
-        function onShipPayChange() {
-            const val = document.querySelector('input[name="shippingPay"]:checked')?.value || 'cash';
-            document.getElementById('shipCashAccWrap').style.display = val === 'cash' ? '' : 'none';
-            document.getElementById('shipCreditNote').style.display = val === 'credit' ? '' : 'none';
         }
 
         function updateTotal() {
-            const shipOn = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
-            const ship = parseFloat(document.getElementById('cShipping').value) || 0;
-            const shipCur = document.getElementById('cShippingCur').value || 'USD';
             const invCur = _cInvoiceData?.currency_code || 'USD';
             const invSym = _cInvoiceData?.currency_symbol || '$';
             const fmt = n => new Intl.NumberFormat('en').format(Math.abs(parseFloat(n || 0)).toFixed(2));
 
-            const paidAmt = parseFloat(document.getElementById('cPaidAmt').value) || 0;
-            const paidCur = document.getElementById('cPaidCur').value || invCur;
-            const paidRate = parseFloat(document.getElementById('cPaidRate').value) || 1;
-            const paidInInvCur = paidCur === invCur ? paidAmt : paidAmt * paidRate;
-
-            if (paidAmt > 0 && paidCur !== invCur) {
-                document.getElementById('cPaidConverted').textContent =
-                    invSym + ' ' + new Intl.NumberFormat('en').format(paidInInvCur.toFixed(2));
-            }
-
-            const totals = {};
-            if (!totals[invCur]) totals[invCur] = {sym: invSym, inv: 0, paid: 0};
-            totals[invCur].inv = _cTotal;
-            if (paidAmt > 0) totals[invCur].paid = paidInInvCur;
-
-            let html = '';
-            Object.entries(totals).forEach(([cur, t]) => {
-                const balance = t.inv - t.paid;
-                if (!t.inv) return;
-                html += `<div style="border:1px solid #d1fae5;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fff">
+            let html = `<div style="border:1px solid #d1fae5;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fff">
             <div style="font-size:.72rem;font-weight:700;color:#065f46;margin-bottom:4px">
-                <i class="bi bi-currency-exchange me-1"></i>عملة: ${cur}
+                <i class="bi bi-currency-exchange me-1"></i>عملة: ${invCur}
             </div>
-            <div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
-            <span class="text-muted">إجمالي الفاتورة</span>
-            <span class="fw-600">${t.sym} ${fmt(t.inv)}</span></div>`;
-                if (t.paid) html += `<div class="d-flex justify-content-between" style="font-size:.79rem;margin-bottom:2px">
-            <span class="text-muted">— المحصَّل الآن</span>
-            <span class="fw-600 text-success">${t.sym} ${fmt(t.paid)}</span></div>`;
-                html += `<div class="d-flex justify-content-between fw-700 border-top pt-1 mt-1" style="font-size:.82rem">
-            <span>المتبقي من الفاتورة</span>
-            <span style="color:${balance > 0 ? '#dc2626' : '#16a34a'}">${t.sym} ${fmt(balance)}</span></div>
+            <div class="d-flex justify-content-between fw-700" style="font-size:.82rem">
+            <span>إجمالي الفاتورة</span>
+            <span>${invSym} ${fmt(_cTotal)}</span></div>
             </div>`;
-            });
-            if (ship > 0 && shipOn === 'us') {
+            // ⚠ ملخّص إعلامي بس لربط النقلية/الشحن/الجمارك — بلا أي
+            // قيد محاسبي، وبلا أي تأثير على إجمالي الفاتورة أعلاه.
+            const transportSel = document.getElementById('cTransportCarrier');
+            const shippingSel = document.getElementById('cShippingCarrierNew');
+            const hasTransport = transportSel && transportSel.value;
+            const hasShipping = shippingSel && shippingSel.value;
+            const customsCost = document.getElementById('cHasCustoms')?.checked
+                ? (parseFloat(document.getElementById('cCustomsCost')?.value) || 0) : 0;
+            if (hasTransport || hasShipping || customsCost > 0) {
                 html += `<div style="border:1px solid #fde68a;border-radius:7px;padding:7px 10px;margin-bottom:6px;background:#fffbeb">
             <div style="font-size:.72rem;font-weight:700;color:#92400e;margin-bottom:4px">
-                <i class="bi bi-truck me-1"></i>تكلفة التوصيل (منفصلة عن الفاتورة)
+                <i class="bi bi-truck me-1"></i>بيانات لوجستية (ربط توثيقي بس)
             </div>
-            <div class="d-flex justify-content-between" style="font-size:.79rem">
-            <span class="text-muted">ستُسجَّل بقيد محاسبي مستقل</span>
-            <span class="fw-600 text-warning">${shipCur} ${fmt(ship)}</span></div>
+            ${hasTransport ? `<div class="d-flex justify-content-between" style="font-size:.75rem"><span class="text-muted">نقلية</span><span class="fw-600">${transportSel.options[transportSel.selectedIndex].text}</span></div>` : ''}
+            ${hasShipping ? `<div class="d-flex justify-content-between" style="font-size:.75rem"><span class="text-muted">شحن</span><span class="fw-600">${shippingSel.options[shippingSel.selectedIndex].text}</span></div>` : ''}
+            ${customsCost > 0 ? `<div class="d-flex justify-content-between" style="font-size:.75rem"><span class="text-muted">جمارك</span><span class="fw-600">${fmt(customsCost)}</span></div>` : ''}
             </div>`;
             }
             document.getElementById('cTotSummary').innerHTML = html ||
                 '<div class="text-muted" style="font-size:.79rem">أدخل المبالغ لعرض الملخص</div>';
-
-            document.getElementById('shippingAmtWrap').style.opacity = shipOn === 'us' ? '1' : '0.4';
-            const carrierId = document.getElementById('cShippingCarrier').value;
-            const shipPayWrap = document.getElementById('shippingPayWrap');
-            if (shipOn === 'us' && ship > 0 && carrierId) {
-                shipPayWrap.style.display = '';
-                onShipPayChange();
-            } else {
-                shipPayWrap.style.display = 'none';
-            }
         }
 
         function previewImg(inp) {
@@ -1949,49 +1599,6 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
         }
 
         function doConfirm() {
-            const paid = parseFloat(document.getElementById('cPaidAmt').value) || 0;
-            const cashAcc = document.getElementById('cCashAccount').value;
-            if (paid > 0 && !cashAcc) {toast('اختر حساب التحصيل', 'danger'); return;}
-
-            // ⚠ تنبيه (مو منع) لو المبلغ المدفوع أكبر من المتبقي الفعلي
-            // على الفاتورة — ممكن يكون دفعة مقدمة إضافية مقصودة، مش
-            // بالضرورة غلطة إدخال، فما نمنع الحفظ، بس نتأكد قبل ما نكمل.
-            if (paid > 0 && _cInvoiceData) {
-                const paidCur = document.getElementById('cPaidCur').value || _cInvoiceData.currency_code;
-                const paidRate = parseFloat(document.getElementById('cPaidRate').value) || 1;
-                const invCur = _cInvoiceData.currency_code || 'USD';
-                const paidInInvCur = paidCur === invCur ? paid : paid * paidRate;
-                const remaining = parseFloat(_cInvoiceData.balance_amount ?? _cInvoiceData.final_amount) || 0;
-                const sym = _cInvoiceData.currency_symbol || '';
-                if (remaining > 0 && paidInInvCur > remaining + 0.01) {
-                    const proceed = confirm(
-                        `المبلغ المدفوع (${paidInInvCur.toFixed(2)} ${sym}) أكبر من المتبقي الفعلي على الفاتورة (${remaining.toFixed(2)} ${sym}).\n\nهل تقصد تسجيل الفرق كدفعة مقدمة إضافية من العميل؟`
-                    );
-                    if (!proceed) return;
-                }
-            }
-
-            const shipCost = parseFloat(document.getElementById('cShipping').value) || 0;
-            const shipOn2 = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
-            if (shipCost > 0 && shipOn2 === 'us' && document.getElementById('shippingRateWrap').style.display !== 'none'
-                && !document.getElementById('cShippingRate').value) {
-                toast('أدخل سعر صرف التوصيل (عملته مختلفة عن الفاتورة والفرع)', 'danger'); return;
-            }
-
-            if (paid > 0 && cashAcc) {
-                const sel = document.getElementById('cCashAccount');
-                const opt = sel.options[sel.selectedIndex];
-                if (opt?.dataset.type === 'advance') {
-                    const balance = parseFloat(opt.dataset.balance || 0);
-                    if (paid > balance) {
-                        toast(`رصيد الدفعة المقدمة من العميل صفر أو غير كافٍ (المتاح: ${balance.toFixed(2)} ${opt.dataset.sym || ''}) — قلّل المبلغ أو اختر حساب صندوق/بنك`, 'danger');
-                        return;
-                    }
-                }
-            }
-
-            const shipOn = document.querySelector('input[name="shippingOn"]:checked')?.value || 'us';
-            const ship = shipOn === 'us' ? (parseFloat(document.getElementById('cShipping').value) || 0) : 0;
             document.getElementById('confirmTxt').style.opacity = '0';
             document.getElementById('confirmSpin').style.display = 'inline-block';
             document.getElementById('btnConfirm').disabled = true;
@@ -2000,20 +1607,14 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
             fd.append('invoice_id', _cId);
             fd.append('receive_date', document.getElementById('cReceiveDate').value);
             fd.append('warehouse_id', document.getElementById('cWarehouse').value);
-            fd.append('shipping_cost', ship);
-            fd.append('shipping_on', shipOn);
-            fd.append('shipping_currency', document.getElementById('cShippingCur').value);
-            fd.append('shipping_exchange_rate', document.getElementById('cShippingRate').value || '');
-            fd.append('shipping_carrier_id', document.getElementById('cShippingCarrier').value);
-            fd.append('shipping_payable_id', document.getElementById('cShippingPayableId').value);
-            fd.append('shipping_pay_method', document.querySelector('input[name="shippingPay"]:checked')?.value || 'cash');
-            fd.append('shipping_cash_account', document.getElementById('cShipCashAccount').value);
-            fd.append('exact_settle', document.getElementById('cExactSettle').checked ? '1' : '0');
-            fd.append('shipping_desc', document.getElementById('cShippingDesc').value);
-            fd.append('paid_amount', document.getElementById('cPaidAmt').value || '0');
-            fd.append('paid_currency', document.getElementById('cPaidCur').value);
-            fd.append('paid_rate', document.getElementById('cPaidRate').value || '1');
-            fd.append('cash_account_id', cashAcc);
+            // ⚠ ربط توثيقي بس — بلا أي مبلغ/قيد محاسبي هون. تكلفة
+            // النقل/الشحن الفعلية تُسجَّل كمصروف منفصل بصفحة المصاريف
+            // والمستهلكات. الجمارك استثناء: مبلغها يُحفظ (معلوماتي بس،
+            // بلا قيد) لأنه غير مرتبط بمصروف تشغيلي عادي.
+            fd.append('transport_carrier_id', document.getElementById('cTransportCarrier').value);
+            fd.append('shipping_carrier_id', document.getElementById('cShippingCarrierNew').value);
+            fd.append('has_customs', document.getElementById('cHasCustoms').checked ? '1' : '0');
+            fd.append('customs_cost', document.getElementById('cHasCustoms').checked ? (document.getElementById('cCustomsCost').value || '') : '');
             fd.append('notes', document.getElementById('cNotes').value);
             const img = document.getElementById('cInvoiceImg');
             if (img.files && img.files[0]) fd.append('invoice_image', img.files[0]);

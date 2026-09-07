@@ -137,6 +137,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
         }
 
         // ══════════ الأرباح والخسائر ══════════
+        // ── أقدم تاريخ قيد مرحّل فعلياً — أساس زر "منذ البداية" (بيانات
+        // حقيقية، مش تاريخ إنشاء الفرع التقني اللي ممكن يستبعد قيود
+        // تاريخية حقيقية أقدم منه) ──
+        elseif ($act === 'get_earliest_entry_date') {
+            $minDate = $pdo->query("SELECT MIN(entry_date) FROM `{$TJE}` WHERE status='posted'")->fetchColumn();
+            echo json_encode(['ok' => true, 'date' => $minDate ?: date('Y-m-01')]);
+        }
+
         elseif ($act === 'get_income_statement') {
             $from = trim($_POST['from_date'] ?? '') ?: date('Y-m-01');
             $to = trim($_POST['to_date'] ?? '') ?: date('Y-m-d');
@@ -456,7 +464,13 @@ if (!empty($_SESSION['branch_id'])) {
                         <span style="font-size:.9rem;font-weight:700;color:#1e293b">
                             <i class="bi bi-calendar-date me-2 text-primary"></i>بتاريخ
                         </span>
-                        <input type="date" id="bsDate" class="form-control form-control-sm" style="width:160px">
+                        <button class="btn btn-sm btn-light" style="border-radius:8px" onclick="shiftBsDate(-1)" title="اليوم السابق">
+                            <i class="bi bi-chevron-right"></i>
+                        </button>
+                        <input type="date" id="bsDate" class="form-control form-control-sm" style="width:160px" onchange="loadBalanceSheet()">
+                        <button class="btn btn-sm btn-light" style="border-radius:8px" onclick="shiftBsDate(1)" title="اليوم التالي">
+                            <i class="bi bi-chevron-left"></i>
+                        </button>
                         <button class="btn btn-sm btn-primary" style="border-radius:8px" onclick="loadBalanceSheet()">
                             <i class="bi bi-search me-1"></i>عرض
                         </button>
@@ -480,6 +494,9 @@ if (!empty($_SESSION['branch_id'])) {
                         <input type="date" id="plTo" class="form-control form-control-sm" style="width:160px">
                         <button class="btn btn-sm btn-primary" style="border-radius:8px" onclick="loadIncomeStatement()">
                             <i class="bi bi-search me-1"></i>عرض
+                        </button>
+                        <button class="btn btn-sm btn-light" style="border-radius:8px" onclick="setPlSinceInception()">
+                            <i class="bi bi-hourglass-split me-1"></i>منذ البداية
                         </button>
                         <button class="btn btn-sm btn-light ms-auto" style="border-radius:8px" onclick="setPlThisMonth()">
                             <i class="bi bi-calendar-month me-1"></i>الشهر الحالي
@@ -506,6 +523,9 @@ if (!empty($_SESSION['branch_id'])) {
                         <input type="date" id="cfTo" class="form-control form-control-sm" style="width:160px">
                         <button class="btn btn-sm btn-primary" style="border-radius:8px" onclick="loadCashFlow()">
                             <i class="bi bi-search me-1"></i>عرض
+                        </button>
+                        <button class="btn btn-sm btn-light" style="border-radius:8px" onclick="setCfSinceInception()">
+                            <i class="bi bi-hourglass-split me-1"></i>منذ البداية
                         </button>
                         <button class="btn btn-sm btn-light ms-auto" style="border-radius:8px" onclick="setCfThisMonth()">
                             <i class="bi bi-calendar-month me-1"></i>الشهر الحالي
@@ -534,6 +554,17 @@ if (!empty($_SESSION['branch_id'])) {
 
         const BASE_SYM = <?= json_encode($baseSym) ?>;
 
+        // ⚠ toISOString() بيحوّل للتوقيت العالمي UTC أول — بمنطقة زمنية
+        // متقدّمة عن UTC (دمشق UTC+3)، منتصف الليل المحلي بيصير بتاريخ
+        // اليوم السابق بالـUTC، فبيطلع تاريخ غلط. هالدالة بتنسّق التاريخ
+        // بالتوقيت المحلي مباشرة، بدون أي تحويل UTC.
+        function toLocalDateStr(d) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+
         function post(data) {
             const fd = new FormData();
             Object.entries(data).forEach(([k, v]) => fd.append(k, v ?? ''));
@@ -558,7 +589,14 @@ if (!empty($_SESSION['branch_id'])) {
 
         // ══════════ الميزانية العمومية ══════════
         function setBsToday() {
-            document.getElementById('bsDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('bsDate').value = toLocalDateStr(new Date());
+            loadBalanceSheet();
+        }
+        function shiftBsDate(days) {
+            const inp = document.getElementById('bsDate');
+            const cur = inp.value ? new Date(inp.value + 'T00:00:00') : new Date();
+            cur.setDate(cur.getDate() + days);
+            inp.value = toLocalDateStr(cur);
             loadBalanceSheet();
         }
         function loadBalanceSheet() {
@@ -605,9 +643,17 @@ if (!empty($_SESSION['branch_id'])) {
         // ══════════ الأرباح والخسائر ══════════
         function setPlThisMonth() {
             const now = new Date();
-            document.getElementById('plFrom').value = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-            document.getElementById('plTo').value = now.toISOString().split('T')[0];
+            document.getElementById('plFrom').value = toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+            document.getElementById('plTo').value = toLocalDateStr(now);
             loadIncomeStatement();
+        }
+        function setPlSinceInception() {
+            post({ _action: 'get_earliest_entry_date' }).then(d => {
+                if (!d.ok) { toast(d.msg); return; }
+                document.getElementById('plFrom').value = d.date;
+                document.getElementById('plTo').value = toLocalDateStr(new Date());
+                loadIncomeStatement();
+            });
         }
         function loadIncomeStatement() {
             document.getElementById('plBody').innerHTML = '<div class="text-center py-5"><span class="spinner-border text-primary"></span></div>';
@@ -645,9 +691,17 @@ if (!empty($_SESSION['branch_id'])) {
         // ══════════ التدفقات النقدية ══════════
         function setCfThisMonth() {
             const now = new Date();
-            document.getElementById('cfFrom').value = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-            document.getElementById('cfTo').value = now.toISOString().split('T')[0];
+            document.getElementById('cfFrom').value = toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+            document.getElementById('cfTo').value = toLocalDateStr(now);
             loadCashFlow();
+        }
+        function setCfSinceInception() {
+            post({ _action: 'get_earliest_entry_date' }).then(d => {
+                if (!d.ok) { toast(d.msg); return; }
+                document.getElementById('cfFrom').value = d.date;
+                document.getElementById('cfTo').value = toLocalDateStr(new Date());
+                loadCashFlow();
+            });
         }
         function loadCashFlow() {
             document.getElementById('cfBody').innerHTML = '<div class="text-center py-5"><span class="spinner-border text-primary"></span></div>';
@@ -694,7 +748,7 @@ if (!empty($_SESSION['branch_id'])) {
         // الأرباح/الخسائر والتدفقات النقدية = تقارير فترة، ما بتحمَّل
         // تلقائياً أبداً — تضل فاضية لحد ما تختار المستخدم فترة بنفسه
         // ويضغط "عرض" (أو زر "الشهر الحالي" كاختصار سريع).
-        document.getElementById('bsDate').value = new Date().toISOString().split('T')[0];
+        document.getElementById('bsDate').value = toLocalDateStr(new Date());
         loadBalanceSheet();
         showReport('bs');
     </script>

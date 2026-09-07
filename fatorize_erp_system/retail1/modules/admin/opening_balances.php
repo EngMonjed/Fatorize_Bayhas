@@ -88,6 +88,67 @@ $branchRow = $branchRow->fetch(PDO::FETCH_ASSOC);
 $isLocked = !empty($branchRow['opening_balance_locked_at']);
 
 // ── AJAX ──────────────────────────────────────────────────────────
+/**
+ * ✅ يرحّل رصيد افتتاحي لمتغيّر واحد (نفس منطق save_stock الأصلي،
+ * مستخرَج كدالة مشتركة عشان تُستدعى لكل مقاس بمجموعة "الكروب" بالإجراء
+ * الجماعي الجديد save_stock_group، بدون تكرار الكود).
+ */
+function postVariantOpeningStock(PDO $pdo, int $variantId, int $warehouseId, float $qty, float $cost,
+    string $TPV, string $TP, string $TWI, string $TIM, string $TIMD, string $TIAS, string $TAC, string $TJE, string $TJI,
+    int $branchCurrencyId, int $userId): void
+{
+    $variant = $pdo->prepare("SELECT v.*, p.name AS product_name FROM `{$TPV}` v JOIN `{$TP}` p ON p.id=v.product_id WHERE v.id=?");
+    $variant->execute([$variantId]);
+    $variant = $variant->fetch(PDO::FETCH_ASSOC);
+    if (!$variant) throw new Exception("متغيّر غير موجود (id={$variantId})");
+
+    $totalValue = $qty * $cost;
+
+    $exists = $pdo->prepare("SELECT id, quantity FROM `{$TWI}` WHERE variant_id=? AND warehouse_id=?");
+    $exists->execute([$variantId, $warehouseId]);
+    $exists = $exists->fetch(PDO::FETCH_ASSOC);
+    $balanceBefore = $exists ? (float) $exists['quantity'] : 0;
+
+    if ($exists) {
+        $pdo->prepare("UPDATE `{$TWI}` SET quantity=quantity+?, current_cost=? WHERE id=?")
+            ->execute([$qty, $cost, $exists['id']]);
+    } else {
+        $pdo->prepare("INSERT INTO `{$TWI}` (warehouse_id,variant_id,product_id,quantity,current_cost,status,created_at)
+            VALUES (?,?,?,?,?,'active',NOW())")
+            ->execute([$warehouseId, $variantId, $variant['product_id'], $qty, $cost]);
+    }
+
+    $movNo = 'OB-' . date('Y') . '-' . str_pad((int) $pdo->query("SELECT COUNT(*) FROM `{$TIM}`")->fetchColumn() + 1, 4, '0', STR_PAD_LEFT);
+    $pdo->prepare("INSERT INTO `{$TIM}` (movement_number,movement_type,warehouse_id,items_count,total_quantity,total_value_base,reference_type,reference_number,created_by)
+        VALUES (?,?,?,1,?,?,?,?,?)")
+        ->execute([$movNo, 'opening', $warehouseId, $qty, $totalValue, 'opening_balance', $movNo, $userId]);
+    $movId = (int) $pdo->lastInsertId();
+
+    $pdo->prepare("INSERT INTO `{$TIMD}` (movement_id,variant_id,product_id,quantity,unit_price,cost_price,total_value,balance_before,balance_after,notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?)")
+        ->execute([$movId, $variantId, $variant['product_id'], $qty, $cost, $cost, $totalValue, $balanceBefore, $balanceBefore + $qty, 'رصيد افتتاحي']);
+
+    $accInventory = getSettingAccount($pdo, $TIAS, 'inventory', $TAC);
+    $accEquity = getOpeningEquityAccount($pdo, $TAC);
+    if ($accInventory) {
+        $entryNo = nextEntryNo($pdo, $TJE);
+        $pdo->prepare("INSERT INTO `{$TJE}` (entry_number,entry_date,description,currency_id,exchange_rate,total_debit,total_credit,status,reference_type,reference_id,created_by,posted_at,posted_by)
+            VALUES (?,CURDATE(),?,1,1,?,?,'posted',?,?,?,NOW(),?)")
+            ->execute([$entryNo, "رصيد افتتاحي مخزون — {$variant['product_name']}", $totalValue, $totalValue, 'opening_balance', $movId, $userId, $userId]);
+        $jeId = (int) $pdo->lastInsertId();
+
+        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
+            VALUES (?,?,?,0,?,?,?,?,1)")
+            ->execute([$jeId, $accInventory['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchCurrencyId]);
+        bumpAccountBalance($pdo, $TAC, $accInventory['id'], $totalValue);
+
+        $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
+            VALUES (?,?,0,?,?,?,?,?,1)")
+            ->execute([$jeId, $accEquity['id'], $totalValue, $totalValue, $totalValue, 'رصيد افتتاحي مخزون', $branchCurrencyId]);
+        bumpAccountBalance($pdo, $TAC, $accEquity['id'], -$totalValue);
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -161,6 +222,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $pdo->commit();
             echo json_encode(['ok' => true, 'msg' => 'تم تسجيل رصيد المخزون الافتتاحي']);
+        } elseif ($_POST['_action'] === 'save_stock_group') {
+            // ✅ جديد — يستقبل كروب كامل (كل مقاساته مع بعض عبر
+            // variant_ids)، ويقسّم الكمية الإجمالية على عدد المقاسات
+            // بالكروب تلقائياً (نفس منطق "24÷4=6" المعتمد بأداة استيراد
+            // المنتجات)، ثم يرحّل كل مقاس لحاله بنفس منطق save_stock
+            requirePermission('admin.opening_balances', 'create');
+            $variantIds = array_values(array_filter(array_map('intval', explode(',', $_POST['variant_ids'] ?? ''))));
+            $warehouseId = (int) ($_POST['warehouse_id'] ?? 0);
+            $totalQty = (float) ($_POST['total_quantity'] ?? 0);
+            $cost = (float) ($_POST['cost'] ?? 0);
+
+            if (empty($variantIds)) throw new Exception('كروب غير صالح');
+            if (!$warehouseId) throw new Exception('اختر مستودع');
+            if ($totalQty <= 0 || $cost < 0) throw new Exception('كمية أو تكلفة غير صالحة');
+
+            $perSizeQty = $totalQty / count($variantIds);
+            foreach ($variantIds as $vid) {
+                postVariantOpeningStock($pdo, $vid, $warehouseId, $perSizeQty, $cost,
+                    $TPV, $TP, $TWI, $TIM, $TIMD, $TIAS, $TAC, $TJE, $TJI,
+                    $branchCurrencyId, $_SESSION['user_id']);
+            }
+
+            $pdo->commit();
+            echo json_encode(['ok' => true, 'msg' => "تم توزيع {$totalQty} على " . count($variantIds) . " مقاس (" . number_format($perSizeQty, 2) . " لكل مقاس)"]);
         } elseif ($_POST['_action'] === 'save_consumable') {
             requirePermission('admin.opening_balances', 'create');
             $itemId = (int) $_POST['item_id'];
@@ -342,20 +427,58 @@ $cashAccounts = $pdo->query("
 
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='products' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 $consWarehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 AND warehouse_type='consumables' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
-// ✅ مُصلح: size/color مو أعمدة مباشرة على product_variants — لازم JOIN
-// لجدولي product_sizes (size_id) وproduct_colors (color_id، اختياري).
-// ✅ إضافة: cost_price بيتجاب تلقائياً من product_sizes (معبّى أصلاً
-// وقت إنشاء المنتج) كقيمة افتراضية — بدل ما نطلب من المستخدم يكتبه
-// يدوياً من الصفر لكل صنف. يضل الحقل قابل للتعديل بالواجهة لو الكلفة
-// الفعلية لهالدفعة المحدّدة مختلفة عن السعر المسجّل حالياً بالمنتج.
-$variants = $pdo->query("SELECT v.id, ps.size, pc.name AS color, v.barcode, p.name AS product_name,
-        COALESCE(ps.cost_price, 0) AS default_cost
+// ✅ مُحدَّث: تجميع حقيقي بـ group_key (نفس مصدر الحقيقة المعتمد بمودال
+// اختيار المنتجات بفاتورة البيع) — بدل عرض كل متغيّر (مقاس×لون) كصف
+// مسطّح لحاله. صف واحد لكل (منتج × كروب × لون)، القياسات كلها مجمَّعة
+// بعرض واحد، وvariant_ids محفوظة للاستخدام وقت التوزيع التلقائي للكمية.
+$variantsRaw = $pdo->query("SELECT v.id AS variant_id, v.product_id, v.color_id,
+        p.model_number, p.name AS product_name,
+        ps.size, ps.group_key, ps.packet_qty, ps.sort_order,
+        COALESCE(ps.cost_price, 0) AS default_cost,
+        pc.name AS color
     FROM `{$TPV}` v
     JOIN `{$TP}` p ON p.id = v.product_id
     JOIN `{$TPS}` ps ON ps.id = v.size_id
     LEFT JOIN `{$TPC}` pc ON pc.id = v.color_id
     WHERE p.is_active=1 AND v.is_active=1
-    ORDER BY p.name, ps.sort_order")->fetchAll(PDO::FETCH_ASSOC);
+    ORDER BY p.name, ps.group_key, v.color_id, ps.sort_order")->fetchAll(PDO::FETCH_ASSOC);
+
+$productGroups = [];
+foreach ($variantsRaw as $v) {
+    $gk = $v['product_id'] . '|' . $v['group_key'] . '|' . ($v['color_id'] ?: '0');
+    if (!isset($productGroups[$gk])) {
+        $productGroups[$gk] = [
+            'product_id' => $v['product_id'],
+            'model_number' => $v['model_number'],
+            'product_name' => $v['product_name'],
+            'group_key' => $v['group_key'],
+            'color' => $v['color'],
+            'default_cost' => $v['default_cost'],
+            'sizes' => [],
+            'variant_ids' => [],
+        ];
+    }
+    $productGroups[$gk]['sizes'][] = $v['size'];
+    $productGroups[$gk]['variant_ids'][] = $v['variant_id'];
+}
+$productGroups = array_values($productGroups);
+
+// ترقيم "كروب ١/٢/٣..." لكل منتج — حسب ترتيب ظهور group_key الأول له
+$groupIndexByProduct = [];
+foreach ($productGroups as $g) {
+    $pid = $g['product_id'];
+    if (!isset($groupIndexByProduct[$pid])) $groupIndexByProduct[$pid] = [];
+    if (!isset($groupIndexByProduct[$pid][$g['group_key']])) {
+        $groupIndexByProduct[$pid][$g['group_key']] = count($groupIndexByProduct[$pid]);
+    }
+}
+$GRP_COLORS = [
+    ['#eff6ff', '#1d4ed8', '#bfdbfe'],
+    ['#f0fdf4', '#15803d', '#bbf7d0'],
+    ['#fefce8', '#a16207', '#fde68a'],
+    ['#fdf2f8', '#be185d', '#fbcfe8'],
+];
+
 $consumableItems = $pdo->query("SELECT id, name, category FROM `{$TCI}` WHERE is_active=1 ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 $customers = $pdo->query("SELECT id, name, account_id FROM `{$TC}` WHERE status='active' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 $suppliers = $pdo->query("SELECT id, name, account_id FROM `{$TSUP}` WHERE status='active' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
@@ -415,28 +538,66 @@ require_once __DIR__ . '/../../../includes/breadcrumb.php';
     </ul>
 
     <div class="tab-content">
-        <!-- مخزون منتجات -->
+        <!-- مخزون منتجات — مجمَّع بالكروب (group_key)، قابل للبحث/الفلترة -->
         <div class="tab-pane fade show active" id="tab-stock">
             <div class="table-card p-3">
-                <div class="ob-row fw-600 text-muted" style="font-size:.78rem">
-                    <div>الصنف</div><div>المستودع</div><div>الكمية</div><div>تكلفة الوحدة</div><div></div>
+                <input type="text" id="productSearchInput" class="form-control form-control-sm mb-3"
+                       placeholder="بحث برقم الموديل أو اسم المنتج..." oninput="filterProductRows()">
+                <div style="overflow-x:auto">
+                <table class="table table-sm align-middle mb-0" style="font-size:.82rem">
+                    <thead>
+                        <tr class="text-muted" style="font-size:.75rem">
+                            <th>الموديل</th><th>المنتج</th><th>الكروب</th><th>القياسات</th><th>اللون</th>
+                            <th>مستودع</th><th>الكمية الإجمالية</th><th>تكلفة الوحدة</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="productRowsBody">
+                    <?php foreach ($productGroups as $g):
+                        $grpIdx = $groupIndexByProduct[$g['product_id']][$g['group_key']] ?? 0;
+                        [$bg, $clr, $br] = $GRP_COLORS[$grpIdx % 4];
+                        $sizesStr = implode(' · ', $g['sizes']);
+                        $searchKey = mb_strtolower($g['model_number'] . ' ' . $g['product_name']);
+                    ?>
+                        <tr class="product-group-row" data-search="<?= htmlspecialchars($searchKey) ?>"
+                            data-variant-ids="<?= implode(',', $g['variant_ids']) ?>">
+                            <td class="fw-600"><?= htmlspecialchars($g['model_number']) ?></td>
+                            <td><?= htmlspecialchars($g['product_name']) ?></td>
+                            <td><span class="badge" style="background:<?= $bg ?>;color:<?= $clr ?>;border:1px solid <?= $br ?>">كروب <?= $grpIdx + 1 ?></span></td>
+                            <td class="text-muted"><?= htmlspecialchars($sizesStr) ?></td>
+                            <td><?= htmlspecialchars($g['color'] ?: '-') ?></td>
+                            <td>
+                                <select class="form-select form-select-sm wh-select" <?= $isLocked ? 'disabled' : '' ?>>
+                                    <option value="">اختر مستودع</option>
+                                    <?php foreach ($warehouses as $w): ?>
+                                    <option value="<?= $w['id'] ?>"><?= htmlspecialchars($w['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                            <td>
+                                <input type="number" step="0.01" class="form-control form-control-sm qty-input-group"
+                                       placeholder="مجموع كل المقاسات" title="بتنقسم تلقائياً على <?= count($g['sizes']) ?> مقاس"
+                                       <?= $isLocked ? 'disabled' : '' ?>>
+                            </td>
+                            <td>
+                                <input type="number" step="0.0001" class="form-control form-control-sm cost-input"
+                                       value="<?= htmlspecialchars((string) $g['default_cost']) ?>" <?= $isLocked ? 'disabled' : '' ?>>
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="saveStockGroup(this)" <?= $isLocked ? 'disabled' : '' ?>>
+                                    <i class="bi bi-check-lg"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
                 </div>
-                <?php foreach ($variants as $v): ?>
-                <div class="ob-row" data-variant="<?= $v['id'] ?>">
-                    <div><?= htmlspecialchars($v['product_name']) ?> <span class="text-muted">(<?= htmlspecialchars($v['size'] . ($v['color'] ? ' / ' . $v['color'] : '')) ?>)</span></div>
-                    <select class="form-select form-select-sm wh-select" <?= $isLocked ? 'disabled' : '' ?>>
-                        <option value="">اختر مستودع</option>
-                        <?php foreach ($warehouses as $w): ?>
-                        <option value="<?= $w['id'] ?>"><?= htmlspecialchars($w['name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <input type="number" step="0.01" class="form-control form-control-sm qty-input" placeholder="0" <?= $isLocked ? 'disabled' : '' ?>>
-                    <input type="number" step="0.0001" class="form-control form-control-sm cost-input" value="<?= htmlspecialchars((string) $v['default_cost']) ?>" <?= $isLocked ? 'disabled' : '' ?>>
-                    <button class="btn btn-sm btn-outline-primary" onclick="saveStock(this)" <?= $isLocked ? 'disabled' : '' ?>><i class="bi bi-check-lg"></i></button>
-                </div>
-                <?php endforeach; ?>
+                <?php if (empty($productGroups)): ?>
+                <div class="text-center text-muted py-4 small">ما في منتجات نشطة بعد</div>
+                <?php endif; ?>
             </div>
         </div>
+
 
         <!-- مخزون مستهلكات -->
         <div class="tab-pane fade" id="tab-cons">
@@ -542,6 +703,33 @@ function saveStock(btn) {
         else toast(d.msg, 'danger');
     });
 }
+
+// ✅ جديد — بحث/فلترة صفوف المنتجات المجمَّعة بالكروب (client-side،
+// بيانات محمَّلة أصلاً بالصفحة، ما يحتاج طلب إضافي للسيرفر)
+function filterProductRows() {
+    const q = document.getElementById('productSearchInput').value.trim().toLowerCase();
+    document.querySelectorAll('#productRowsBody .product-group-row').forEach(row => {
+        row.style.display = row.dataset.search.includes(q) ? '' : 'none';
+    });
+}
+
+// ✅ جديد — حفظ رصيد كروب كامل (كل مقاساته مع بعض) بضغطة وحدة. الكمية
+// المُدخلة = إجمالي كل المقاسات، السيرفر بيقسّمها تلقائياً على عدد
+// المقاسات بالكروب (نفس منطق "24÷4=6" المعتمد بأداة استيراد المنتجات)
+function saveStockGroup(btn) {
+    const row = btn.closest('tr');
+    post({
+        _action: 'save_stock_group',
+        variant_ids: row.dataset.variantIds,
+        warehouse_id: row.querySelector('.wh-select').value,
+        total_quantity: row.querySelector('.qty-input-group').value,
+        cost: row.querySelector('.cost-input').value,
+    }).then(d => {
+        if (d.ok) { toast(d.msg); row.style.opacity = '.5'; }
+        else toast(d.msg, 'danger');
+    });
+}
+
 function saveConsumable(btn) {
     const row = btn.closest('.ob-row');
     post({

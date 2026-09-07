@@ -255,7 +255,9 @@ $suppliers = $pdo->query("SELECT s.*,
     pay.code AS pay_code, pay.name AS pay_name, pay.balance AS pay_balance,
     pre.code AS pre_code, pre.name AS pre_name, pre.balance AS pre_balance,
     (SELECT COUNT(*) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id) +
-    (SELECT COUNT(*) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id) AS purchase_count
+    (SELECT COUNT(*) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id) AS purchase_count,
+    (SELECT COALESCE(SUM(pu.final_amount_base_currency),0) FROM `purchases_{$TS}` pu WHERE pu.supplier_id = s.id AND pu.status = 'confirmed') +
+    (SELECT COALESCE(SUM(cp.total_base),0) FROM `consumable_purchases_{$TS}` cp WHERE cp.supplier_id = s.id AND cp.status = 'confirmed') AS purchase_total_base
     FROM `{$TSP}` s
     LEFT JOIN `{$TAC}` pay ON pay.id=s.account_id
     LEFT JOIN `{$TAC}` pre ON pre.id=s.prepaid_account_id
@@ -556,6 +558,9 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                 <th>حساب الذمة</th>
                                 <th>حساب الدفعات المقدمة</th>
                                 <th>الحد الائتماني</th>
+                                <th>الإجمالي المستحق</th>
+                                <th style="color:#16a34a">المدفوع</th>
+                                <th style="color:#dc2626">المتبقي (الذمة)</th>
                                 <th>الحالة</th>
                                 <th style="text-align:center" data-no-sort>إجراءات</th>
                             </tr>
@@ -563,7 +568,7 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                         <tbody>
                             <?php if (empty($suppliers)): ?>
                                         <tr>
-                                            <td colspan="9" class="text-center text-muted py-5">
+                                            <td colspan="12" class="text-center text-muted py-5">
                                                 <i class="bi bi-people" style="font-size:2rem;color:#e2e8f0"></i>
                                                 <div class="mt-2">لا يوجد موردون — أضف أول مورد</div>
                                             </td>
@@ -623,6 +628,32 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                             </td>
                                             <td class="n" style="font-size:.8rem">
                                                 <?= $sup['credit_limit'] > 0 ? number_format($sup['credit_limit'], 0) : '—' ?></td>
+                                            <?php
+                                                // ⚠ المتبقي (الذمة) = رصيد حساب "ذمة المورد" نفسه — نفس الحساب
+                                                // المعروض تفصيلياً بمودال التفاصيل، بعملة الفرع دايماً (كل
+                                                // حسابات المورد تُنشأ بعملة الفرع الأساسية وقت إنشاء المورد،
+                                                // بلا استثناء). balance سالب = التزام حقيقي علينا (الحالة
+                                                // الشائعة)؛ موجب = المورد صار مديون إلنا (دفعة زائدة/مقدمة).
+                                                // "المدفوع" مُشتق حسابياً (المستحق − المتبقي الفعلي) ليضل
+                                                // متّسق داخلياً مع العمودين الآخرين دايماً، لا مجموع منفصل
+                                                // عرضة لفروقات تقريب أو عملات مختلطة.
+                                                $payBal = (float) ($sup['pay_balance'] ?? 0);
+                                                $totalDue = (float) ($sup['purchase_total_base'] ?? 0);
+                                                $remaining = max(0, -$payBal);
+                                                $paid = $totalDue - $remaining;
+                                            ?>
+                                            <td class="n" style="font-size:.8rem">
+                                                <?= $totalDue > 0 ? number_format($totalDue, 2) . ' ' . htmlspecialchars($baseCurSym) : '—' ?>
+                                            </td>
+                                            <td class="n fw-600" style="font-size:.8rem;color:#16a34a">
+                                                <?= $paid > 0.001 ? number_format($paid, 2) . ' ' . htmlspecialchars($baseCurSym) : '—' ?>
+                                            </td>
+                                            <td class="n fw-600"
+                                                style="font-size:.8rem;color:<?= $remaining > 0.001 ? '#dc2626' : '#16a34a' ?>">
+                                                <?= $remaining > 0.001 ? number_format($remaining, 2) . ' ' . htmlspecialchars($baseCurSym) : '—' ?>
+                                                <?= $payBal > 0.001 ? '<div style="font-size:.65rem;color:#0891b2">له رصيد زائد '
+                                                    . number_format($payBal, 2) . ' ' . htmlspecialchars($baseCurSym) . '</div>' : '' ?>
+                                            </td>
                                             <td>
                                                 <span
                                                     class="badge <?= $sup['status'] === 'active' ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary' ?>"

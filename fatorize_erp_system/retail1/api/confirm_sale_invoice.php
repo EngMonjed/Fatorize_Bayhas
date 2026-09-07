@@ -433,101 +433,32 @@ try {
                     ->execute([$totalCogs, $totalCogs, $accInventory['id']]);
             }
 
-            // ── قيد منفصل: تكلفة التوصيل للعميل (لو "علينا") ──
-            $shipCost = (float) ($_POST['shipping_cost'] ?? 0);
-            $shipOn = $_POST['shipping_on'] ?? 'us';
-            $shipCarrierId = (int) ($_POST['shipping_carrier_id'] ?? 0);
-            $shipDesc = trim($_POST['shipping_desc'] ?? '');
-            $shipPayableId = (int) ($_POST['shipping_payable_id'] ?? 0);
-            $shipPayMethod = $_POST['shipping_pay_method'] ?? 'cash';
-            $shipCashAccId = (int) ($_POST['shipping_cash_account'] ?? 0);
-            $shipCur = $_POST['shipping_currency'] ?? $baseCurrencyCode;
-            $shipRateManual = (float) ($_POST['shipping_exchange_rate'] ?? 0);
+            // ── بيانات لوجستية (نقلية/شحن/جمارك) — بلا أي قيد محاسبي
+            // اليوم، تُحفظ على صف الفاتورة مباشرة فقط. القيود الآلية
+            // (إلزامي عند "شُحنت من المعمل"، شرطي عند "سُلّمت") مرتبطة
+            // بواجهة تغيير delivery_status اللي رح تُبنى بجلسة لاحقة
+            // منفصلة — راجع READMElogistics.md.
+            $transportCarrierId = (int) ($_POST['transport_carrier_id'] ?? 0) ?: null;
+            $transportCost = ($_POST['transport_cost'] ?? '') !== '' ? (float) $_POST['transport_cost'] : null;
+            $shippingCarrierIdNew = (int) ($_POST['shipping_carrier_id'] ?? 0) ?: null;
+            $shippingCostNew = ($_POST['shipping_cost'] ?? '') !== '' ? (float) $_POST['shipping_cost'] : null;
+            $hasCustoms = !empty($_POST['has_customs']) ? 1 : 0;
+            $customsCost = $hasCustoms && ($_POST['customs_cost'] ?? '') !== '' ? (float) $_POST['customs_cost'] : null;
 
-            if ($shipCost > 0 && $shipOn === 'us') {
-                $accShipExpense = $getAcc('shipping_expense');
-                if ($accShipExpense) {
-                    // تحويل تكلفة التوصيل لعملة الفرع
-                    if ($shipCur === $baseCurrencyCode) {
-                        $shipBase = $shipCost;
-                    } elseif ($shipCur === $curCode) {
-                        $shipBase = $rate > 0 ? $shipCost / $rate : $shipCost;
-                    } else {
-                        $shipBase = $shipRateManual > 0 ? $shipCost / $shipRateManual : $shipCost;
-                    }
-                    $shipRateForLine = $shipBase > 0 ? round($shipCost / $shipBase, 6) : 1;
-
-                    $seq++;
-                    $jeNo3 = 'JE-' . $y . '-' . str_pad($seq, 4, '0', STR_PAD_LEFT);
-                    $pdo->prepare("INSERT INTO `{$TJE}`
-                        (entry_number,entry_date,description,currency_id,exchange_rate,
-                         total_debit,total_credit,status,reference_type,reference_id,created_by)
-                        VALUES (?,?,?,?,1,?,?,'posted','sale_shipping',?,?)")
-                        ->execute([
-                            $jeNo3,
-                            date('Y-m-d'),
-                            "تكلفة توصيل {$inv['invoice_number']}" . ($shipDesc ? " — {$shipDesc}" : ''),
-                            $baseCurrencyId,
-                            $shipBase,
-                            $shipBase,
-                            $invId,
-                            $_SESSION['user_id']
-                        ]);
-                    $jeShipId = (int) $pdo->lastInsertId();
-
-                    // مدين: مصروف التوصيل
-                    $pdo->prepare("INSERT INTO `{$TJI}`
-                        (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
-                        VALUES (?,?,?,0,?,?,?,?,?)")
-                        ->execute([
-                            $jeShipId,
-                            $accShipExpense['id'],
-                            $shipBase,
-                            $shipCost,
-                            $shipBase,
-                            'مصروف توصيل',
-                            $curId($shipCur),
-                            $shipRateForLine
-                        ]);
-                    $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                        ->execute([$shipBase, $shipBase, $accShipExpense['id']]);
-
-                    // دائن: حسب طريقة الدفع (نقدي من صندوق، أو آجل لذمة شركة التوصيل)
-                    if ($shipPayMethod === 'cash' && $shipCashAccId) {
-                        $pdo->prepare("INSERT INTO `{$TJI}`
-                            (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
-                            VALUES (?,?,0,?,?,?,?,?,?)")
-                            ->execute([
-                                $jeShipId,
-                                $shipCashAccId,
-                                $shipBase,
-                                $shipCost,
-                                $shipBase,
-                                'دفع نقدي — توصيل',
-                                $curId($shipCur),
-                                $shipRateForLine
-                            ]);
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$shipBase, $shipCost, $shipCashAccId]);
-                    } elseif ($shipPayableId) {
-                        $pdo->prepare("INSERT INTO `{$TJI}`
-                            (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
-                            VALUES (?,?,0,?,?,?,?,?,?)")
-                            ->execute([
-                                $jeShipId,
-                                $shipPayableId,
-                                $shipBase,
-                                $shipCost,
-                                $shipBase,
-                                'ذمة شركة توصيل',
-                                $curId($shipCur),
-                                $shipRateForLine
-                            ]);
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$shipBase, $shipBase, $shipPayableId]);
-                    }
-                }
-            }
+            $pdo->prepare("UPDATE `{$TI}` SET
+                    transport_carrier_id=?, transport_cost=?,
+                    shipping_carrier_id=?, shipping_cost=?,
+                    has_customs=?, customs_cost=?
+                WHERE id=?")
+                ->execute([
+                    $transportCarrierId,
+                    $transportCost,
+                    $shippingCarrierIdNew,
+                    $shippingCostNew,
+                    $hasCustoms,
+                    $customsCost,
+                    $invId
+                ]);
 
             // ── التحصيل الجزئي (لو موجود) ──
             $paidAmtInput = (float) ($_POST['paid_amount'] ?? 0);

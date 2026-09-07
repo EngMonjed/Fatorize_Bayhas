@@ -104,6 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $q = trim($_POST['q'] ?? '');
             if (!$q)
                 throw new Exception('أدخل باركود أو اسم منتج');
+            $whId = (int) ($_POST['warehouse_id'] ?? $existingPur['warehouse_id'] ?? 0);
 
             // بحث بالباركود أولاً
             $st = $pdo->prepare("
@@ -111,13 +112,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     p.id AS product_id, p.name AS product_name, p.model_number,
                     s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                     s.base_currency_id AS price_base_currency_id,
-                    c.name AS color_name, c.hex_code AS color_hex
+                    c.name AS color_name, c.hex_code AS color_hex,
+                    wi.quantity AS stock_qty
                 FROM `{$TV}` v
                 JOIN `{$TPROD}` p ON p.id = v.product_id
                 JOIN `{$TSZ}` s   ON s.id = v.size_id
                 LEFT JOIN `{$TCL}` c ON c.id = v.color_id
+                LEFT JOIN `{$TWI}` wi ON wi.variant_id = v.id AND wi.warehouse_id = ?
                 WHERE v.barcode = ? AND v.is_active=1 AND p.is_active=1");
-            $st->execute([$q]);
+            $st->execute([$whId, $q]);
             // ⚠ الباركود ممكن يكون مشترك بين كل مقاسات نفس الكروب (نفس
             // اللون)، مو خاص بمقاس وحيد — كان LIMIT 1 يقتل هالسلوك ويرجّع
             // أول مقاس بس. هلق منرجع كل المطابقات، والواجهة بتدمجهم بنفس
@@ -145,16 +148,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         p.id AS product_id, p.name AS product_name, p.model_number,
                         s.size, s.selling_price, s.cost_price, s.age_type, s.packet_qty, s.group_key,
                         s.base_currency_id AS price_base_currency_id,
-                        c.name AS color_name, c.hex_code AS color_hex
+                        c.name AS color_name, c.hex_code AS color_hex,
+                        wi.quantity AS stock_qty
                     FROM `{$TV}` v
                     JOIN `{$TPROD}` p ON p.id = v.product_id
                     JOIN `{$TSZ}` s   ON s.id = v.size_id
                     LEFT JOIN `{$TCL}` c ON c.id = v.color_id
+                    LEFT JOIN `{$TWI}` wi ON wi.variant_id = v.id AND wi.warehouse_id = ?
                     WHERE (p.name LIKE ? OR p.model_number LIKE ?)
                         AND v.is_active=1 AND p.is_active=1
                     ORDER BY p.name, s.cost_price, s.age_type, s.sort_order
                     LIMIT 200");
-                $st2->execute(["%{$q}%", "%{$q}%"]);
+                $st2->execute([$whId, "%{$q}%", "%{$q}%"]);
                 $results = $st2->fetchAll();
                 foreach ($results as &$r) {
                     $r['price_base_currency_code'] = $currencyCodeById[(int) ($r['price_base_currency_id'] ?? 0)] ?? $branchCur['code'];
@@ -452,12 +457,15 @@ $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")
 $existingItemsRaw = $pdo->prepare("SELECT pi.*,
         pr.name AS product_name, pr.model_number,
         psz.size AS size, psz.age_type, psz.packet_qty,
-        pcl.id AS color_id, pcl.name AS color_name, pcl.hex_code AS color_hex
+        pcl.id AS color_id, pcl.name AS color_name, pcl.hex_code AS color_hex,
+        wi.quantity AS stock_qty
     FROM `{$TPI}` pi
+    JOIN `{$TP}` pi_p ON pi_p.id = pi.purchase_id
     LEFT JOIN `{$TPROD}` pr ON pr.id = pi.product_id
     LEFT JOIN `{$TV}` pv ON pv.id = pi.variant_id
     LEFT JOIN `{$TSZ}` psz ON psz.id = pv.size_id
     LEFT JOIN `{$TCL}` pcl ON pcl.id = pv.color_id
+    LEFT JOIN `{$TWI}` wi ON wi.variant_id = pi.variant_id AND wi.warehouse_id = pi_p.warehouse_id
     WHERE pi.purchase_id = ?
     ORDER BY pi.id");
 $existingItemsRaw->execute([$purchaseId]);
@@ -500,7 +508,7 @@ foreach ($existingItemsRaw as $it) {
     }
     if ($it['size'] && !in_array($it['size'], $existingGrpMap[$grpKey]['sizes']))
         $existingGrpMap[$grpKey]['sizes'][] = $it['size'];
-    $existingGrpMap[$grpKey]['variants'][] = ['variant_id' => (int) $it['variant_id']];
+    $existingGrpMap[$grpKey]['variants'][] = ['variant_id' => (int) $it['variant_id'], 'stock_qty' => (float) ($it['stock_qty'] ?? 0)];
 }
 $existingLinesForJs = array_values($existingGrpMap);
 ?>
@@ -585,6 +593,10 @@ $existingLinesForJs = array_values($existingGrpMap);
 
         .req {
             color: #dc2626
+        }
+
+        .hidden-col {
+            display: none;
         }
 
         .sec-title {
@@ -1213,21 +1225,23 @@ $existingLinesForJs = array_values($existingGrpMap);
                                             <th style="width:24px">#</th>
                                             <th>بيان المنتج</th>
                                             <th>الموديل</th>
-                                            <th>الكروب / القياس</th>
-                                            <th class="text-center">عدد القطع بالباكيت</th>
+                                            <th>القياس</th>
+                                            <th class="text-center hidden-col">عدد القطع بالباكيت</th>
                                             <th>اللون</th>
+                                            <th class="text-center" style="color:#7c3aed">المتوفر بالمخزون</th>
                                             <th class="text-center">عدد الكروبات</th>
+                                            <th class="text-center hidden-col">سعر التكلفة الافتراضي</th>
+                                            <th class="text-center hidden-col">سعر الشراء المسجَّل</th>
+                                            <th class="text-center" style="color:#0891b2">سعر الشراء بعملة الفاتورة</th>
+                                            <th class="text-center">نسبة الخصم</th>
                                             <th class="text-center">عدد المنتجات</th>
-                                            <th class="text-center">سعر التكلفة الافتراضي</th>
-                                            <th class="text-center">قيمة الخصم الإفرادي</th>
-                                            <th class="text-center">سعر التكلفة بعد الخصم</th>
                                             <th class="text-center">الإجمالي</th>
                                             <th style="width:22px"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="linesBody">
                                         <tr id="emptyRow">
-                                            <td colspan="13" class="text-center text-muted py-4"
+                                            <td colspan="15" class="text-center text-muted py-4"
                                                 style="font-size:.8rem">
                                                 <i class="bi bi-barcode d-block mb-2"
                                                     style="font-size:1.5rem;opacity:.3"></i>
@@ -1548,14 +1562,18 @@ $existingLinesForJs = array_values($existingGrpMap);
             codeCur = sel.value;
             document.getElementById('iExRate').value = exRate;
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
-            // ⚠ جدول بنود الفاتورة صار بعملة الفرع الثابتة فقط (قرار
-            // صريح) — تغيير عملة الفاتورة ما عاد يأثر على أسعار البنود
-            // إطلاقاً، فحذفنا إعادة الحساب هون.
+            // ⚠ قرار جديد يعكس السابق: net_price نفسه (عملة الفرع) ما
+            // بيتغيّر، بس عمود "سعر الشراء بعملة الفاتورة" لازم يُعاد
+            // حسابه فوراً لكل الأسطر — نفس آلية فاتورة البيع/فاتورة
+            // الشراء الجديدة. بلا أثر عند التحميل الأولي (lines فاضية
+            // بعدها، loadExistingLines() بتنفَّذ لاحقاً).
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
         function onExRateChange() {
             exRate = Math.max(0.0001, parseFloat(document.getElementById('iExRate').value) || 1);
             document.getElementById('exRateHint').textContent = `1 ${BASE_CUR_CODE} = ${exRate.toFixed(6)} ${codeCur}`;
+            lines.forEach(l => recalcLine(l, document.getElementById(l.row_id)));
             calcTotals();
         }
         // تهيئة
@@ -1591,7 +1609,7 @@ $existingLinesForJs = array_values($existingGrpMap);
         function doSearch() {
             const q = document.getElementById('scanInput').value.trim();
             if (!q) return;
-            post({ _action: 'search_product', q }).then(d => {
+            post({ _action: 'search_product', q, warehouse_id: document.getElementById('iWarehouse').value }).then(d => {
                 if (!d.ok) { toast(d.msg, 'danger'); return; }
                 if (d.type === 'barcode') {
                     // وجد مباشرة بالباركود — نمرّره لنفس مودال المراجعة (بكل
@@ -1954,23 +1972,25 @@ $existingLinesForJs = array_values($existingGrpMap);
             ${grpBadge}
             <div class="sizes-lbl mt-1" style="color:#334155">${line.sizes.join(' · ')} ${line.age_type}</div>
         </td>
-        <td class="text-center">
+        <td class="text-center hidden-col">
             <input type="number" class="pk-input" value="${line.packet_qty}" dir="ltr" readonly
                 title="من إعدادات المنتج — للقراءة فقط">
         </td>
         <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${line.color_name || '—'}</span></div></td>
+        <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(line)}</td>
         <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="1" dir="ltr"
             onchange="updateLine('${gk}','qty',this.value)"></td>
-        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-        <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+        <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
             value="${line.default_price > 0 ? line.default_price : ''}" dir="ltr" readonly
             title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-        <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-            value="0" dir="ltr" readonly
-            title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
-        <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
-            value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" placeholder="0.00"
-            onchange="updateLine('${gk}','net_price',this.value)"></td>
+        <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
+            value="${line.net_price > 0 ? line.net_price : ''}" dir="ltr" readonly
+            title="سعر الشراء بعملة الفرع — محسوب تلقائياً من عملة الفاتورة، للقراءة فقط" placeholder="0.00"></td>
+        <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+            value="${line.net_price > 0 ? (line.net_price * exRate).toFixed(4) : ''}" dir="ltr" placeholder="0.00"
+            onchange="updateLine('${gk}','net_price_doc',this.value)"></td>
+        <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+        <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
         <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
         <td><button class="del-btn" onclick="removeLine('${gk}')"><i class="bi bi-x-lg"></i></button></td>`;
             tbody.appendChild(tr);
@@ -1978,6 +1998,13 @@ $existingLinesForJs = array_values($existingGrpMap);
             calcTotals();
             updateLinesCount();
             if (!line.default_price) tr.querySelector('.q-input').focus();
+        }
+
+        // المتوفر بالمخزون للكروب = أقل كمية بين كل المتغيّرات المدمجة
+        function formatStockList(line) {
+            if (!line.variants.length) return '—';
+            const qtys = line.variants.map(v => parseFloat(v.stock_qty) || 0);
+            return Math.min(...qtys).toString();
         }
 
         // دمج variant في كروب موجود
@@ -1993,6 +2020,8 @@ $existingLinesForJs = array_values($existingGrpMap);
                 const row = document.getElementById(line.row_id);
                 if (row) {
                     row.querySelector('.sizes-lbl').textContent = line.sizes.join(' · ') + ' ' + line.age_type;
+                    const stockLbl = row.querySelector('.stock-lbl');
+                    if (stockLbl) stockLbl.textContent = formatStockList(line);
                     recalcLine(line, row);
                 }
             }
@@ -2004,11 +2033,12 @@ $existingLinesForJs = array_values($existingGrpMap);
             // ⚠ قرار نهائي: الشراء بالقطعة — الكمية تُعتمد حرفياً بلا أي
             // تحقق/تقريب (انلغى قرار "مضاعف صحيح" السابق).
             if (field === 'qty') line.qty = Math.max(0.001, parseFloat(val) || 0);
-            // ⚠ سعر التكلفة الافتراضي وقيمة الخصم صارا حقلين مقفلين (readonly)
-            // — ما بوصلهم onchange من الواجهة إطلاقاً. الحقل الوحيد يلي
-            // بيغيّر الخصم هو سعر التكلفة بعد الخصم نفسه (يُكتب مباشرة).
-            if (field === 'net_price') {
-                line.net_price = Math.max(0, parseFloat(val) || 0);
+            // ⚠ الحقل الفعلي المعروض/المُعدَّل بالواجهة صار "سعر الشراء
+            // بعملة الفاتورة" — يتحوّل تلقائياً لعملة الفرع (net_price)
+            // بالقسمة على سعر الصرف الحالي. آلية الحفظ ما تغيّرت.
+            if (field === 'net_price_doc') {
+                const docVal = Math.max(0, parseFloat(val) || 0);
+                line.net_price = exRate > 0 ? docVal / exRate : docVal;
             }
             const row = document.getElementById(line.row_id);
             recalcLine(line, row);
@@ -2016,12 +2046,14 @@ $existingLinesForJs = array_values($existingGrpMap);
         }
 
         function recalcLine(line, row) {
-            // ⚠ الاتجاه الوحيد للحساب الآن: قيمة الخصم مقفلة ومحسوبة دائماً
-            // = الافتراضي − سعر التكلفة بعد الخصم. سعر التكلفة بعد الخصم هو
-            // الحقل التحريري الوحيد بين الاثنين (نفس معادلة الربط الأصلية:
-            // سعر التكلفة بعد الخصم = سعر التكلفة الافتراضي − قيمة الخصم —
-            // بس محلولة بالاتجاه المعاكس لأنه صار هو المُدخَل، لا الناتج).
+            // ⚠ قيمة الخصم = الافتراضي − سعر الشراء الصافي (بعملة الفرع
+            // بالاثنين) — نفس المعادلة السابقة، بلا تغيير بالحساب الجوهري.
             line.discount_value = Math.max(0, line.default_price - (line.net_price || 0));
+            // ⚠ نسبة الخصم — تعرض بدل القيمة المطلقة (قرار مؤكَّد: أقرب
+            // مفهوم مقابل لـ"نسبة الفارق" بفاتورة البيع).
+            line.discount_pct_line = line.default_price > 0
+                ? (line.discount_value / line.default_price) * 100
+                : 0;
 
             // ⚠ عدد المنتجات = عدد الكروبات × عدد القطع بالباكيت فقط —
             // هاي الكمية الحقيقية يلي بتُحفظ بعمود quantity لكل متغيّر
@@ -2032,8 +2064,11 @@ $existingLinesForJs = array_values($existingGrpMap);
 
             if (row) {
                 row.querySelector('.pc-lbl').textContent = line.piece_count.toFixed(0);
-                row.querySelector('.dv-input').value = (line.discount_value || 0).toFixed(2);
                 row.querySelector('.np-input').value = line.net_price > 0 ? line.net_price.toFixed(2) : '';
+                const npdInput = row.querySelector('.npd-input');
+                if (npdInput) npdInput.value = line.net_price > 0 ? (line.net_price * exRate).toFixed(4) : '';
+                const vpLbl = row.querySelector('.vp-lbl');
+                if (vpLbl) vpLbl.textContent = (line.discount_pct_line || 0).toFixed(2) + '%';
                 row.querySelector('.t-input').value = line.total > 0 ? line.total.toFixed(2) : '';
             }
         }
@@ -2362,23 +2397,25 @@ $existingLinesForJs = array_values($existingGrpMap);
             <td class="text-muted" dir="ltr">${l.model_number}</td>
             <td>${grpBadge}
                 <div class="sizes-lbl mt-1" style="color:#334155">${l.sizes.join(' · ')} ${l.age_type}</div></td>
-            <td class="text-center">
+            <td class="text-center hidden-col">
                 <input type="number" class="pk-input" value="${l.packet_qty || 1}" dir="ltr" readonly
                     title="من إعدادات المنتج — للقراءة فقط">
             </td>
             <td><div class="d-flex align-items-center gap-1">${colorDot}<span>${l.color_name || '—'}</span></div></td>
+            <td class="text-center stock-lbl" style="color:#7c3aed" dir="ltr">${formatStockList(l)}</td>
             <td style="width:55px"><input type="number" class="q-input" min="1" step="1" value="${l.qty}" dir="ltr"
                 onchange="updateLine('${l.grp_key}','qty',this.value)"></td>
-            <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
-            <td style="width:75px"><input type="number" class="p-input" min="0" step="0.0001"
+            <td class="text-center hidden-col"><input type="number" class="p-input" min="0" step="0.0001"
                 value="${l.default_price || ''}" dir="ltr" readonly
                 title="من بيانات المنتج — للقراءة فقط" placeholder="0.00"></td>
-            <td style="width:75px"><input type="number" class="dv-input" min="0" step="0.0001"
-                value="${l.discount_value || 0}" dir="ltr" readonly
-                title="محسوب تلقائياً: الافتراضي − سعر التكلفة بعد الخصم — للقراءة فقط"></td>
-            <td style="width:75px"><input type="number" class="np-input" min="0" step="0.0001"
-                value="${l.net_price || ''}" dir="ltr" placeholder="0.00"
-                onchange="updateLine('${l.grp_key}','net_price',this.value)"></td>
+            <td class="text-center hidden-col"><input type="number" class="np-input" min="0" step="0.0001"
+                value="${l.net_price || ''}" dir="ltr" readonly
+                title="سعر الشراء بعملة الفرع — محسوب تلقائياً، للقراءة فقط" placeholder="0.00"></td>
+            <td style="width:80px"><input type="number" class="npd-input" min="0" step="0.0001"
+                value="${l.net_price > 0 ? (l.net_price * exRate).toFixed(4) : ''}" dir="ltr" placeholder="0.00"
+                onchange="updateLine('${l.grp_key}','net_price_doc',this.value)"></td>
+            <td class="text-center vp-lbl" style="width:70px;font-weight:600">0%</td>
+            <td class="text-center pc-lbl" style="color:#7c3aed">0</td>
             <td style="width:80px"><input type="number" class="t-input calc" readonly dir="ltr" placeholder="0.00"></td>
             <td><button class="del-btn" onclick="removeLine('${l.grp_key}')"><i class="bi bi-x-lg"></i></button></td>`;
                 tbody.appendChild(tr);

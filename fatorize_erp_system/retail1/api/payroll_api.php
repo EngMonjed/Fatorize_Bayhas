@@ -54,27 +54,53 @@ try {
         $emp['cur_code']=$cur;
         $emp['cur_sym']=$symMap[$cur]??'$';
         $emp['cur_rate']=1;
-        $exSt=$pdo->prepare("SELECT * FROM `{$TP}` WHERE employee_id=? AND payroll_month=?");
-        $exSt->execute([$empId,$monthFrom]);
+        // نجيب أي سجل راتب موجود بنطاق أوسع من الشهر المختار بقليل (٦ أيام
+        // زيادة كل طرف) — لأنه أسبوع الموظف الحقيقي ممكن يبلش بالشهر
+        // السابق أو يمتد للشهر التالي. المطابقة بتاريخ البداية الفعلي
+        // (period_from) مباشرة، مو برقم أسبوع مرتبط بالشهر
+        $wideFrom=(new DateTime($monthFrom))->modify('-6 days')->format('Y-m-d');
+        $wideTo=(new DateTime($monthTo))->modify('+6 days')->format('Y-m-d');
+        $exSt=$pdo->prepare("SELECT * FROM `{$TP}` WHERE employee_id=? AND period_from BETWEEN ? AND ?");
+        $exSt->execute([$empId,$wideFrom,$wideTo]);
         $existing=[];
-        foreach($exSt->fetchAll(PDO::FETCH_ASSOC) as $r)$existing[$r['week_number']]=$r;
+        foreach($exSt->fetchAll(PDO::FETCH_ASSOC) as $r)$existing[$r['period_from']]=$r;
         $periods=[];
         if($emp['salary_type']==='monthly'){
-            $ex=$existing[0]??null;
+            $ex=$existing[$monthFrom]??null;
             $periods[]=['week_num'=>0,'label'=>'الشهر كاملاً','from'=>$monthFrom,'to'=>$monthTo,
                 'month'=>$monthFrom,'status'=>$ex?$ex['payment_status']:'pending',
                 'net'=>$ex?(float)$ex['net_salary']:null,'id'=>$ex?$ex['id']:null];
         }else{
-            $day=new DateTime($monthFrom);$end=new DateTime($monthTo);$w=1;
-            while($day<=$end&&$w<=4){
-                $wS=clone $day;$wE=clone $day;$wE->modify('+6 days');
-                if($wE>$end)$wE=clone $end;
-                $ex=$existing[$w]??null;
-                $periods[]=['week_num'=>$w,'label'=>"الأسبوع {$w}",'from'=>$wS->format('Y-m-d'),
-                    'to'=>$wE->format('Y-m-d'),'month'=>$monthFrom,
+            // أسابيع متواصلة مرتكزة على يوم عطلة الموظف الأسبوعية الفعلي —
+            // مستقلة تماماً عن حدود الشهر التقويمي. الأسبوع بيبلش أول يوم
+            // دوام بعد يوم عطلته مباشرة (مثال: عطلته الجمعة → أسبوعه دايماً
+            // سبت→جمعة، حتى لو امتد بين شهرين). بدون هالمنطق، آخر أيام
+            // الشهر السابق التابعة لنفس الأسبوع كانت تُفقد بالكامل — لا
+            // تُحسب بالشهر السابق ولا بهذا الشهر
+            $dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+            $offIdx=null;
+            foreach($dayNames as $idx=>$dn){
+                $f=$emp[$dn.'_from']??null;
+                if($f===null||$f===''){$offIdx=$idx;break;}
+            }
+            $weekStartIdx=$offIdx!==null?($offIdx+1)%7:0; // الأحد افتراضياً لو ما له عطلة محددة أصلاً
+
+            $cursor=new DateTime($monthFrom);
+            while((int)$cursor->format('w')!==$weekStartIdx){
+                $cursor->modify('-1 day');
+            }
+            $end=new DateTime($monthTo);
+            $w=1;
+            while($cursor<=$end&&$w<=6){
+                $wS=clone $cursor;$wE=clone $cursor;$wE->modify('+6 days');
+                $fromKey=$wS->format('Y-m-d');
+                $ex=$existing[$fromKey]??null;
+                $periods[]=['week_num'=>$w,
+                    'label'=>"الأسبوع {$w} ({$wS->format('m/d')}→{$wE->format('m/d')})",
+                    'from'=>$fromKey,'to'=>$wE->format('Y-m-d'),'month'=>$monthFrom,
                     'status'=>$ex?$ex['payment_status']:'pending',
                     'net'=>$ex?(float)$ex['net_salary']:null,'id'=>$ex?$ex['id']:null];
-                $day->modify('+7 days');$w++;
+                $cursor->modify('+7 days');$w++;
             }
         }
         $lSt=$pdo->prepare("SELECT * FROM `{$TL}` WHERE employee_id=? ORDER BY id DESC");

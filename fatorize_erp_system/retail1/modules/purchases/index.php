@@ -672,6 +672,8 @@ $PAY_MAP = [
                                 <th>الإجمالي</th>
                                 <th>بعملة الفرع (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
                                 <th>حالة الدفع</th>
+                                <th style="color:#16a34a">المستلم</th>
+                                <th style="color:#dc2626">المتبقي</th>
                                 <th>الحالة</th>
                                 <th style="text-align:center" data-no-sort>إجراءات</th>
                             </tr>
@@ -679,7 +681,7 @@ $PAY_MAP = [
                         <tbody>
                             <?php if (empty($purchases)): ?>
                                 <tr>
-                                    <td colspan="10" class="text-center text-muted py-5">
+                                    <td colspan="12" class="text-center text-muted py-5">
                                         <i class="bi bi-receipt d-block mb-2" style="font-size:2rem;opacity:.2"></i>
                                         لا توجد فواتير<?= $search ? " تطابق \"{$search}\"" : '' ?>
                                     </td>
@@ -718,6 +720,17 @@ $PAY_MAP = [
                                     </td>
                                     <td><span class="<?= $pay['cls'] ?>"
                                             style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span></td>
+                                    <!-- ⚠ paid_amount/balance_amount مخزَّنين فعلياً بعملة الفاتورة
+                                    (قرار مؤكَّد سابقاً — بعكس final_amount)، فالإقران برمز عملة
+                                    الفاتورة $sym هون صحيح، مو نفس فئة الباگ المتكرر بالعمود
+                                    "الإجمالي" أسفل (راجع الملاحظة بنهاية الرد). -->
+                                    <td class="n fw-600" style="color:#16a34a">
+                                        <?= number_format((float) $pur['paid_amount'], 2) ?> <?= $sym ?>
+                                    </td>
+                                    <td class="n fw-600"
+                                        style="color:<?= (float) $pur['balance_amount'] > 0.001 ? '#dc2626' : '#16a34a' ?>">
+                                        <?= number_format((float) $pur['balance_amount'], 2) ?> <?= $sym ?>
+                                    </td>
                                     <td><span class="badge <?= $st['cls'] ?>"
                                             style="font-size:.68rem"><?= $st['label'] ?></span></td>
                                     <td>
