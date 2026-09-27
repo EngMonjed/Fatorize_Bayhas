@@ -1,7 +1,7 @@
 <?php
 /**
  * inventory/consumable_issues.php — صرف المستهلكات
- *retail1/modules/inventory/consumable_issues.php
+ *retail1/modules/expenses_and_consumables/consumable_issues.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -1051,6 +1051,9 @@ $STATUS_MAP = [
                 <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
                         style="border:none;color:#64748b;font-size:.83rem"><i
                             class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
+                <li class="nav-item"><a class="nav-link fw-600" href="consumable_reports.php"
+                        style="border:none;color:#64748b;font-size:.83rem"><i
+                            class="bi bi-bar-chart me-1"></i>التقارير</a></li>
             </ul>
 
             <!-- إحصائيات -->

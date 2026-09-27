@@ -380,6 +380,16 @@ try {
                 ->execute([$finalBase, $finalBase, $accInventory['id']]);
 
             // دائن: ذمم الموردين
+            // ⚠ إصلاح إشارة حرج (بعد تحقيق مع المستخدم بمثال حقيقي): حساب
+            // "ذمة المورد" التزام (Liability) — رصيده الطبيعي دائن، يعني
+            // بالمعيار المحاسبي القياسي: دائن يزيد الرصيد، مدين ينقصه.
+            // الكود القديم كان يطبّق نفس معادلة "مدين+/دائن-" الموحَّدة
+            // على كل الحسابات بلا استثناء (صحيحة للأصول متل المخزون فوق،
+            // غلط لحسابات الالتزام) — فكانت النتيجة معكوسة: رصيد سالب كل
+            // ما زاد الدَين الفعلي، بينما ينتظر المستخدم موجب = عليه دين
+            // (نفس قراءة أي كشف حساب تقليدي). ⚠ الأرصدة القديمة المخزَّنة
+            // قبل هالإصلاح ضلّت بالإشارة المعكوسة عمداً (قرار صريح: نصلّح
+            // الكود بس هلق، الأرصدة القديمة تُصحَّح لاحقاً بميغريشن منفصل).
             $pdo->prepare("INSERT INTO `{$TJI}`
                 (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                 VALUES (?,?,0,?,?,?,?,?,?)")
@@ -393,7 +403,7 @@ try {
                     $curId($curCode),
                     $rate
                 ]);
-            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
                 ->execute([$finalBase, $finalBase, $accSupplier['id']]);
 
             // ── الدفعة المقدمة صارت تُطبَّق يدوياً حصراً من الواجهة ──
@@ -435,11 +445,12 @@ try {
                             ]);
                         $jeAdvId = (int) $pdo->lastInsertId();
 
-                        // مدين: ذمم الموردين (تقليل الذمة)
+                        // مدين: ذمم الموردين (تقليل الذمة) — ⚠ نفس إصلاح
+                        // الإشارة أعلاه: مدين على التزام = ينقص الرصيد
                         $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency,exchange_rate)
                             VALUES (?,?,?,0,?,?,'تطبيق دفعة مقدمة',?,1)")
                             ->execute([$jeAdvId, $accSupplier['id'], $advanceApplied, $advanceApplied, $advanceApplied, $branchBaseCurrency]);
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
                             ->execute([$advanceApplied, $advanceApplied, $accSupplier['id']]);
 
                         // دائن: الدفعات المقدمة (تصفير الرصيد المستخدم)
@@ -588,13 +599,12 @@ try {
                             $curId($paidCur),
                             $paidEffRate
                         ]);
-                    $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                        // ⚠ إصلاح حرج: هاد سطر "مدين" (تخفيض الذمة) — لازم
-                        // يجمع، مو يطرح. حساب ذمم الموردين هون بيتبع قاعدة
-                        // "دائن=طرح / مدين=جمع" (نفس القيد الرئيسي: الدائن
-                        // بيزيد المديونية بالطرح). كان هالسطر ناسخ نمط
-                        // الطرح بالغلط، فصارت الدفعة تزيد المديونية بدل
-                        // ما تنقصها فعلياً — باگ محاسبي حقيقي، انصلح الآن.
+                    $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                        // ⚠ إصلاح إشارة (محدَّث بعد قرار عكس القاعدة الكامل
+                        // للحسابات الالتزامية — راجع تعليق القيد الرئيسي
+                        // أعلاه): دائن الآن = +زيادة الالتزام، مدين = −تخفيضه.
+                        // هالسطر "مدين" (دفعة، تخفيض ذمة) لازم يطرح، لا يجمع
+                        // — عكس تماماً القاعدة القديمة (طرح صار على الدائن).
                         ->execute([$paidAmt, $paidAmt, $accSupplier['id']]);
                     // دائن: الصندوق (بعملته الأصلية)
                     $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
@@ -672,8 +682,10 @@ try {
                         $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
                             VALUES (?,?,?,0,?,?,'خصم تعجيل دفع',?,?)")
                             ->execute([$jeSettleId, $accSupplier['id'], $settleDiscFullBase, $settleDiscOrig, $settleDiscFullBase, $curId($curCode), $rate]);
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                            // ⚠ نفس إصلاح قيد الدفع: سطر "مدين" لازم يجمع لا يطرح
+                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                            // ⚠ إصلاح إشارة (بعد عكس القاعدة الكاملة —
+                            // راجع تعليق القيد الرئيسي): مدين على التزام
+                            // ينقص الرصيد الآن، لا يزيده.
                             ->execute([$settleDiscFullBase, $settleDiscFullBase, $accSupplier['id']]);
                         // دائن: إيراد خصم تعجيل الدفع
                         $pdo->prepare("INSERT INTO `{$TJI}` (journal_entry_id,account_id,debit,credit,original_amount,base_amount,description,currency_id,exchange_rate)
@@ -793,12 +805,28 @@ try {
                 }
                 // عكس القيد
                 if ($pur['journal_entry_id']) {
-                    $stJI = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
+                    $stJI = $pdo->prepare("SELECT ji.*, ac.account_type FROM `{$TJI}` ji
+                        JOIN `{$TAC}` ac ON ac.id = ji.account_id
+                        WHERE ji.journal_entry_id=?");
                     $stJI->execute([$pur['journal_entry_id']]);
                     foreach ($stJI->fetchAll(PDO::FETCH_ASSOC) as $ji) {
+                        // ⚠ إصلاح حرج مرتبط بإصلاح إشارة حساب الذمة أعلاه:
+                        // حسابات الأصول/المصاريف (inventory, cash, expense)
+                        // لسا على القاعدة القياسية (مدين=+/دائن=−)، فعكسها
+                        // = balance -= (debit-credit) زي ما كان دايماً.
+                        // حسابات الالتزام (liability — ذمة المورد تحديداً)
+                        // صارت بالقاعدة المعاكسة (دائن=+/مدين=−)، فعكسها
+                        // لازم معادلة معاكسة: balance += (debit-credit)
+                        // (يعني balance -= (credit-debit))، وإلا كان عكس
+                        // القيد رح يضاعف الخطأ بدل ما يلغيه.
                         $net = $ji['debit'] - $ji['credit'];
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$net, $net, $ji['account_id']]);
+                        if ($ji['account_type'] === 'liability') {
+                            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                                ->execute([$net, $net, $ji['account_id']]);
+                        } else {
+                            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                                ->execute([$net, $net, $ji['account_id']]);
+                        }
                     }
                     $pdo->prepare("UPDATE `{$TJE}` SET status='cancelled',cancelled_at=NOW(),cancelled_by=? WHERE id=?")
                         ->execute([$_SESSION['user_id'], $pur['journal_entry_id']]);

@@ -9,8 +9,16 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('inventory.movements', 'view');
-$currentModule = 'inventory.movements';
+
+// ⚠ لازم نحدد التبويب (منتجات/مستهلكات) قبل فحص الصلاحية — نفس بق
+// warehouse.php بالضبط: كان $currentModule ثابت على 'inventory.movements'
+// بغض النظر عن ?tab=، فكانت الصفحة بتفتح قسمين بالشريط الجانبي مع بعض
+// (المخزون + المصاريف والمستهلكات) حتى لما تكون فعلياً بتبويب المستهلكات
+$tab = $_GET['tab'] ?? 'products';
+$movementsPermKey = $tab === 'consumables' ? 'expenses.consumable_entries' : 'inventory.movements';
+
+requirePermission($movementsPermKey, 'view');
+$currentModule = $movementsPermKey;
 
 $TS = $_SESSION['table_suffix'];
 $TCM = "consumable_movements_{$TS}";
@@ -38,28 +46,14 @@ $TP = "purchases_{$TS}";
 $TSI = "sales_invoices_{$TS}";
 $TSII = "sales_invoice_items_{$TS}";
 $TPROD = "products_{$TS}";
-$TIM = "inventory_movements_{$TS}";
-$TIMD = "inventory_movement_details_{$TS}";
 $branchName = $_SESSION['branch_name'] ?? 'الفرع';
 
-// عملة الفرع الأساسية — ⚠ كانت غائبة تماماً بهذا الملف، فاضطر الكود
-// لكتابة رمز "$" حرفياً بدل قراءته من إعدادات الفرع الفعلية (نفس نمط
-// البلوبرنت المحذّر منه: رمز عملة ثابت بدل قراءة ديناميكية من currencies).
-$branchCurRow = $pdo->prepare("SELECT c.symbol FROM branches b
-    JOIN currencies c ON c.id = b.base_currency_id
-    WHERE b.table_suffix = ? LIMIT 1");
-$branchCurRow->execute([$TS]);
-$baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
-
 // ── فلاتر ──
-// ⚠ الافتراضي صار 'products' (كان 'consumables') — يطابق عنوان/أيقونة
-// الصفحة "حركات المخزون". لما تُربط من قسم "المصاريف والمستهلكات"
-// المستقبلي بالشريط الجانبي، مرّر ?tab=consumables صراحة دايماً.
-$tab = $_GET['tab'] ?? 'products';
+// ⚠ $tab محدَّد مسبقاً فوق (قبل فحص الصلاحية) — راجع التعليق هناك
 $whF = (int) ($_GET['wh'] ?? 0);
 $typeF = $_GET['type'] ?? '';
-$dateFrom = $_GET['from'] ?? '';
-$dateTo = $_GET['to'] ?? '';
+$dateFrom = $_GET['from'] ?? date('Y-m-01');
+$dateTo = $_GET['to'] ?? date('Y-m-d');
 $search = trim($_GET['q'] ?? '');
 
 $warehouses = $pdo->query("SELECT * FROM `{$TW}` WHERE is_active=1 ORDER BY id")->fetchAll();
@@ -109,49 +103,62 @@ if ($tab === 'consumables') {
 }
 
 // ── حركات المنتجات النهائية ──
-// ⚠ إعادة بناء جوهرية: الاستعلامان السابقان (من purchase_items/
-// sales_invoice_items) كانا يعيدان "استنتاج" الحركات من الفواتير —
-// تأكّدنا (بفحص الأربع APIs: confirm_purchase_invoice, confirm_sale_invoice,
-// confirm_purchase_return, confirm_sale_return) إنهم كلهم فعلياً بيكتبوا
-// مباشرة بجدولي inventory_movements_ret/inventory_movement_details_ret
-// عند كل تأكيد — وهاد المصدر الحقيقي والوحيد الموثوق (فيه أصلاً
-// balance_before/balance_after، وبيغطي المرتجعات تلقائياً، عكس الاستنتاج
-// اليدوي السابق يلي كان يتجاهلها تماماً).
 $prodMovements = [];
 if ($tab === 'products') {
-    $whereM = "WHERE im.created_at BETWEEN ? AND ?";
-    $paramsM = [$dateFrom, $dateTo . ' 23:59:59'];
+    // جلب حركات الشراء
+    $whereP = "WHERE p.status='received' AND p.purchase_date BETWEEN ? AND ?";
+    $paramsP = [$dateFrom, $dateTo];
     if ($whF) {
-        $whereM .= ' AND im.warehouse_id=?';
-        $paramsM[] = $whF;
+        $whereP .= ' AND pi.warehouse_id=?';
+        $paramsP[] = $whF;
     }
     if ($search) {
-        $whereM .= ' AND pr.name LIKE ?';
-        $paramsM[] = "%{$search}%";
+        $whereP .= ' AND pi.product_name LIKE ?';
+        $paramsP[] = "%{$search}%";
     }
 
-    $stmtM = $pdo->prepare("SELECT im.reference_type AS movement_type, im.movement_type AS direction,
-        pr.name AS product_name, pr.model_number,
-        psz.size, pcl.name AS color,
-        imd.quantity, imd.unit_price AS unit_price_base,
-        imd.total_value AS total_base,
-        im.reference_number AS ref_no, im.created_at AS movement_date,
-        COALESCE(sup.name, cus.name) AS party_name, w.name AS wh_name
-        FROM `{$TIM}` im
-        JOIN `{$TIMD}` imd ON imd.movement_id=im.id
-        LEFT JOIN `{$TPROD}` pr ON pr.id=imd.product_id
-        LEFT JOIN product_variants_{$TS} pv ON pv.id=imd.variant_id
-        LEFT JOIN product_sizes_{$TS} psz ON psz.id=pv.size_id
-        LEFT JOIN product_colors_{$TS} pcl ON pcl.id=pv.color_id
-        LEFT JOIN `{$TW}` w ON w.id=im.warehouse_id
-        LEFT JOIN `{$TP}` pu ON pu.id=im.reference_id AND im.reference_type IN ('purchase','purchase_return')
-        LEFT JOIN product_suppliers_{$TS} sup ON sup.id=pu.supplier_id
-        LEFT JOIN `{$TSI}` si ON si.id=im.reference_id AND im.reference_type IN ('sale','sale_return')
-        LEFT JOIN customers_{$TS} cus ON cus.id=si.customer_id
-        {$whereM}
-        ORDER BY im.created_at DESC LIMIT 150");
-    $stmtM->execute($paramsM);
-    $prodMovements = $stmtM->fetchAll();
+    $stmtPur = $pdo->prepare("SELECT 'purchase' AS movement_type, 'in' AS direction,
+        pi.product_name, pi.model_number, pi.size, pi.color,
+        pi.quantity, pi.unit_price AS unit_price_base, pi.total_price AS total_base,
+        p.purchase_number AS ref_no, p.purchase_date AS movement_date,
+        s.name AS party_name, w.name AS wh_name
+        FROM `{$TPI}` pi
+        JOIN `{$TP}` p ON p.id=pi.purchase_id
+        LEFT JOIN product_suppliers_{$TS} s ON s.id=p.supplier_id
+        LEFT JOIN `{$TW}` w ON w.id=pi.warehouse_id
+        {$whereP} LIMIT 150");
+    $stmtPur->execute($paramsP);
+    $purRows = $stmtPur->fetchAll();
+
+    // جلب حركات البيع
+    $whereS = "WHERE inv.status='confirmed' AND inv.invoice_date BETWEEN ? AND ?";
+    $paramsS = [$dateFrom, $dateTo];
+    if ($whF) {
+        $whereS .= ' AND si.warehouse_id=?';
+        $paramsS[] = $whF;
+    }
+    if ($search) {
+        $whereS .= ' AND si.item_name LIKE ?';
+        $paramsS[] = "%{$search}%";
+    }
+
+    $stmtSal = $pdo->prepare("SELECT 'sale' AS movement_type, 'out' AS direction,
+        si.item_name AS product_name, si.model_number, si.size, si.color,
+        si.quantity, si.unit_price AS unit_price_base, si.total_price AS total_base,
+        inv.invoice_number AS ref_no, inv.invoice_date AS movement_date,
+        inv.customer_name AS party_name, w.name AS wh_name
+        FROM `{$TSII}` si
+        JOIN `{$TSI}` inv ON inv.id=si.invoice_id
+        LEFT JOIN `{$TW}` w ON w.id=si.warehouse_id
+        {$whereS} LIMIT 150");
+    $stmtSal->execute($paramsS);
+    $salRows = $stmtSal->fetchAll();
+
+    // دمج وترتيب
+    $prodMovements = array_merge($purRows, $salRows);
+    usort($prodMovements, function ($a, $b) {
+        return strcmp($b['movement_date'], $a['movement_date']);
+    });
 
     // إحصائيات المنتجات
     $prodIn = array_filter($prodMovements, function ($r) {
@@ -299,8 +306,7 @@ $MOVE_TYPE_MAP = [
         <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
         <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
             <?php if ($tab === 'consumables'): ?>
-                <a href="../expenses_and_consumables/consumables.php" style="color:#64748b;text-decoration:none">المصاريف
-                    والمستهلكات</a>
+                <a href="../expenses_and_consumables/consumables.php" style="color:#64748b;text-decoration:none">المصاريف والمستهلكات</a>
             <?php else: ?>
                 <a href="products.php" style="color:#64748b;text-decoration:none">المخزون</a>
             <?php endif; ?>
@@ -317,46 +323,30 @@ $MOVE_TYPE_MAP = [
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumables.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-box-seam me-1"></i>المواد
                             الاستهلاكية</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600"
-                            href="../expenses_and_consumables/consumable_purchases.php"
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_purchases.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-cart-plus me-1"></i>فواتير
                             الشراء</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_issues.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-arrow-bar-up me-1"></i>صرف
-                            المستهلكات</a></li>
+                            style="border:none;color:#64748b;font-size:.83rem"><i
+                                class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=consumables"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>مستودعات
                             المستهلكات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600 active" href="#"
                             style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
                                 class="bi bi-arrow-left-right me-1"></i>حركة المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600"
-                            href="../expenses_and_consumables/consumable_transfers.php"
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_transfers.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i
                                 class="bi bi-signpost-split me-1"></i>مناقلة بين المستودعات</a></li>
                     <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/expenses.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-wallet2 me-1"></i>إدارة
                             المصاريف</a></li>
-                </ul>
-            <?php elseif ($tab === 'products'): ?>
-                <!-- الشريط الموحّد لقسم المنتجات/المخزون — نظير شريط المستهلكات
-                     بالضبط، كان ناقصاً هون بالضبط متل ما كان ناقص بـwarehouse.php -->
-                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                    <li class="nav-item"><a class="nav-link fw-600" href="products.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a>
-                    </li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=products"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>مستودعات
-                            المنتجات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
-                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
-                                class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="internal_orders.php"
+                    <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
                             style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-signpost-split me-1"></i>الطلبات الداخلية</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="reports.php"
+                                class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
+                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_reports.php"
                             style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-bar-chart-line me-1"></i>التقارير</a></li>
+                                class="bi bi-bar-chart me-1"></i>التقارير</a></li>
                 </ul>
             <?php endif; ?>
 
@@ -420,10 +410,8 @@ $MOVE_TYPE_MAP = [
                                 class="bi bi-currency-dollar text-warning"></i></div>
                         <div>
                             <div class="stat-val n" style="font-size:.9rem">
-                                <span class="dir-in">+<?= htmlspecialchars($baseCurSymbol) ?>
-                                    <?= number_format($stats['cost_in'] ?? 0, 2) ?></span>
-                                <span
-                                    style="font-size:.75rem;color:#94a3b8;display:block">-<?= htmlspecialchars($baseCurSymbol) ?>
+                                <span class="dir-in">+$ <?= number_format($stats['cost_in'] ?? 0, 2) ?></span>
+                                <span style="font-size:.75rem;color:#94a3b8;display:block">-$
                                     <?= number_format($stats['cost_out'] ?? 0, 2) ?></span>
                             </div>
                             <div class="stat-lbl">التكلفة وارد/صادر</div>
@@ -431,6 +419,7 @@ $MOVE_TYPE_MAP = [
                     </div>
                 </div>
             </div>
+
             <!-- فلاتر -->
             <div class="tbl-wrap mb-3">
                 <div class="tbl-hdr">
@@ -443,19 +432,18 @@ $MOVE_TYPE_MAP = [
                             onchange="this.form.submit()">
                             <option value="">كل المستودعات</option>
                             <?php foreach ($warehouses as $wh): ?>
-                                <option value="<?= $wh['id'] ?>" <?= $whF == $wh['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($wh['name']) ?>
-                                </option>
+                                        <option value="<?= $wh['id'] ?>" <?= $whF == $wh['id'] ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($wh['name']) ?></option>
                             <?php endforeach; ?>
                         </select>
                         <?php if ($tab === 'consumables'): ?>
-                            <select name="type" class="form-select form-select-sm" style="width:120px;border-radius:8px"
-                                onchange="this.form.submit()">
-                                <option value="">كل الأنواع</option>
-                                <?php foreach (['receive' => 'استلام', 'issue' => 'صرف', 'return_in' => 'إرجاع للمخزن', 'return_out' => 'إرجاع للمورد', 'transfer' => 'نقل', 'adjust' => 'تسوية', 'waste' => 'هالك'] as $k => $v): ?>
-                                    <option value="<?= $k ?>" <?= $typeF === $k ? 'selected' : '' ?>><?= $v ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                                    <select name="type" class="form-select form-select-sm" style="width:120px;border-radius:8px"
+                                        onchange="this.form.submit()">
+                                        <option value="">كل الأنواع</option>
+                                        <?php foreach (['receive' => 'استلام', 'issue' => 'صرف', 'return_in' => 'إرجاع للمخزن', 'return_out' => 'إرجاع للمورد', 'transfer' => 'نقل', 'adjust' => 'تسوية', 'waste' => 'هالك'] as $k => $v): ?>
+                                                    <option value="<?= $k ?>" <?= $typeF === $k ? 'selected' : '' ?>><?= $v ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
                         <?php endif; ?>
                         <input type="date" name="from" value="<?= htmlspecialchars($dateFrom) ?>"
                             class="form-control form-control-sm" style="width:140px;border-radius:8px">
@@ -465,8 +453,8 @@ $MOVE_TYPE_MAP = [
                         <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px"><i
                                 class="bi bi-search me-1"></i>بحث</button>
                         <?php if ($search || $whF || $typeF): ?>
-                            <a href="?tab=<?= $tab ?>&from=<?= $dateFrom ?>&to=<?= $dateTo ?>" class="btn btn-sm btn-light"
-                                style="border-radius:8px"><i class="bi bi-x-lg"></i></a>
+                                    <a href="?tab=<?= $tab ?>&from=<?= $dateFrom ?>&to=<?= $dateTo ?>" class="btn btn-sm btn-light"
+                                        style="border-radius:8px"><i class="bi bi-x-lg"></i></a>
                         <?php endif; ?>
                     </form>
                 </div>
@@ -476,142 +464,126 @@ $MOVE_TYPE_MAP = [
             <div class="tbl-wrap">
                 <div class="table-responsive">
                     <?php if ($tab === 'consumables'): ?>
-                        <table class="mtbl" id="movementsTbl">
-                            <thead>
-                                <tr>
-                                    <th>رقم الحركة</th>
-                                    <th>التاريخ</th>
-                                    <th>المادة</th>
-                                    <th>المستودع</th>
-                                    <th>النوع</th>
-                                    <th>الاتجاه</th>
-                                    <th class="text-center">الكمية</th>
-                                    <th class="text-center">قبل</th>
-                                    <th class="text-center">بعد</th>
-                                    <th class="text-center">سعر/وحدة ($)</th>
-                                    <th class="text-end">التكلفة ($)</th>
-                                    <th>المرجع</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if (empty($consMovements)): ?>
-                                    <tr>
-                                        <td colspan="12" class="text-center text-muted py-5">
-                                            <i class="bi bi-arrow-left-right d-block mb-2"
-                                                style="font-size:2rem;opacity:.2"></i>
-                                            لا توجد حركات في هذه الفترة
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                                <?php foreach ($consMovements as $mov):
-                                    $mt = $MOVE_TYPE_MAP[$mov['movement_type']] ?? ['label' => $mov['movement_type'], 'cls' => 'bg-secondary-subtle text-secondary', 'icon' => 'bi-circle'];
-                                    ?>
-                                    <tr>
-                                        <td dir="ltr" style="font-size:.72rem;color:#94a3b8">
-                                            <?= htmlspecialchars($mov['movement_no']) ?>
-                                        </td>
-                                        <td class="text-muted"><?= $mov['movement_date'] ?></td>
-                                        <td>
-                                            <div class="fw-600"><?= htmlspecialchars($mov['item_name']) ?></div>
-                                            <div style="font-size:.7rem;color:#94a3b8"><?= htmlspecialchars($mov['unit']) ?>
-                                            </div>
-                                        </td>
-                                        <td style="font-size:.78rem"><?= htmlspecialchars($mov['wh_name'] ?? '—') ?></td>
-                                        <td><span class="badge <?= $mt['cls'] ?>" style="font-size:.68rem"><i
-                                                    class="bi <?= $mt['icon'] ?> me-1"></i><?= $mt['label'] ?></span></td>
-                                        <td>
-                                            <?php if ($mov['direction'] === 'in'): ?>
-                                                <span class="dir-in"><i class="bi bi-arrow-down-circle me-1"></i>وارد</span>
-                                            <?php else: ?>
-                                                <span class="dir-out"><i class="bi bi-arrow-up-circle me-1"></i>صادر</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td
-                                            class="n text-center fw-600 <?= $mov['direction'] === 'in' ? 'dir-in' : 'dir-out' ?>">
-                                            <?= $mov['direction'] === 'in' ? '+' : '-' ?>
-                                            <?= number_format($mov['quantity'], 3) ?>
-                                        </td>
-                                        <td class="n text-center text-muted" style="font-size:.75rem">
-                                            <?= number_format($mov['qty_before'], 3) ?>
-                                        </td>
-                                        <td class="n text-center text-muted" style="font-size:.75rem">
-                                            <?= number_format($mov['qty_after'], 3) ?>
-                                        </td>
-                                        <td class="n text-center" style="font-size:.75rem">$
-                                            <?= number_format($mov['unit_cost_base'], 4) ?>
-                                        </td>
-                                        <td class="n text-end fw-600"><?= htmlspecialchars($baseCurSymbol) ?>
-                                            <?= number_format($mov['total_cost_base'], 2) ?>
-                                        </td>
-                                        <td style="font-size:.72rem;color:#64748b">
-                                            <?= htmlspecialchars(refTypeLabel($mov['reference_type'], $REF_TYPE_AR)) ?>
-                                            #<?= $mov['reference_id'] ?? '—' ?>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                <table class="mtbl" id="movementsTbl">
+                                    <thead>
+                                        <tr>
+                                            <th>رقم الحركة</th>
+                                            <th>التاريخ</th>
+                                            <th>المادة</th>
+                                            <th>المستودع</th>
+                                            <th>النوع</th>
+                                            <th>الاتجاه</th>
+                                            <th class="text-center">الكمية</th>
+                                            <th class="text-center">قبل</th>
+                                            <th class="text-center">بعد</th>
+                                            <th class="text-center">سعر/وحدة ($)</th>
+                                            <th class="text-end">التكلفة ($)</th>
+                                            <th>المرجع</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php if (empty($consMovements)): ?>
+                                                    <tr>
+                                                        <td colspan="12" class="text-center text-muted py-5">
+                                                            <i class="bi bi-arrow-left-right d-block mb-2"
+                                                                style="font-size:2rem;opacity:.2"></i>
+                                                            لا توجد حركات في هذه الفترة
+                                                        </td>
+                                                    </tr>
+                                        <?php endif; ?>
+                                        <?php foreach ($consMovements as $mov):
+                                            $mt = $MOVE_TYPE_MAP[$mov['movement_type']] ?? ['label' => $mov['movement_type'], 'cls' => 'bg-secondary-subtle text-secondary', 'icon' => 'bi-circle'];
+                                            ?>
+                                                    <tr>
+                                                        <td dir="ltr" style="font-size:.72rem;color:#94a3b8">
+                                                            <?= htmlspecialchars($mov['movement_no']) ?></td>
+                                                        <td class="text-muted"><?= $mov['movement_date'] ?></td>
+                                                        <td>
+                                                            <div class="fw-600"><?= htmlspecialchars($mov['item_name']) ?></div>
+                                                            <div style="font-size:.7rem;color:#94a3b8"><?= htmlspecialchars($mov['unit']) ?>
+                                                            </div>
+                                                        </td>
+                                                        <td style="font-size:.78rem"><?= htmlspecialchars($mov['wh_name'] ?? '—') ?></td>
+                                                        <td><span class="badge <?= $mt['cls'] ?>" style="font-size:.68rem"><i
+                                                                    class="bi <?= $mt['icon'] ?> me-1"></i><?= $mt['label'] ?></span></td>
+                                                        <td>
+                                                            <?php if ($mov['direction'] === 'in'): ?>
+                                                                        <span class="dir-in"><i class="bi bi-arrow-down-circle me-1"></i>وارد</span>
+                                                            <?php else: ?>
+                                                                        <span class="dir-out"><i class="bi bi-arrow-up-circle me-1"></i>صادر</span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                        <td class="n text-center fw-600 <?= $mov['direction'] === 'in' ? 'dir-in' : 'dir-out' ?>">
+                                                            <?= $mov['direction'] === 'in' ? '+' : '-' ?>                        <?= number_format($mov['quantity'], 3) ?>
+                                                        </td>
+                                                        <td class="n text-center text-muted" style="font-size:.75rem">
+                                                            <?= number_format($mov['qty_before'], 3) ?></td>
+                                                        <td class="n text-center text-muted" style="font-size:.75rem">
+                                                            <?= number_format($mov['qty_after'], 3) ?></td>
+                                                        <td class="n text-center" style="font-size:.75rem">$
+                                                            <?= number_format($mov['unit_cost_base'], 4) ?></td>
+                                                        <td class="n text-end fw-600">$ <?= number_format($mov['total_cost_base'], 2) ?></td>
+                                                        <td style="font-size:.72rem;color:#64748b">
+                                                            <?= htmlspecialchars(refTypeLabel($mov['reference_type'], $REF_TYPE_AR)) ?> #<?= $mov['reference_id'] ?? '—' ?>
+                                                        </td>
+                                                    </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
 
                     <?php else: // products ?>
-                        <table class="mtbl" id="movementsTbl">
-                            <thead>
-                                <tr>
-                                    <th>التاريخ</th>
-                                    <th>العملية</th>
-                                    <th>المنتج</th>
-                                    <th>القياس</th>
-                                    <th>اللون</th>
-                                    <th>المستودع</th>
-                                    <th>المرجع</th>
-                                    <th>الطرف الآخر</th>
-                                    <th class="text-center">الكمية</th>
-                                    <th class="text-end">القيمة ($)</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if (empty($prodMovements)): ?>
-                                    <tr>
-                                        <td colspan="10" class="text-center text-muted py-5">
-                                            <i class="bi bi-boxes d-block mb-2" style="font-size:2rem;opacity:.2"></i>
-                                            لا توجد حركات في هذه الفترة
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                                <?php foreach ($prodMovements as $mov):
-                                    $mt = $MOVE_TYPE_MAP[$mov['movement_type']] ?? ['label' => $mov['movement_type'], 'cls' => 'bg-secondary-subtle text-secondary', 'icon' => 'bi-circle'];
-                                    $party = $mov['party_name'] ?? '—';
-                                    ?>
-                                    <tr>
-                                        <td class="text-muted"><?= $mov['movement_date'] ?></td>
-                                        <td><span class="badge <?= $mt['cls'] ?>" style="font-size:.68rem"><i
-                                                    class="bi <?= $mt['icon'] ?> me-1"></i><?= $mt['label'] ?></span></td>
-                                        <td>
-                                            <div class="fw-600" style="font-size:.8rem">
-                                                <?= htmlspecialchars($mov['product_name']) ?>
-                                            </div>
-                                            <div style="font-size:.7rem;color:#94a3b8" dir="ltr">
-                                                <?= htmlspecialchars($mov['model_number'] ?? '') ?>
-                                            </div>
-                                        </td>
-                                        <td style="font-size:.78rem"><?= $mov['size'] ?? '—' ?></td>
-                                        <td style="font-size:.78rem"><?= $mov['color'] ?? '—' ?></td>
-                                        <td style="font-size:.78rem"><?= htmlspecialchars($mov['wh_name'] ?? '—') ?></td>
-                                        <td style="font-size:.72rem;color:#1e3a8a;font-weight:600" dir="ltr">
-                                            <?= htmlspecialchars($mov['ref_no'] ?? '—') ?>
-                                        </td>
-                                        <td style="font-size:.78rem"><?= htmlspecialchars($party) ?></td>
-                                        <td
-                                            class="n text-center fw-600 <?= $mov['direction'] === 'in' ? 'dir-in' : 'dir-out' ?>">
-                                            <?= $mov['direction'] === 'in' ? '+' : '-' ?>
-                                            <?= number_format($mov['quantity'], 0) ?>
-                                        </td>
-                                        <td class="n text-end fw-600"><?= htmlspecialchars($baseCurSymbol) ?>
-                                            <?= number_format($mov['total_base'], 2) ?>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                <table class="mtbl" id="movementsTbl">
+                                    <thead>
+                                        <tr>
+                                            <th>التاريخ</th>
+                                            <th>العملية</th>
+                                            <th>المنتج</th>
+                                            <th>القياس</th>
+                                            <th>اللون</th>
+                                            <th>المستودع</th>
+                                            <th>المرجع</th>
+                                            <th>الطرف الآخر</th>
+                                            <th class="text-center">الكمية</th>
+                                            <th class="text-end">القيمة ($)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php if (empty($prodMovements)): ?>
+                                                    <tr>
+                                                        <td colspan="10" class="text-center text-muted py-5">
+                                                            <i class="bi bi-boxes d-block mb-2" style="font-size:2rem;opacity:.2"></i>
+                                                            لا توجد حركات في هذه الفترة
+                                                        </td>
+                                                    </tr>
+                                        <?php endif; ?>
+                                        <?php foreach ($prodMovements as $mov):
+                                            $mt = $MOVE_TYPE_MAP[$mov['movement_type']] ?? ['label' => $mov['movement_type'], 'cls' => 'bg-secondary-subtle text-secondary', 'icon' => 'bi-circle'];
+                                            $party = $mov['party_name'] ?? '—';
+                                            ?>
+                                                    <tr>
+                                                        <td class="text-muted"><?= $mov['movement_date'] ?></td>
+                                                        <td><span class="badge <?= $mt['cls'] ?>" style="font-size:.68rem"><i
+                                                                    class="bi <?= $mt['icon'] ?> me-1"></i><?= $mt['label'] ?></span></td>
+                                                        <td>
+                                                            <div class="fw-600" style="font-size:.8rem">
+                                                                <?= htmlspecialchars($mov['product_name']) ?></div>
+                                                            <div style="font-size:.7rem;color:#94a3b8" dir="ltr">
+                                                                <?= htmlspecialchars($mov['model_number'] ?? '') ?></div>
+                                                        </td>
+                                                        <td style="font-size:.78rem"><?= $mov['size'] ?? '—' ?></td>
+                                                        <td style="font-size:.78rem"><?= $mov['color'] ?? '—' ?></td>
+                                                        <td style="font-size:.78rem"><?= htmlspecialchars($mov['wh_name'] ?? '—') ?></td>
+                                                        <td style="font-size:.72rem;color:#1e3a8a;font-weight:600" dir="ltr">
+                                                            <?= htmlspecialchars($mov['ref_no'] ?? '—') ?></td>
+                                                        <td style="font-size:.78rem"><?= htmlspecialchars($party) ?></td>
+                                                        <td class="n text-center fw-600 <?= $mov['direction'] === 'in' ? 'dir-in' : 'dir-out' ?>">
+                                                            <?= $mov['direction'] === 'in' ? '+' : '-' ?>                        <?= number_format($mov['quantity'], 0) ?>
+                                                        </td>
+                                                        <td class="n text-end fw-600">$ <?= number_format($mov['total_base'], 2) ?></td>
+                                                    </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
                     <?php endif; ?>
                 </div>
             </div>
@@ -620,13 +592,8 @@ $MOVE_TYPE_MAP = [
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
-        const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
-        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
-        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
-        function toggleGroup(g) { const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString()); }
-        document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
 
         // ══════════════════════════════════════════════════════════
         // فرز الجداول بالنقر على رأس العمود — عام لأي جدول بالصفحة

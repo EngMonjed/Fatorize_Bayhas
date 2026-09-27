@@ -171,10 +171,32 @@ try {
         $absDays   =(float)($att['absent_days']??0);
         $otHours   =(float)($att['overtime_h']??0);
 
-        // العطل
+        // العطل — الاستحقاق الأساسي (holAmount) بيصير لكل أيام العطل
+        // الرسمية بالفترة، بغض النظر اشتغل الموظف فيها ولا لأ (حقه
+        // الأساسي بيوم إجازة مدفوعة). لو اشتغل فعلياً، ساعاته/يومه هلق
+        // تُحسب كإضافي (بمعامل overtime_multiplier الخاص فيه) بدل الأجر
+        // العادي — تعويضين منفصلين، مو واحد بدل التاني
         $holSt=$pdo->prepare("SELECT COUNT(*) FROM `{$TH}` WHERE holiday_date BETWEEN ? AND ?");
         $holSt->execute([$dateFrom,$dateTo]);
         $holDays=(int)$holSt->fetchColumn();
+
+        // ساعات/أيام الحضور الفعلية المسجَّلة تحديداً بأيام عطلة رسمية —
+        // هاي لازم تُطرح من المجموع العادي (totalHours/workDays) قبل ما
+        // يدخل بحساب $earned، لأنها هلق رح تُحسب لحالها بمعامل الإضافي
+        $holWorkSt=$pdo->prepare("SELECT
+            COALESCE(SUM(a.hours_worked),0) AS hol_hours,
+            COUNT(*) AS hol_days
+            FROM `{$TAT}` a JOIN `{$TH}` h ON h.holiday_date=a.attendance_date
+            WHERE a.employee_id=? AND a.attendance_date BETWEEN ? AND ? AND a.hours_worked>0");
+        $holWorkSt->execute([$empId,$dateFrom,$dateTo]);
+        $holWork=$holWorkSt->fetch(PDO::FETCH_ASSOC);
+        $holWorkedHours=(float)($holWork['hol_hours']??0);
+        $holWorkedDays =(int)($holWork['hol_days']??0);
+
+        // طرح مبدئي من المجاميع العادية (قبل الـswitch) — لأنواع الحساب
+        // بالساعة (شهري/أسبوعي/ساعي). "يومي" بيتم طرحه لاحقاً بعد الـswitch
+        // مباشرة لأنه معتمد على عدد الأيام مش الساعات
+        $totalHours=max(0,$totalHours-$holWorkedHours);
 
         // الحساب — حسب نوع الراتب الفعلي، الأربعة أنواع منفصلين عن بعض
         // (كانت "يومي"/"ساعي" بتُعاملان زي "أسبوعي" بالغلط: القسمة على
@@ -207,7 +229,10 @@ try {
             case 'daily':
                 // basic_salary = أجر اليوم الواحد مباشرة، لا يُقسَم على
                 // ساعات الأسبوع. hrRate هون بس مكافئ نظري (÷٨ ساعات)
-                // يُستخدم لحساب الإضافي فقط، مو الأجر الأساسي نفسه
+                // يُستخدم لحساب الإضافي فقط، مو الأجر الأساسي نفسه.
+                // أيام العطلة المشتغلة تُطرح من workDays هون تحديداً
+                // (معتمد على عدد الأيام مش الساعات، بعكس باقي الأنواع)
+                $workDays=max(0,$workDays-$holWorkedDays);
                 $hrRate=round($base/8,4);
                 $earned=$base*$workDays;
                 $regularHours=$workDays*8;
@@ -228,6 +253,13 @@ try {
         }
         $holAmount=$holDays*$hrRate*8;
         $otAmt    =$otHours*$hrRate*$otMult;
+        // إضافي العمل بيوم عطلة رسمية — بنفس معامل إضافي الموظف نفسه
+        // (overtime_multiplier)، بمعادل ساعات مبني على $hrRate النهائي
+        // لهذا النوع راتب (بعد الـswitch فوق). "يومي" مبني على أيام
+        // (هرRate هون أصلاً = base÷8، فالمعادلة بتُرجع نفس اليوم × ٨ ساعات
+        // بشكل صحيح)، الباقي مبني على الساعات الفعلية المسجَّلة
+        $holOvertimeHoursEquiv=($emp['salary_type']==='daily')?($holWorkedDays*8):$holWorkedHours;
+        $holOvertimeAmt=$holOvertimeHoursEquiv*$hrRate*$otMult;
 
         // مكافآت وسلف
         $bSt=$pdo->prepare("SELECT COALESCE(SUM(amount),0) FROM `{$TB}` WHERE employee_id=? AND bonus_date BETWEEN ? AND ?");
@@ -242,20 +274,26 @@ try {
         $loSt=$pdo->prepare("SELECT COALESCE(SUM(amount-paid_amount),0) FROM `{$TL}` WHERE employee_id=? AND status='active'");
         $loSt->execute([$empId]);
         $loanOutstanding=(float)$loSt->fetchColumn();
-        $net=$earned+$otAmt+$bonus-$loan;
+        $net=$earned+$otAmt+$holAmount+$holOvertimeAmt+$bonus-$loan;
 
         $out=ob_get_clean();
         if($out){echo json_encode(['ok'=>false,'msg'=>'PHP:'.$out]);exit;}
         echo json_encode([
             'ok'=>true,
-            // JS fields
+            // JS fields — regular_hours/earned_salary هون مدموج فيهم
+            // استحقاق العطلة الأساسي (holAmount) لغرض عرض الواجهة فقط
+            // (معادلة "الساعات × السعر = earned_salary − holiday_amount"
+            // لازم تطلع = $earned الصافي). الحقل basic_salary تحت (قسم
+            // "pay fields") يضل نقي بدون دمج — هو يلي فعلياً بيدخل حساب
+            // accrue، ودمج holAmount فيه بيسبب ازدواج (holAmount مضاف
+            // هناك كمكوّن منفصل أصلاً)
             'hr_rate'        =>$hrRate,
             'regular_hours'  =>$regularHours,
-            'earned_salary'  =>round($earned,2),
+            'earned_salary'  =>round($earned+$holAmount,2),
             'holiday_days'   =>$holDays,
             'holiday_amount' =>round($holAmount,2),
-            'holiday_ot_hrs' =>0,
-            'holiday_ot_amt' =>0,
+            'holiday_ot_hrs' =>$holOvertimeHoursEquiv,
+            'holiday_ot_amt' =>round($holOvertimeAmt,2),
             'ot_hours'       =>$otHours,
             'ot_mult'        =>$otMult,
             'ot_amount'      =>round($otAmt,2),
@@ -268,7 +306,8 @@ try {
             'needs_rate_input' =>$needsRate,
             'emp_cur_id'       =>$curId,
             'branch_cur_id'    =>$branchBaseCurrId,
-            // pay fields
+            // pay fields — basic_salary نقي (بدون holiday) عمداً، يُستخدم
+            // مباشرة بحساب gross بدالة accrue حيث holAmount مضاف لحاله
             'basic_salary'   =>round($earned,2),
             'working_days'   =>$workDays,
             'absent_days'    =>$absDays,
@@ -325,13 +364,15 @@ try {
 
         $basic=(float)($cd['basic_salary']??0);
         $ota  =(float)($cd['overtime_amount']??0);
+        $hol  =(float)($cd['holiday_amount']??0);
+        $holOt=(float)($cd['holiday_ot_amt']??0);
         $bon  =(float)($cd['bonus_total']??0);
         $lnd  =(float)($cd['loan_deduction']??0);
         $wd   =(float)($cd['working_days']??0);
         $oth  =(float)($cd['overtime_hours']??0);
         // gross محسوب من مكوّناته مباشرة، وnet = gross - loan_deduction —
         // نحسبه هيك ما نثق برقم net منفصل قد يختلف تقريب عشري بسيط ويكسر توازن القيد
-        $gross=round($basic+$ota+$bon,2);
+        $gross=round($basic+$ota+$hol+$holOt+$bon,2);
         $net=round($gross-$lnd,2);
         if($gross<=0)throw new Exception('لا يوجد مبلغ مستحق لهذه الفترة');
 

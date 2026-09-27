@@ -1434,15 +1434,17 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             </tr>`;
             });
 
-            // ⚠ المبالغ — كلها مشتقة من الحقول المخزَّنة فعلياً، بلا أي
-            // افتراض جديد: total_price لكل بند أصلاً صافٍ بعد الخصم
-            // الإفرادي (راجع منطق الحفظ بـinvoice_new.php)، فـ"الصافي
-            // بدون أي خصم" = total_price + discount_amount لكل بند.
-            const grossProducts = items.reduce((s, it) => s + parseFloat(it.total_price || 0) + parseFloat(it.discount_amount || 0), 0);
-            const sumItemDiscounts = items.reduce((s, it) => s + parseFloat(it.discount_amount || 0), 0);
-            const afterItemDiscount = parseFloat(p.total_amount) || 0; // = يساوي grossProducts - sumItemDiscounts نظرياً
-            const generalDiscPct = afterItemDiscount > 0 ? (parseFloat(p.discount_amount || 0) / afterItemDiscount * 100) : 0;
-            const afterGeneralDisc = afterItemDiscount - parseFloat(p.discount_amount || 0);
+            // ⚠⚠ إصلاح: total_price لكل بند = عدد المنتجات × سعر البيع
+            // مباشرة (نظام "تكلفة ثابتة + سعر بيع حر" الحالي) —
+            // discount_amount صار "قيمة الفارق" (تكلفة−بيع، ممكن يكون
+            // سالب = ربح)، مش خصم بسيط بيُطرح من سعر بيع أعلى. جمعه
+            // مع total_price كان يعيد بناء سعر التكلفة بالغلط ويعرضه
+            // كأنه "المبلغ الصافي". الصحيح: المبلغ الصافي = مجموع
+            // (سعر البيع × عدد المنتجات) مباشرة = p.total_amount نفسه
+            // (نفس القيمة المخزَّنة بالهيدر أصلاً)، بلا أي ذكر للتكلفة.
+            const netProductsAmount = parseFloat(p.total_amount) || 0;
+            const generalDiscPct = netProductsAmount > 0 ? (parseFloat(p.discount_amount || 0) / netProductsAmount * 100) : 0;
+            const afterGeneralDisc = netProductsAmount - parseFloat(p.discount_amount || 0);
             const taxPct = afterGeneralDisc > 0 ? (parseFloat(p.tax_amount || 0) / afterGeneralDisc * 100) : 0;
 
             // ⚠ لون عنوان نوع المستند حسب النوع — أخضر لبيع منتجات (هالنموذج
@@ -1564,9 +1566,7 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center}
 <!-- ══ المبالغ (عملة الفاتورة) ══ -->
 <div class="totals-wrap">
   <div class="totals">
-    <div class="tot-row sub"><span>المبلغ الصافي للمنتجات (بدون أي خصم):</span><span>${fmt(grossProducts)}</span></div>
-    <div class="tot-row sub"><span>مجموع خصومات المنتجات الإفرادية:</span><span>- ${fmt(sumItemDiscounts)}</span></div>
-    <div class="tot-row"><span>الإجمالي بعد الخصم الإفرادي:</span><span>${fmt(afterItemDiscount)}</span></div>
+    <div class="tot-row"><span>المبلغ الصافي للمنتجات (بدون خصم عام أو ضريبة):</span><span>${fmt(netProductsAmount)}</span></div>
     <div class="tot-row sub"><span>نسبة الخصم العام:</span><span>${generalDiscPct.toFixed(2)}%</span></div>
     <div class="tot-row"><span>الإجمالي بعد الخصم العام:</span><span>${fmt(afterGeneralDisc)}</span></div>
     <div class="tot-row sub"><span>نسبة الضريبة:</span><span>${taxPct.toFixed(2)}%</span></div>

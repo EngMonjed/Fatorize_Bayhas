@@ -323,13 +323,21 @@ try {
                     $curId($curCode),
                     $rate
                 ]);
-            // ⚠ اتجاه تحديث الرصيد: مدين لحساب أصل (صندوق/دفعة مقدمة) =
-            // زيادة (+)؛ مدين لحساب التزام (ذمة المورد) = تخفيض الالتزام
-            // = زيادة بنفس اتفاقية confirm_purchase_invoice.php (حيث
-            // "مدين ذمم الموردين" دائماً +balance، بغض النظر عن نوع
-            // الحساب فعلياً — نفس الاتفاقية هون بدون استثناء).
-            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
-                ->execute([$returnBase, $returnBase, $debitAccId['id']]);
+            // ⚠ إصلاح إشارة حرج (بعد تحقيق مع المستخدم بمثال حقيقي —
+            // راجع نفس الشرح المفصَّل بـ confirm_purchase_invoice.php):
+            // حساب الذمة التزام (Liability)، رصيده الطبيعي دائن — بالمعيار
+            // المحاسبي القياسي دائن يزيد رصيده، مدين ينقصه. القاعدة الموحَّدة
+            // القديمة ("مدين=+" لكل الحسابات بلا استثناء) كانت معكوسة لحسابات
+            // الالتزام تحديداً. هون تحديداً "الطرف المدين" متغيّر (صندوق/دفعة
+            // مقدمة = أصل، أو ذمة المورد = التزام)، فلازم نتحقق من نوع الحساب
+            // الفعلي ونطبّق المعادلة المناسبة له.
+            if (($debitAccId['account_type'] ?? '') === 'liability') {
+                $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                    ->execute([$returnBase, $returnBase, $debitAccId['id']]);
+            } else {
+                $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                    ->execute([$returnBase, $returnBase, $debitAccId['id']]);
+            }
 
             // دائن: المخزون (دائماً، بلا استثناء)
             $pdo->prepare("INSERT INTO `{$TJI}`
@@ -402,12 +410,22 @@ try {
                 }
                 // عكس القيد
                 if ($ret['journal_entry_id']) {
-                    $stJI = $pdo->prepare("SELECT * FROM `{$TJI}` WHERE journal_entry_id=?");
+                    $stJI = $pdo->prepare("SELECT ji.*, ac.account_type FROM `{$TJI}` ji
+                        JOIN `{$TAC}` ac ON ac.id = ji.account_id
+                        WHERE ji.journal_entry_id=?");
                     $stJI->execute([$ret['journal_entry_id']]);
                     foreach ($stJI->fetchAll(PDO::FETCH_ASSOC) as $ji) {
+                        // ⚠ نفس إصلاح confirm_purchase_invoice.php: حسابات
+                        // الالتزام (ذمة المورد) بالقاعدة المعاكسة الآن —
+                        // عكس قيدها يحتاج معادلة معاكسة عن الأصول/المصاريف.
                         $net = $ji['debit'] - $ji['credit'];
-                        $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
-                            ->execute([$net, $net, $ji['account_id']]);
+                        if ($ji['account_type'] === 'liability') {
+                            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance+?,balance=balance+? WHERE id=?")
+                                ->execute([$net, $net, $ji['account_id']]);
+                        } else {
+                            $pdo->prepare("UPDATE `{$TAC}` SET base_balance=base_balance-?,balance=balance-? WHERE id=?")
+                                ->execute([$net, $net, $ji['account_id']]);
+                        }
                     }
                     $pdo->prepare("UPDATE `{$TJE}` SET status='cancelled',cancelled_at=NOW(),cancelled_by=? WHERE id=?")
                         ->execute([$_SESSION['user_id'], $ret['journal_entry_id']]);

@@ -225,9 +225,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $accCash = null;
                 $jeCreated = false;
                 if ($amount > 0) {
+                    // 🔴 كان "تلقائي" دايماً بيختار حساب الصندوق (cash_)
+                    // بغض النظر عن طريقة الدفع — لو الطريقة "تحويل بنكي"
+                    // أو "بطاقة"، كان بيقيَّد بالغلط على الصندوق مش البنك.
+                    if ($method === 'check' && !$cashAccId) {
+                        throw new Exception('لطريقة الدفع "شيك" لازم تختار حساب الصندوق أو البنك يدوياً — ما ممكن "تلقائي"');
+                    }
+                    $autoKey = in_array($method, ['bank', 'card']) ? 'bank_' : 'cash_';
                     $accCash = $cashAccId ?
                         $pdo->query("SELECT * FROM `{$TAC}` WHERE id={$cashAccId}")->fetch() :
-                        getSettingAccount($pdo, $TIAS, 'cash_' . strtolower($currency), $TAC);
+                        getSettingAccount($pdo, $TIAS, $autoKey . strtolower($currency), $TAC);
 
                     if ($cashAccId && $accCash) {
                         $accCurCode = $pdo->prepare("SELECT code FROM currencies WHERE id=?");
@@ -550,10 +557,17 @@ $receipts->execute($params);
 $receipts = $receipts->fetchAll();
 
 $customers = $pdo->query("SELECT id,name,phone FROM `{$TC}` WHERE status='active' ORDER BY name")->fetchAll();
-$cashAccounts = $pdo->query("SELECT ac.id,ac.code,ac.name,c.code AS cur_code
-    FROM `{$TAC}` ac LEFT JOIN currencies c ON c.id=ac.currency_id
-    WHERE ac.account_type='asset' AND ac.is_active=1 AND ac.level>=3
-    AND (ac.code LIKE '111%' OR ac.code LIKE '112%') ORDER BY ac.code")->fetchAll();
+// 🔴 كان يخمّن نوع الحساب (صندوق/بنك) من بادئة الكود (111%/112%) — نفس
+// فئة الباگ يلي انصلح سابقاً بـtreasury.php. المصدر الحقيقي هو إعدادات
+// الربط المحاسبي (invoice_account_settings)، ومنه كمان بنجيب نوع الحساب
+// الفعلي (cash/bank) لفلترة القائمة حسب طريقة الدفع بالواجهة.
+$cashAccounts = $pdo->query("SELECT ac.id, ac.code, ac.name, c.code AS cur_code,
+        CASE WHEN ias.setting_key LIKE 'cash_%' THEN 'cash' ELSE 'bank' END AS acc_type
+    FROM `{$TIAS}` ias
+    JOIN `{$TAC}` ac ON ac.id = ias.account_id
+    LEFT JOIN currencies c ON c.id = ac.currency_id
+    WHERE (ias.setting_key LIKE 'cash_%' OR ias.setting_key LIKE 'bank_%') AND ac.is_active = 1
+    ORDER BY ac.code")->fetchAll();
 
 // ── قائمة العملات الحقيقية من جدول currencies (بدل قائمة/رموز ثابتة بالكود) ──
 $currenciesList = $pdo->query("SELECT id,code,name,symbol,is_base FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
@@ -1083,7 +1097,7 @@ $rcpNo = genReceiptNo($pdo, $TR);
                         </div>
                         <div class="col-md-3">
                             <label class="field-lbl">طريقة الدفع</label>
-                            <select id="rMethod" class="form-select form-select-sm">
+                            <select id="rMethod" class="form-select form-select-sm" onchange="onRcpMethodChange()">
                                 <option value="cash">نقدي</option>
                                 <option value="bank">تحويل بنكي</option>
                                 <option value="card">بطاقة</option>
@@ -1113,13 +1127,17 @@ $rcpNo = genReceiptNo($pdo, $TR);
                         <div class="col-md-4">
                             <label class="field-lbl">حساب الصندوق/البنك</label>
                             <select id="rCashAcc" class="form-select form-select-sm">
-                                <option value="">— تلقائي حسب الإعدادات —</option>
+                                <option value="" id="rCashAccAuto">— تلقائي حسب الإعدادات —</option>
                                 <?php foreach ($cashAccounts as $acc): ?>
-                                            <option value="<?= $acc['id'] ?>" data-cur="<?= htmlspecialchars($acc['cur_code'] ?? '') ?>">
+                                            <option value="<?= $acc['id'] ?>" data-cur="<?= htmlspecialchars($acc['cur_code'] ?? '') ?>"
+                                                data-type="<?= $acc['acc_type'] ?>">
                                                 <?= htmlspecialchars($acc['code'] . ' — ' . $acc['name'] . ($acc['cur_code'] ? ' (' . $acc['cur_code'] . ')' : '')) ?>
                                             </option>
                                 <?php endforeach; ?>
                             </select>
+                            <div id="rCashAccHint" style="display:none;font-size:.68rem;color:#d97706;margin-top:3px">
+                                <i class="bi bi-info-circle me-1"></i>الشيك ممكن يُصرف كاش أو يُودَع بنكي — اختر الحساب الفعلي يدوياً
+                            </div>
                         </div>
                         <div class="col-12">
                             <label class="field-lbl">ملاحظات</label>
@@ -1243,19 +1261,38 @@ $rcpNo = genReceiptNo($pdo, $TR);
             rcpModal.show();
         }
 
-        // ── تصفية حسابات الصندوق/البنك تلقائياً حسب عملة السند المختارة ──
-        // (خيار "تلقائي حسب الإعدادات" يضل ظاهر دايماً لأنه مش مربوط بعملة محددة)
+        // ── تصفية حسابات الصندوق/البنك على مرحلتين: (١) عملة السند
+        // المختارة، (٢) طريقة الدفع — نقدي = صندوق بس، تحويل/بطاقة = بنك
+        // بس، شيك = الاثنين سوا (المستخدم يقرر يدوياً، ما منقدر نحسمها
+        // مسبقاً — الشيك ممكن يُصرف كاش أو يُودَع بنكي) ──
         function filterCashAccByCurrency() {
             const curr = document.getElementById('rCurr').value;
+            const method = document.getElementById('rMethod').value;
             const sel = document.getElementById('rCashAcc');
+            const autoOpt = document.getElementById('rCashAccAuto');
+            const requiredType = method === 'cash' ? 'cash' : (method === 'check' ? null : 'bank');
+
             let hidCurrent = false;
             Array.from(sel.options).forEach(opt => {
-                if (!opt.value) { opt.hidden = false; return; }
-                const match = !opt.dataset.cur || opt.dataset.cur === curr;
+                if (!opt.value) return; // خيار "تلقائي" يُعالَج لحاله تحت
+                const currMatch = !opt.dataset.cur || opt.dataset.cur === curr;
+                const typeMatch = !requiredType || opt.dataset.type === requiredType;
+                const match = currMatch && typeMatch;
                 opt.hidden = !match;
                 if (!match && opt.selected) hidCurrent = true;
             });
+
+            // خيار "تلقائي" منطقي بس لنقدي/تحويل/بطاقة (بيعرف يحدد النوع
+            // الصحيح تلقائياً بالخلفية) — الشيك لازم اختيار صريح دايماً
+            autoOpt.hidden = method === 'check';
+            if (method === 'check' && sel.value === '') hidCurrent = true;
+
+            document.getElementById('rCashAccHint').style.display = method === 'check' ? '' : 'none';
             if (hidCurrent) sel.value = '';
+        }
+
+        function onRcpMethodChange() {
+            filterCashAccByCurrency();
         }
 
         function onRcpCurrencyChange() {

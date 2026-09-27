@@ -1,7 +1,7 @@
 <?php
 /**
  * consumables.php — إدارة المستهلكات
- *retail1/modules/inventory/consumables.php
+ *retail1/modules/expenses_and_consumables/consumables.php
  */
 session_start();
 require_once __DIR__ . '/../../../config/database.php';
@@ -537,6 +537,12 @@ try {
                     <a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
                         style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-people me-1"></i>موردو المستهلكات
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="consumable_reports.php"
+                        style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-bar-chart me-1"></i>التقارير
                     </a>
                 </li>
             </ul>

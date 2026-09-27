@@ -60,37 +60,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
             $limit = (int) ($_POST['limit'] ?? 0); // آخر N عملية — يتجاهل التاريخ لو محدَّد
+            $currencyFilter = (int) ($_POST['currency_filter'] ?? 0) ?: null;
 
             $accId = (int) $entity['account_id'];
+            // ⚠ لما نفلتر بعملة محدَّدة، الرصيد التراكمي بيصير بعملة تلك
+            // العملة نفسها (original_amount)، مش بعملة الفرع (base) — منطقي
+            // لأنه كل الأسطر هلق بنفس العملة، فتجميعها بقيمتها الحقيقية صحيح.
+            $balCol = $currencyFilter ? "(CASE WHEN ji.debit > 0 THEN ji.original_amount ELSE -ji.original_amount END)" : "(ji.debit - ji.credit)";
 
             $opening = 0;
             if ($dateFrom && !$limit) {
-                $ob = $pdo->prepare("SELECT COALESCE(SUM(ji.debit - ji.credit),0)
+                $obWhere = "ji.account_id = ? AND je.status = 'posted' AND je.entry_date < ?";
+                $obParams = [$accId, $dateFrom];
+                if ($currencyFilter) {
+                    $obWhere .= " AND ji.currency_id = ?";
+                    $obParams[] = $currencyFilter;
+                }
+                $ob = $pdo->prepare("SELECT COALESCE(SUM({$balCol}),0)
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
-                    WHERE ji.account_id = ? AND je.status = 'posted' AND je.entry_date < ?");
-                $ob->execute([$accId, $dateFrom]);
+                    WHERE {$obWhere}");
+                $ob->execute($obParams);
                 $opening = (float) $ob->fetchColumn();
             }
 
             if ($limit > 0) {
+                $lWhere = "ji.account_id = ? AND je.status = 'posted'";
+                $lParams = [$accId];
+                if ($currencyFilter) {
+                    $lWhere .= " AND ji.currency_id = ?";
+                    $lParams[] = $currencyFilter;
+                }
                 // آخر N عملية: نجيبها بترتيب عكسي، وبعدين نرجّعها لترتيب زمني عادي
                 $st = $pdo->prepare("SELECT ji.*, cur.code AS cur_code, cur.symbol AS cur_sym,
                     je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
                     LEFT JOIN currencies cur ON cur.id = ji.currency_id
-                    WHERE ji.account_id = ? AND je.status = 'posted'
+                    WHERE {$lWhere}
                     ORDER BY je.entry_date DESC, je.id DESC LIMIT {$limit}");
-                $st->execute([$accId]);
+                $st->execute($lParams);
                 $rows = array_reverse($st->fetchAll());
                 // الرصيد الافتتاحي لعرض "آخر N" = الرصيد قبل أقدم عملية بالنتيجة
                 if ($rows) {
                     $firstDate = $rows[0]['entry_date'];
                     $firstId = $rows[0]['journal_entry_id'];
-                    $ob = $pdo->prepare("SELECT COALESCE(SUM(ji.debit - ji.credit),0)
+                    $obWhere2 = "ji.account_id = ? AND je.status = 'posted'
+                        AND (je.entry_date < ? OR (je.entry_date = ? AND je.id < ?))";
+                    $obParams2 = [$accId, $firstDate, $firstDate, $firstId];
+                    if ($currencyFilter) {
+                        $obWhere2 .= " AND ji.currency_id = ?";
+                        $obParams2[] = $currencyFilter;
+                    }
+                    $ob = $pdo->prepare("SELECT COALESCE(SUM({$balCol}),0)
                         FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
-                        WHERE ji.account_id = ? AND je.status = 'posted'
-                        AND (je.entry_date < ? OR (je.entry_date = ? AND je.id < ?))");
-                    $ob->execute([$accId, $firstDate, $firstDate, $firstId]);
+                        WHERE {$obWhere2}");
+                    $ob->execute($obParams2);
                     $opening = (float) $ob->fetchColumn();
                 }
             } else {
@@ -104,6 +127,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                     $where .= " AND je.entry_date <= ?";
                     $params[] = $dateTo;
                 }
+                if ($currencyFilter) {
+                    $where .= " AND ji.currency_id = ?";
+                    $params[] = $currencyFilter;
+                }
                 $st = $pdo->prepare("SELECT ji.*, cur.code AS cur_code, cur.symbol AS cur_sym,
                     je.entry_number, je.entry_date, je.description AS entry_desc, je.reference_type
                     FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
@@ -116,7 +143,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
             $running = $opening;
             foreach ($rows as &$r) {
-                $running += ((float) $r['debit'] - (float) $r['credit']);
+                $running += $currencyFilter
+                    ? ((float) $r['debit'] > 0 ? (float) $r['original_amount'] : -(float) $r['original_amount'])
+                    : ((float) $r['debit'] - (float) $r['credit']);
                 $r['running_balance'] = $running;
             }
             unset($r);
@@ -135,6 +164,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $byCurrSt->execute([$accId]);
             $byCurrency = $byCurrSt->fetchAll();
 
+            $filterCurSym = null;
+            $filterCurCode = null;
+            if ($currencyFilter) {
+                $fc = $pdo->prepare("SELECT symbol, code FROM currencies WHERE id=?");
+                $fc->execute([$currencyFilter]);
+                $fc = $fc->fetch();
+                $filterCurSym = $fc['symbol'] ?: ($fc['code'] ?? null);
+                $filterCurCode = $fc['code'] ?? null;
+            }
+
             echo json_encode([
                 'ok' => true,
                 'entity' => [
@@ -152,7 +191,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 'opening_balance' => $opening,
                 'movements' => $rows,
                 'closing_balance' => $running,
-                'by_currency' => $byCurrency
+                'by_currency' => $byCurrency,
+                'filter_currency_symbol' => $filterCurSym,
+                'filter_currency_code' => $filterCurCode
             ]);
         } else
             throw new Exception('إجراء غير معروف');
@@ -376,6 +417,10 @@ if (!empty($_SESSION['branch_id'])) {
                     <input type="number" id="stLimit" class="form-control form-control-sm" style="width:90px" min="1"
                         placeholder="عدد">
                     <span style="font-size:.78rem;color:#64748b">عملية</span>
+                    <label class="field-lbl mb-0">عملة</label>
+                    <select id="stCurrency" class="form-select form-select-sm" style="width:130px">
+                        <option value="">كل العملات</option>
+                    </select>
                     <button class="btn btn-sm btn-primary" style="border-radius:8px" onclick="loadStatement()">
                         <i class="bi bi-search me-1"></i>عرض
                     </button>
@@ -421,6 +466,7 @@ if (!empty($_SESSION['branch_id'])) {
             document.getElementById('stFrom').value = '';
             document.getElementById('stTo').value = '';
             document.getElementById('stLimit').value = '';
+            document.getElementById('stCurrency').value = '';
             loadStatement();
         }
 
@@ -430,28 +476,41 @@ if (!empty($_SESSION['branch_id'])) {
             receipt: 'سند قبض', payment: 'سند دفع', transfer: 'تحويل', fee: 'رسم',
         };
 
+        // ── تعبئة قائمة فلترة العملة — بس من العملات يلي فعلياً تعامل
+        // فيها هذا العميل/المورد (من by_currency، دايماً غير مفلترة) ──
+        function populateCurrencyFilter(byCur) {
+            const sel = document.getElementById('stCurrency');
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">كل العملات</option>' +
+                byCur.map(c => `<option value="${c.currency_id}">${c.code || 'غير معروفة'}</option>`).join('');
+            if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+        }
+
         function loadStatement() {
             document.getElementById('stBody').innerHTML = '<div class="text-center py-5"><span class="spinner-border text-primary"></span></div>';
+            const currencyFilter = document.getElementById('stCurrency').value;
             post({
                 _action: 'get_statement', supplier_id: SUPPLIER_ID,
                 date_from: document.getElementById('stFrom').value,
                 date_to: document.getElementById('stTo').value,
                 limit: document.getElementById('stLimit').value,
+                currency_filter: currencyFilter,
             }).then(d => {
                 if (!d.ok) { document.getElementById('stBody').innerHTML = ''; toast(d.msg); return; }
                 const sym = d.entity.acc_sym;
-
-                // ── الرصيد الفعلي حسب كل عملة حقيقية (مستقل عن فلتر
-                // التاريخ — دايماً الصورة الكاملة الحالية) ──
-                const byCurWrap = document.getElementById('byCurrencyWrap');
                 const byCur = d.by_currency || [];
+                populateCurrencyFilter(byCur);
+
+                // ── الرصيد الفعلي حسب كل عملة حقيقية (مستقل عن أي فلتر —
+                // دايماً الصورة الكاملة الحالية) ──
+                const byCurWrap = document.getElementById('byCurrencyWrap');
                 if (byCur.length) {
                     byCurWrap.style.display = '';
                     document.getElementById('byCurrencyCards').innerHTML = byCur.map(c => `
                 <div class="col-6 col-md-3">
                     <div class="kpi-card">
                         <div class="kpi-val n" style="color:${c.net >= 0 ? '#16a34a' : '#dc2626'}">
-                            ${c.symbol || ''} ${fmt(c.net)}
+                            ${c.symbol || c.code || ''} ${fmt(c.net)}
                         </div>
                         <div class="kpi-lbl">${c.code || 'عملة غير معروفة'}</div>
                     </div>
@@ -460,8 +519,10 @@ if (!empty($_SESSION['branch_id'])) {
                     byCurWrap.style.display = 'none';
                 }
 
+                const runningSym = currencyFilter ? (d.filter_currency_symbol || d.filter_currency_code || sym) : sym;
+
                 const rows = (d.movements || []).map(m => {
-                    const rsym = m.cur_sym || sym;
+                    const rsym = m.cur_sym || m.cur_code || sym; // 🔴 كان يرجع لرمز عملة الفرع ($) عند غياب رمز العملة الحقيقية — مضلِّل تماماً (يوهم إنه المبلغ بعملة الفرع). هلق يرجع لكود العملة نفسه (TRY) بدل رمز غلط
                     const realDebit = m.debit > 0 ? rsym + ' ' + fmt(m.original_amount) : '—';
                     const realCredit = m.credit > 0 ? rsym + ' ' + fmt(m.original_amount) : '—';
                     return `
@@ -470,18 +531,21 @@ if (!empty($_SESSION['branch_id'])) {
                 <td class="n fw-600" style="direction:ltr;font-size:.78rem;color:#1e3a8a">${m.entry_number}</td>
                 <td style="font-size:.78rem">
                     ${REF_LABELS[m.reference_type] || ''} ${m.description || m.entry_desc || ''}
-                    ${m.cur_code ? `<span class="badge" style="font-size:.62rem;background:#eff6ff;color:#1e3a8a">${m.cur_code}</span>` : ''}
+                    ${!currencyFilter && m.cur_code ? `<span class="badge" style="font-size:.6rem;background:#eff6ff;color:#1e3a8a;padding:2px 5px">${m.cur_code}</span>` : ''}
                 </td>
                 <td class="n text-end" style="font-size:.8rem;color:#1e3a8a">${realDebit}</td>
                 <td class="n text-end" style="font-size:.8rem;color:#16a34a">${realCredit}</td>
-                <td class="n text-end fw-600" style="font-size:.8rem;color:${m.running_balance >= 0 ? '#16a34a' : '#dc2626'}">${sym} ${fmt(m.running_balance)}</td>
+                <td class="n text-end fw-600" style="font-size:.8rem;color:${m.running_balance >= 0 ? '#16a34a' : '#dc2626'}">${runningSym} ${fmt(m.running_balance)}</td>
             </tr>`;
                 }).join('');
 
+                const noteText = currencyFilter
+                    ? `الجدول مفلتر بعملة واحدة (${runningSym}) — كل الأعمدة بما فيها "الرصيد التراكمي" بنفس العملة الحقيقية.`
+                    : `عمودا "مدين"/"دائن" بيعرضوا المبلغ الحقيقي بعملة كل عملية كما سُجِّلت فعلياً (مو محوَّلة) — عمود "الرصيد التراكمي" لوحده بعملة الفرع (${sym}) لأنه بيجمع عمليات بعملات مختلفة سوا.`;
+
                 document.getElementById('stBody').innerHTML = `
             <div class="alert alert-warning py-2 mb-2 no-print" style="font-size:.72rem;border-radius:8px">
-                <i class="bi bi-info-circle me-1"></i>
-                عمودا "مدين"/"دائن" بيعرضوا المبلغ الحقيقي بعملة كل عملية كما سُجِّلت فعلياً (مو محوَّلة) — عمود "الرصيد التراكمي" لوحده بعملة الفرع (<?= htmlspecialchars($baseSym) ?>) لأنه بيجمع عمليات بعملات مختلفة سوا.
+                <i class="bi bi-info-circle me-1"></i>${noteText}
             </div>
             <div class="tbl-wrap">
                 <div class="table-responsive">
@@ -489,13 +553,13 @@ if (!empty($_SESSION['branch_id'])) {
                         <thead>
                             <tr><th>التاريخ</th><th>رقم القيد</th><th>البيان</th>
                                 <th class="text-end">مدين (بعملته الحقيقية)</th><th class="text-end">دائن (بعملته الحقيقية)</th>
-                                <th class="text-end">الرصيد التراكمي (بعملة الفرع)</th></tr>
+                                <th class="text-end">الرصيد التراكمي${currencyFilter ? '' : ' (بعملة الفرع)'}</th></tr>
                         </thead>
                         <tbody>
                             ${rows || `<tr><td colspan="6" class="text-center text-muted py-4" style="font-size:.82rem">لا توجد حركة بهذه الفترة</td></tr>`}
                             <tr style="background:#eff6ff">
                                 <td colspan="5" class="fw-700" style="font-size:.82rem;color:#1e3a8a">الرصيد الختامي</td>
-                                <td class="n text-end fw-700" style="font-size:.82rem;color:#1e3a8a">${sym} ${fmt(d.closing_balance)}</td>
+                                <td class="n text-end fw-700" style="font-size:.82rem;color:#1e3a8a">${runningSym} ${fmt(d.closing_balance)}</td>
                             </tr>
                         </tbody>
                     </table>

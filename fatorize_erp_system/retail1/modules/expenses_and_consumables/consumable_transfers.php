@@ -457,6 +457,9 @@ $baseCurSymbol = $baseCurSt->fetchColumn() ?: '$';
                 <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
                         style="border:none;color:#64748b;font-size:.83rem"><i
                             class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
+                <li class="nav-item"><a class="nav-link fw-600" href="consumable_reports.php"
+                        style="border:none;color:#64748b;font-size:.83rem"><i
+                            class="bi bi-bar-chart me-1"></i>التقارير</a></li>
             </ul>
 
             <div class="d-flex justify-content-between align-items-center mb-3">

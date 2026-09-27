@@ -629,17 +629,24 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                             <td class="n" style="font-size:.8rem">
                                                 <?= $sup['credit_limit'] > 0 ? number_format($sup['credit_limit'], 0) : '—' ?></td>
                                             <?php
-                                                // ⚠ المتبقي (الذمة) = رصيد حساب "ذمة المورد" نفسه — نفس الحساب
-                                                // المعروض تفصيلياً بمودال التفاصيل، بعملة الفرع دايماً (كل
-                                                // حسابات المورد تُنشأ بعملة الفرع الأساسية وقت إنشاء المورد،
-                                                // بلا استثناء). balance سالب = التزام حقيقي علينا (الحالة
-                                                // الشائعة)؛ موجب = المورد صار مديون إلنا (دفعة زائدة/مقدمة).
+                                                // ⚠ إصلاح إشارة (بعد تحقيق حقيقي مع المستخدم — راجع تعليق مطابق
+                                                // بـ confirm_purchase_invoice.php لتفصيل كامل السبب): حساب "ذمة
+                                                // المورد" التزام (Liability)، رصيده الطبيعي دائن — بالمعيار
+                                                // المحاسبي القياسي "موجب = علينا دين فعلياً"، مو العكس كما كان
+                                                // مفترَضاً هون سابقاً. المتبقي (الذمة) = رصيد حساب "ذمة المورد"
+                                                // نفسه، بعملة الفرع دايماً (كل حسابات المورد تُنشأ بعملة الفرع
+                                                // الأساسية وقت إنشاء المورد، بلا استثناء).
+                                                // ⚠ الأرصدة المؤكدة قبل إصلاح الإشارة بـ confirm_purchase_invoice.php
+                                                // ضلّت مخزَّنة بالإشارة المعكوسة القديمة عمداً (قرار صريح: نصلّح
+                                                // الكود بس هلق، الأرصدة القديمة تُصحَّح لاحقاً بميغريشن منفصل) —
+                                                // يعني موردين عندهم فواتير مؤكدة قبل هالتاريخ ممكن يظهروا بإشارة
+                                                // غلط هون لحد ما تصير الميغريشن.
                                                 // "المدفوع" مُشتق حسابياً (المستحق − المتبقي الفعلي) ليضل
                                                 // متّسق داخلياً مع العمودين الآخرين دايماً، لا مجموع منفصل
                                                 // عرضة لفروقات تقريب أو عملات مختلطة.
                                                 $payBal = (float) ($sup['pay_balance'] ?? 0);
                                                 $totalDue = (float) ($sup['purchase_total_base'] ?? 0);
-                                                $remaining = max(0, -$payBal);
+                                                $remaining = max(0, $payBal);
                                                 $paid = $totalDue - $remaining;
                                             ?>
                                             <td class="n" style="font-size:.8rem">
@@ -651,8 +658,8 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                                             <td class="n fw-600"
                                                 style="font-size:.8rem;color:<?= $remaining > 0.001 ? '#dc2626' : '#16a34a' ?>">
                                                 <?= $remaining > 0.001 ? number_format($remaining, 2) . ' ' . htmlspecialchars($baseCurSym) : '—' ?>
-                                                <?= $payBal > 0.001 ? '<div style="font-size:.65rem;color:#0891b2">له رصيد زائد '
-                                                    . number_format($payBal, 2) . ' ' . htmlspecialchars($baseCurSym) . '</div>' : '' ?>
+                                                <?= $payBal < -0.001 ? '<div style="font-size:.65rem;color:#0891b2">له رصيد زائد '
+                                                    . number_format(abs($payBal), 2) . ' ' . htmlspecialchars($baseCurSym) . '</div>' : '' ?>
                                             </td>
                                             <td>
                                                 <span
@@ -892,10 +899,16 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                 document.getElementById('vsTitle').textContent = s.name;
                 document.getElementById('vsSub').textContent = s.contact_person || '';
 
-                const fmtBal = (bal, sym) => {
+                // ⚠ إصلاح إشارة: حساب الذمة (Liability) موجب = علينا دين
+                // فعلياً (أحمر، تحذيري) — عكس حساب الدفعة المقدمة (Asset)
+                // يلي موجب فيه يعني رصيد لصالحنا (أخضر، إيجابي). راجع
+                // نفس الشرح المفصَّل بـ confirm_purchase_invoice.php.
+                const fmtBal = (bal, sym, isLiability = false) => {
                     if (bal === null || bal === undefined) return '<span class="text-muted">—</span>';
                     const n = parseFloat(bal);
-                    const color = n > 0 ? '#16a34a' : (n < 0 ? '#dc2626' : '#94a3b8');
+                    const color = isLiability
+                        ? (n > 0 ? '#dc2626' : (n < 0 ? '#16a34a' : '#94a3b8'))
+                        : (n > 0 ? '#16a34a' : (n < 0 ? '#dc2626' : '#94a3b8'));
                     return `<span style="color:${color};font-weight:700">${fmt(n)} ${sym || ''}</span>`;
                 };
 
@@ -915,7 +928,7 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                 <div style="background:#fef2f2;border-radius:10px;padding:10px 14px">
                     <div style="font-size:.72rem;color:#64748b;margin-bottom:2px"><i class="bi bi-bank me-1"></i>حساب الذمة</div>
                     ${s.pay_code ? `<div class="fw-600" style="font-size:.8rem">${s.pay_code} — ${s.pay_name}</div>
-                    <div style="margin-top:4px">الرصيد الحالي: ${fmtBal(s.pay_balance, s.pay_cur_sym)}</div>` : '<div class="text-danger" style="font-size:.8rem">غير محدَّد</div>'}
+                    <div style="margin-top:4px">الرصيد الحالي: ${fmtBal(s.pay_balance, s.pay_cur_sym, true)}</div>` : '<div class="text-danger" style="font-size:.8rem">غير محدَّد</div>'}
                 </div>
             </div>
             <div class="col-md-6">
@@ -1001,14 +1014,18 @@ $colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
                 document.getElementById('mNotes').value = s.notes || '';
                 document.getElementById('mAccId').value = s.account_id || '';
                 document.getElementById('mPrepaidId').value = s.prepaid_account_id || '';
-                const fmtBal = (bal, sym) => {
+                // ⚠ نفس إصلاح الإشارة أعلاه — راجع الشرح المفصَّل بمودال
+                // التفاصيل وبـ confirm_purchase_invoice.php.
+                const fmtBal = (bal, sym, isLiability = false) => {
                     if (bal === null || bal === undefined) return '';
                     const n = parseFloat(bal);
-                    const color = n > 0 ? '#16a34a' : (n < 0 ? '#dc2626' : '#94a3b8');
+                    const color = isLiability
+                        ? (n > 0 ? '#dc2626' : (n < 0 ? '#16a34a' : '#94a3b8'))
+                        : (n > 0 ? '#16a34a' : (n < 0 ? '#dc2626' : '#94a3b8'));
                     return `<span style="color:${color};font-weight:600">الرصيد الحالي: ${n.toFixed(2)} ${sym || ''}</span>`;
                 };
                 document.getElementById('mAccBalance').innerHTML = s.pay_code
-                    ? fmtBal(s.pay_balance, s.pay_cur_sym) : '';
+                    ? fmtBal(s.pay_balance, s.pay_cur_sym, true) : '';
                 document.getElementById('mPrepaidBalance').innerHTML = s.pre_code
                     ? fmtBal(s.pre_balance, s.pre_cur_sym) : '';
                 // تعديل مورد موجود: الحسابات أصلاً منشأة — نعرض قوائم

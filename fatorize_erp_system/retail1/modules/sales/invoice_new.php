@@ -175,6 +175,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             if (empty($rows))
                 throw new Exception('يجب إضافة منتج واحد على الأقل');
 
+            // ⚠⚠ فحص كفاية المخزون — لازم يصير هون (وقت الحفظ كمسودة)،
+            // مش بس وقت التأكيد لاحقاً. لو الفحص صار بس وقت التأكيد،
+            // الفاتورة المحفوظة كمسودة ممكن تصير عديمة الفائدة تماماً
+            // (ما رح تقدر تأكدها أبداً لو نقص المخزون لاحقاً، بس صرفت
+            // وقت بإنشائها من الأساس). الفحص بمستودع الفاتورة المختار
+            // (warehouse_id) تحديداً — نفس المستودع يلي رح يُخصم منه
+            // فعلياً وقت التأكيد.
+            $neededByVariant = [];
+            foreach ($rows as $r) {
+                $qty = (float) ($r['qty'] ?? 0);
+                $variantIds = array_values(array_filter(array_map('intval', $r['variant_ids'] ?? [])));
+                foreach ($variantIds as $vid) {
+                    $neededByVariant[$vid] = ($neededByVariant[$vid] ?? 0) + $qty;
+                }
+            }
+            if ($neededByVariant) {
+                $placeholders = implode(',', array_fill(0, count($neededByVariant), '?'));
+                $stStock = $pdo->prepare("SELECT variant_id, quantity FROM `{$TWI}`
+                    WHERE warehouse_id=? AND variant_id IN ({$placeholders})");
+                $stStock->execute(array_merge([$whId], array_keys($neededByVariant)));
+                $availableByVariant = [];
+                foreach ($stStock->fetchAll() as $row2) {
+                    $availableByVariant[(int) $row2['variant_id']] = (float) $row2['quantity'];
+                }
+                $shortages = [];
+                foreach ($rows as $r) {
+                    $qty = (float) ($r['qty'] ?? 0);
+                    $variantIds = array_values(array_filter(array_map('intval', $r['variant_ids'] ?? [])));
+                    foreach ($variantIds as $vid) {
+                        $available = $availableByVariant[$vid] ?? 0;
+                        if ($qty > $available) {
+                            $label = trim(($r['product_name'] ?? 'منتج') . ' — ' .
+                                (!empty($r['sizes']) ? implode('،', (array) $r['sizes']) : '') .
+                                ' (' . ($r['color_name'] ?? '') . ')');
+                            $shortages[$vid] = "{$label}: المتاح {$available}، المطلوب {$qty}";
+                        }
+                    }
+                }
+                if ($shortages) {
+                    throw new Exception("المخزون غير كافٍ — لا يمكن حفظ الفاتورة:<br>" . implode('<br>', array_unique($shortages)));
+                }
+            }
+
             // ⚠ قرار نهائي: البيع بالقطعة — الرقم المكتوب يُعتمد
             // حرفياً بلا أي تعديل. راجع distributeQty() للتوزيع.
 
