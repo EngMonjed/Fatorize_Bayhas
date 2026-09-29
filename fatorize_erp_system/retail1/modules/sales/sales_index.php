@@ -515,7 +515,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 </li>
                 <li class="nav-item">
                     <a class="nav-link fw-600" href="returns.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-arrow-return-right me-1"></i>المرتجعات
+                        <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المبيعات
                     </a>
                 </li>
                 <li class="nav-item">
@@ -632,21 +632,42 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             </div>
             <!-- جدول الفواتير -->
             <div class="tbl-wrap">
-                <div class="table-responsive">
-                    <table class="mtbl">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span style="font-size:.72rem;color:#64748b">النقر على رأس العمود:</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeSort" checked
+                            onchange="setHeaderMode('sort')">
+                        <label class="btn btn-outline-primary" for="hdrModeSort" style="font-size:.72rem">
+                            <i class="bi bi-sort-down me-1"></i>ترتيب
+                        </label>
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeFilter"
+                            onchange="setHeaderMode('filter')">
+                        <label class="btn btn-outline-primary" for="hdrModeFilter" style="font-size:.72rem">
+                            <i class="bi bi-funnel me-1"></i>فلترة
+                        </label>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" style="font-size:.7rem;display:none"
+                        id="btnClearHdrFilters" onclick="clearAllHeaderFilters()">
+                        <i class="bi bi-x-circle me-1"></i>مسح كل الفلاتر
+                    </button>
+                </div>
+                <div class="table-responsive" style="position:relative">
+                    <table class="mtbl" id="invTable">
                         <thead>
                             <tr>
-                                <th style="color:#1e3a8a">رقم الفاتورة</th>
-                                <th>التاريخ</th>
-                                <th style="color:#1e3a8a">العميل</th>
-                                <th>البنود</th>
-                                <th>العملة</th>
-                                <th>الإجمالي</th>
-                                <th>بعملة الفرع (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
-                                <th>المدفوع</th>
-                                <th>المتبقي</th>
-                                <th>الدفع</th>
-                                <th>الحالة</th>
+                                <th style="color:#1e3a8a" class="sortable-th" data-col="0" data-type="text">رقم الفاتورة
+                                </th>
+                                <th class="sortable-th" data-col="1" data-type="date">التاريخ</th>
+                                <th style="color:#1e3a8a" class="sortable-th" data-col="2" data-type="text">العميل</th>
+                                <th class="sortable-th" data-col="3" data-type="num">البنود</th>
+                                <th class="sortable-th" data-col="4" data-type="text">العملة</th>
+                                <th class="sortable-th" data-col="5" data-type="num">الإجمالي</th>
+                                <th class="sortable-th" data-col="6" data-type="num">بعملة الفرع
+                                    (<?= htmlspecialchars($baseCurrencySymbol) ?>)</th>
+                                <th class="sortable-th" data-col="7" data-type="num">المدفوع</th>
+                                <th class="sortable-th" data-col="8" data-type="num">المتبقي</th>
+                                <th class="sortable-th" data-col="9" data-type="text">الدفع</th>
+                                <th class="sortable-th" data-col="10" data-type="text">الحالة</th>
                                 <th style="text-align:center">إجراءات</th>
                             </tr>
                         </thead>
@@ -665,47 +686,56 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                                 $sym = $pur['currency_symbol'] ?? '$';
                                 ?>
                                 <tr style="<?= invoiceRowStyle($inv['status'], $inv['payment_status']) ?>">
-                                    <td class="n fw-600" style="direction:rtl">
+                                    <td class="n fw-600" style="direction:rtl"
+                                        data-sort="<?= htmlspecialchars($inv['invoice_number']) ?>">
                                         <a href="javascript:void(0)" onclick="viewInvoice(<?= $inv['id'] ?>)"
                                             style="color:#1e3a8a;text-decoration:none;cursor:pointer">
                                             <?= htmlspecialchars($inv['invoice_number']) ?>
                                         </a>
                                     </td>
-                                    <td class="text-muted" style="direction:rtl"><?= $inv['invoice_date'] ?></td>
-                                    <td>
+                                    <?php $invDateTime = !empty($inv['created_at']) ? substr($inv['created_at'], 0, 16) : $inv['invoice_date']; ?>
+                                    <td class="text-muted" style="direction:ltr"
+                                        data-sort="<?= htmlspecialchars($inv['created_at'] ?? $inv['invoice_date']) ?>">
+                                        <?= htmlspecialchars($invDateTime) ?>
+                                    </td>
+                                    <td data-sort="<?= htmlspecialchars($inv['customer_name'] ?? '') ?>">
                                         <div class="fw-600" style="font-size:.83rem">
                                             <?= htmlspecialchars($inv['customer_name'] ?? '—') ?>
                                         </div>
                                     </td>
-                                    <td class="text-center">
+                                    <td class="text-center" data-sort="<?= (int) $inv['items_count'] ?>">
                                         <span class="badge bg-secondary-subtle text-secondary"><?= $inv['items_count'] ?>
                                             بند</span>
                                     </td>
-                                    <td>
+                                    <td data-sort="<?= htmlspecialchars($inv['currency_code'] ?: '') ?>">
                                         <span class="badge bg-info-subtle text-info" style="font-size:.72rem" dir="ltr">
                                             <?= htmlspecialchars($inv['currency_code'] ?: '—') ?>
                                         </span>
                                     </td>
-                                    <td class="n fw-600">
+                                    <td class="n fw-600" data-sort="<?= (float) $inv['final_amount'] ?>">
                                         <?= number_format($inv['final_amount'], 2) ?>
                                         <?= htmlspecialchars($inv['currency_symbol'] ?? '') ?>
                                     </td>
-                                    <td class="n" style="font-size:.78rem">
+                                    <td class="n" style="font-size:.78rem"
+                                        data-sort="<?= (float) $inv['final_amount'] / (float) ($inv['exchange_rate'] ?: 1) ?>">
                                         <?= number_format((float) $inv['final_amount'] / (float) ($inv['exchange_rate'] ?: 1), 2) ?>
                                         <?= htmlspecialchars($baseCurrencySymbol) ?>
                                     </td>
-                                    <td class="n text-success"><?= number_format($inv['paid_amount'] ?? 0, 2) ?>
+                                    <td class="n text-success" data-sort="<?= (float) ($inv['paid_amount'] ?? 0) ?>">
+                                        <?= number_format($inv['paid_amount'] ?? 0, 2) ?>
                                         <?= htmlspecialchars($inv['currency_symbol'] ?? '') ?>
                                     </td>
-                                    <td class="n <?= ($inv['balance_amount'] ?? 0) > 0 ? 'text-danger fw-600' : '' ?>">
+                                    <td class="n <?= ($inv['balance_amount'] ?? 0) > 0 ? 'text-danger fw-600' : '' ?>"
+                                        data-sort="<?= (float) ($inv['balance_amount'] ?? 0) ?>">
                                         <?= number_format($inv['balance_amount'] ?? 0, 2) ?>
                                         <?= htmlspecialchars($inv['currency_symbol'] ?? '') ?>
                                     </td>
-                                    <td>
+                                    <td data-sort="<?= htmlspecialchars($pay['label']) ?>">
                                         <span class="<?= $pay['cls'] ?>"
                                             style="font-size:.78rem;font-weight:600"><?= $pay['label'] ?></span>
                                     </td>
-                                    <td><span class="badge <?= $st['cls'] ?>"
+                                    <td data-sort="<?= htmlspecialchars($st['label']) ?>"><span
+                                            class="badge <?= $st['cls'] ?>"
                                             style="font-size:.68rem"><?= $st['label'] ?></span></td>
                                     <td>
                                         <div class="d-flex gap-1 justify-content-center">
@@ -810,7 +840,8 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
 
                         <!-- ── بنود الفاتورة ── -->
                         <div class="col-12">
-                            <div style="background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;overflow:hidden">
+                            <div
+                                style="background:#f8fafc;border-radius:10px;border:20px solid #e2e8f0;overflow:hidden">
                                 <div
                                     style="padding:8px 14px;background:#f1f5f9;font-size:.8rem;font-weight:700;color:#1e293b;border-bottom:1px solid #e2e8f0">
                                     <i class="bi bi-list-ul me-1 text-success"></i>بنود الفاتورة
@@ -1029,9 +1060,136 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
     <script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
     <script>
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() {sb.classList.add('open'); ov.classList.add('show');}
-        function sbClose() {sb.classList.remove('open'); ov.classList.remove('show');}
-        window.addEventListener('resize', () => {if (window.innerWidth > 991) sbClose();});
+        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+
+        // ══════════════════════════════════════════════════════════
+        // ترتيب/فلترة جدول الفواتير بالنقر على رأس العمود — وضعان
+        // قابلان للتبديل (نسختين بنفس الصفحة، بلا تكرار الملف).
+        // ══════════════════════════════════════════════════════════
+        let _hdrMode = 'sort';
+        let _sortCol = null, _sortDir = 1;
+        const _activeFilters = {}; // { colIndex: Set(قيم مسموحة) }
+
+        function setHeaderMode(mode) {
+            _hdrMode = mode;
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+        }
+
+        (function initInvoiceTableHeaders() {
+            const table = document.getElementById('invTable');
+            if (!table) return;
+            table.querySelectorAll('th.sortable-th').forEach(th => {
+                th.style.cursor = 'pointer';
+                th.addEventListener('click', (e) => {
+                    if (_hdrMode === 'sort') sortByColumn(th);
+                    else { e.stopPropagation(); openFilterPopover(th); }
+                });
+            });
+        })();
+
+        function sortByColumn(th) {
+            const col = parseInt(th.dataset.col);
+            const type = th.dataset.type;
+            if (_sortCol === col) _sortDir *= -1; else { _sortCol = col; _sortDir = 1; }
+
+            // مؤشر السهم على العمود النشط بس
+            document.querySelectorAll('#invTable th.sortable-th').forEach(h => h.innerHTML = h.innerHTML.replace(/\s*[▲▼]$/, ''));
+            th.innerHTML += _sortDir === 1 ? ' ▲' : ' ▼';
+
+            const tbody = document.querySelector('#invTable tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            rows.sort((a, b) => {
+                let va = a.cells[col]?.dataset.sort ?? '', vb = b.cells[col]?.dataset.sort ?? '';
+                if (type === 'num') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; return (va - vb) * _sortDir; }
+                if (type === 'date') return (new Date(va) - new Date(vb)) * _sortDir;
+                return va.localeCompare(vb, 'ar') * _sortDir;
+            });
+            rows.forEach(r => tbody.appendChild(r));
+        }
+
+        function openFilterPopover(th) {
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+            const col = parseInt(th.dataset.col);
+            const tbody = document.querySelector('#invTable tbody');
+            const allRows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            const values = [...new Set(allRows.map(r => (r.cells[col]?.dataset.sort ?? '').trim()).filter(v => v !== ''))]
+                .sort((a, b) => a.localeCompare(b, 'ar'));
+
+            const selected = _activeFilters[col] || new Set(values);
+            const pop = document.createElement('div');
+            pop.className = 'hdr-filter-pop';
+            pop.style.cssText = 'position:fixed;z-index:2000;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px;max-height:260px;overflow-y:auto;min-width:170px;font-size:.75rem';
+            pop.innerHTML = `
+                <div class="d-flex justify-content-between mb-1">
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${col},true)">تحديد الكل</button>
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${col},false)">إلغاء الكل</button>
+                </div>
+                ${values.map(v => `
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input filter-chk" data-val="${v.replace(/"/g, '&quot;')}"
+                            ${selected.has(v) ? 'checked' : ''}>
+                        <label class="form-check-label" style="cursor:pointer">${v}</label>
+                    </div>`).join('')}
+                <div class="d-flex gap-1 mt-2">
+                    <button class="btn btn-sm btn-primary flex-fill" style="font-size:.7rem" onclick="_applyFilter(${col})">تطبيق</button>
+                    <button class="btn btn-sm btn-light" style="font-size:.7rem" onclick="document.querySelectorAll('.hdr-filter-pop').forEach(p=>p.remove())">إغلاق</button>
+                </div>`;
+            pop._values = values;
+            // ⚠ يُرسم على مستوى الصفحة (body) مباشرة، بلا أي علاقة أب/ابن
+            // مع <th> — عنصر .table-responsive عنده overflow بيقص أي
+            // عنصر position:absolute جواه لو تجاوز حدود التمرير، فكان
+            // البوب-أب يظهر مقصوص/مخفي بالكامل. position:fixed +
+            // getBoundingClientRect() يتفادى هالمشكلة كلياً.
+            const rect = th.getBoundingClientRect();
+            document.body.appendChild(pop);
+            let left = rect.left;
+            if (left + pop.offsetWidth > window.innerWidth - 10) left = window.innerWidth - pop.offsetWidth - 10;
+            pop.style.top = (rect.bottom + 4) + 'px';
+            pop.style.left = Math.max(10, left) + 'px';
+            pop.addEventListener('click', e => e.stopPropagation());
+        }
+
+        function _toggleAllFilter(col, checked) {
+            document.querySelectorAll('.hdr-filter-pop .filter-chk').forEach(c => c.checked = checked);
+        }
+
+        function _applyFilter(col) {
+            const pop = document.querySelector('.hdr-filter-pop');
+            const checked = new Set(Array.from(pop.querySelectorAll('.filter-chk:checked')).map(c => c.dataset.val));
+            if (checked.size === pop._values.length) delete _activeFilters[col];
+            else _activeFilters[col] = checked;
+            pop.remove();
+            _renderFilters();
+        }
+
+        function _renderFilters() {
+            const tbody = document.querySelector('#invTable tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            const hasFilters = Object.keys(_activeFilters).length > 0;
+            document.getElementById('btnClearHdrFilters').style.display = hasFilters ? '' : 'none';
+            rows.forEach(r => {
+                let visible = true;
+                for (const col in _activeFilters) {
+                    const val = (r.cells[col]?.dataset.sort ?? '').trim();
+                    if (!_activeFilters[col].has(val)) { visible = false; break; }
+                }
+                r.style.display = visible ? '' : 'none';
+            });
+            // تلوين رؤوس الأعمدة المفلترة فعلياً
+            document.querySelectorAll('#invTable th.sortable-th').forEach(h => {
+                const c = h.dataset.col;
+                h.style.background = _activeFilters[c] ? '#fef3c7' : '';
+            });
+        }
+
+        function clearAllHeaderFilters() {
+            Object.keys(_activeFilters).forEach(k => delete _activeFilters[k]);
+            _renderFilters();
+        }
+
+        document.addEventListener('click', () => document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove()));
+        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
         function toggleGroup(g) {
             const o = g.classList.contains('open');
             document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open'));
@@ -1051,7 +1209,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
         function post(data) {
             const fd = new FormData();
             Object.entries(data).forEach(([k, v]) => fd.append(k, v ?? ''));
-            return fetch(location.href, {method: 'POST', body: fd}).then(r => r.json());
+            return fetch(location.href, { method: 'POST', body: fd }).then(r => r.json());
         }
         function toast(msg, type = 'success') {
             const t = document.createElement('div');
@@ -1068,8 +1226,8 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             document.getElementById('vEditBtn').style.display = 'none';
             document.getElementById('vBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-success"></span></div>';
             viewModal.show();
-            post({_action: 'get_invoice', id}).then(d => {
-                if (!d.ok) {document.getElementById('vBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return;}
+            post({ _action: 'get_invoice', id }).then(d => {
+                if (!d.ok) { document.getElementById('vBody').innerHTML = `<div class="text-danger p-3">${d.msg}</div>`; return; }
                 const inv = d.data;
                 _cInvoiceData = inv; // مشترك مع مودال التأكيد — تلزم لـprintSaleInvoice()
                 const st = STATUS_MAP[inv.status] || STATUS_MAP['draft'];
@@ -1105,7 +1263,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                     grpMap[k].cost_total += (parseFloat(it.cost_price_base || 0) * parseFloat(it.quantity));
                     if (it.size && !grpMap[k].sizes.includes(it.size)) grpMap[k].sizes.push(it.size);
                 });
-                Object.values(grpMap).forEach(g => {g.total = g.qty * g.unit_price * (g.sizes.length || 1);});
+                Object.values(grpMap).forEach(g => { g.total = g.qty * g.unit_price * (g.sizes.length || 1); });
                 const grpRows = Object.values(grpMap).sort((a, b) => a.unit_price - b.unit_price);
                 const priceList = [...new Set(grpRows.map(g => g.unit_price))];
 
@@ -1194,7 +1352,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
         // ── تأكيد ──
         let _cId = 0, _cTotal = 0, _cCurSym = '$', _cInvoiceData = null;
 
-        function float(v) {return parseFloat(v) || 0;}
+        function float(v) { return parseFloat(v) || 0; }
 
         function confirmInvoice(id, no) {
             // الإجمالي والرمز بيترجعوا الصح من داخل openConfirmModal نفسها
@@ -1222,8 +1380,8 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             clearImg();
             confirmModal.show();
             // جلب بنود الفاتورة الحقيقية
-            post({_action: 'get_invoice', id}).then(d => {
-                if (!d.ok) {document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="9" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return;}
+            post({ _action: 'get_invoice', id }).then(d => {
+                if (!d.ok) { document.getElementById('cItemsBody').innerHTML = '<tr><td colspan="9" class="text-center text-danger p-2">خطأ: ' + d.msg + '</td></tr>'; return; }
                 const p = d.data;
                 _cInvoiceData = p;
 
@@ -1248,7 +1406,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                     };
                     if (it.size && !groups[key].sizes.includes(it.size)) groups[key].sizes.push(it.size);
                 });
-                Object.values(groups).forEach(g => {g.total = g.qty * g.unit * (g.sizes.length || 1);});
+                Object.values(groups).forEach(g => { g.total = g.qty * g.unit * (g.sizes.length || 1); });
                 let rows = '', i = 1;
                 Object.values(groups).forEach(g => {
                     rows += `<tr style="border-bottom:1px solid #f1f5f9">
@@ -1343,9 +1501,9 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
             const f = inp.files[0];
             if (f.type.startsWith('image/')) {
                 const rd = new FileReader();
-                rd.onload = e => {document.getElementById('cImgThumb').src = e.target.result; document.getElementById('cImgPreview').style.display = '';};
+                rd.onload = e => { document.getElementById('cImgThumb').src = e.target.result; document.getElementById('cImgPreview').style.display = ''; };
                 rd.readAsDataURL(f);
-            } else {document.getElementById('cImgPreview').style.display = '';}
+            } else { document.getElementById('cImgPreview').style.display = ''; }
         }
         function clearImg() {
             document.getElementById('cInvoiceImg').value = '';
@@ -1370,7 +1528,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
 
         function printSaleInvoice() {
             const p = _cInvoiceData;
-            if (!p) {toast('يرجى فتح تفاصيل الفاتورة أولاً', 'danger'); return;}
+            if (!p) { toast('يرجى فتح تفاصيل الفاتورة أولاً', 'danger'); return; }
             const sym = p.currency_symbol || '$';
             const baseSym = p.base_currency_symbol || '$';
             const fmt = n => sym + ' ' + new Intl.NumberFormat('en').format(parseFloat(n || 0).toFixed(2));
@@ -1425,10 +1583,7 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
                 <td dir="ltr">${g.model_number || '—'}</td>
                 <td dir="ltr">${formatSizeRange(g.sizes, g.age_type)}</td>
                 <td style="color:#16a34a">${g.colors.join(' · ') || '—'}</td>
-                <td>${g.catalog_selling_price != null ? fmt(g.catalog_selling_price) : '—'}</td>
-                <td>${g.packet_qty != null ? g.packet_qty : '—'}</td>
                 <td>${g.qty}</td>
-                <td>${g.discount_amount > 0 ? fmt(g.discount_amount) : '—'}</td>
                 <td>${fmt(g.unit_price)}</td>
                 <td class="n-total">${fmt(g.total_price)}</td>
             </tr>`;
@@ -1468,46 +1623,46 @@ function invoiceRowStyle(string $status, string $paymentStatus): string
 <title>فاتورة بيع ${p.invoice_number}</title>
 <style>
 *{margin:0;padding:0}
-body{font-family:'Arial',sans-serif;font-size:12px;color:#111;padding:20px;margin:0 auto}
+body{font-family:'Arial',sans-serif;font-size:17px;color:#111;padding:26px;margin:0 auto;line-height:1.5}
 /* ── الترويسة: ٣ أقسام ── */
-.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:3px;padding-bottom:10px;border-bottom:2px solid ${docColor}}
+.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;padding-bottom:14px;border-bottom:3px solid ${docColor}}
 .hdr-tenant{text-align:center;min-width:190px}
 .hdr-tenant img{max-height:190px;max-width:190px;object-fit:contain}
-.hdr-tenant .slogan{font-size:18px;font-weight:bold;color:var(--section-color);margin-top:15px}
+.hdr-tenant .slogan{font-size:24px;font-weight:bold;color:var(--section-color);margin-top:18px}
 .hdr-title{text-align:center;flex:1;padding-top:35px}
-.hdr-title .doc-type{background:${docColor};color:#111;font-weight:125;font-size:22px;padding:6px 22px;border-radius:12px}
-.hdr-branch{min-width:100px;font-size:10px;line-height:1.7}
-.hdr-branch .br-name{font-size:12px;font-weight:800;color:${docColor};margin-bottom:2px}
+.hdr-title .doc-type{background:${docColor};color:#111;font-weight:700;font-size:30px;padding:9px 28px;border-radius:14px}
+.hdr-branch{min-width:130px;font-size:15px;line-height:1.8}
+.hdr-branch .br-name{font-size:18px;font-weight:800;color:${docColor};margin-bottom:4px}
 /* ── معلومات العميل ── */
-.inv-meta{border:1px solid #e2e8f0;border-radius:6px;padding:5px 5px;margin-bottom:10px;background:#f8fafc}
-.inv-meta h4{font-size:7px;font-weight:700;color:${docColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #e2e8f0}
-.meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px 14px}
-.meta-item span:first-child{color:#64748b;font-size:7.5px;display:block}
-.meta-item span:last-child{font-weight:600;font-size:8.5px}
+.inv-meta{border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:14px;background:#f8fafc}
+.inv-meta h4{font-size:13px;font-weight:700;color:${docColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;padding-bottom:5px;border-bottom:1px solid #e2e8f0}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px 18px}
+.meta-item span:first-child{color:#64748b;font-size:13px;display:block}
+.meta-item span:last-child{font-weight:600;font-size:15px}
 /* ── جدول البنود ── */
-table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:7.5px}
-thead th{background:${docColor};color:#fff;padding:5px 4px;text-align:center;font-weight:600}
-tbody td{padding:4px;border-bottom:1px solid #f1f5f9;text-align:center}
+table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:14px;border:1px solid #cbd5e1}
+thead th{background:${docColor};color:#fff;padding:9px 6px;text-align:center;font-weight:600;border:1px solid ${docColor}}
+tbody td{padding:8px 6px;border:1px solid #cbd5e1;text-align:center}
 tbody td:nth-child(2){text-align:right}
 tbody tr:nth-child(even) td{background:#f8fafc}
 .n-total{font-weight:700}
-tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center}
+tfoot td{background:#f1f5f9;font-weight:700;padding:9px 6px;text-align:center;font-size:15px;border:1px solid #cbd5e1}
 /* ── قسم المبالغ ── */
-.totals-wrap{display:flex;justify-content:flex-end;margin-top:8px}
-.totals{width:60%;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
-.tot-row{display:flex;justify-content:space-between;padding:4px 12px;font-size:8px;border-bottom:1px solid #f1f5f9}
+.totals-wrap{display:flex;justify-content:flex-end;margin-top:12px}
+.totals{width:62%;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden}
+.tot-row{display:flex;justify-content:space-between;padding:8px 16px;font-size:15px;border-bottom:1px solid #f1f5f9}
 .tot-row.sub{color:#64748b}
-.tot-row.final{background:${docColor};color:#fff;font-weight:700;font-size:10px;border:none}
+.tot-row.final{background:${docColor};color:#fff;font-weight:700;font-size:19px;border:none;padding:10px 16px}
 /* ── الفوتر: كشف حساب مختصر ── */
-.statement{margin-top:14px;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:#f8fafc}
-.statement h4{font-size:7px;font-weight:700;color:${docColor};margin-bottom:6px}
+.statement{margin-top:18px;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;background:#f8fafc}
+.statement h4{font-size:13px;font-weight:700;color:${docColor};margin-bottom:9px}
 .statement-grid{display:flex;justify-content:space-between;text-align:center}
-.statement-grid .item span:first-child{color:#64748b;font-size:7.5px;display:block;margin-bottom:2px}
-.statement-grid .item span:last-child{font-weight:700;font-size:9px}
-.footer-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0}
-.footer-bottom .txt{font-size:7px;color:#94a3b8}
-.footer-bottom img{height:22px}
-@media print{@page{margin:8mm}button{display:none}}
+.statement-grid .item span:first-child{color:#64748b;font-size:13px;display:block;margin-bottom:3px}
+.statement-grid .item span:last-child{font-weight:700;font-size:16px}
+.footer-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0}
+.footer-bottom .txt{font-size:12px;color:#94a3b8}
+.footer-bottom img{height:26px}
+@media print{@page{margin:10mm}button{display:none}}
 </style>
 </head>
 <body>
@@ -1537,7 +1692,7 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center}
     <div class="meta-item"><span>اسم العميل</span><span>${p.customer_name || '—'}</span></div>
     <div class="meta-item"><span>رقم الهاتف</span><span dir="ltr">${p.customer_phone || '—'}</span></div>
     <div class="meta-item"><span>رقم الفاتورة</span><span dir="ltr">${p.invoice_number}</span></div>
-    <div class="meta-item"><span>تاريخ الفاتورة</span><span>${p.invoice_date || '—'}</span></div>
+    <div class="meta-item"><span>تاريخ الفاتورة</span><span dir="ltr">${p.created_at ? p.created_at.replace('T', ' ').slice(0, 16) : (p.invoice_date || '—')}</span></div>
     <div class="meta-item"><span>العنوان</span><span>${p.customer_address || '—'}</span></div>
     <div class="meta-item"><span>الرقم الضريبي</span><span dir="ltr">${p.customer_tax_number || '—'}</span></div>
     <div class="meta-item"><span>شركة الشحن</span><span>${p.customer_shipping_company || '—'}</span></div>
@@ -1551,14 +1706,14 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center}
 <table>
   <thead><tr>
     <th>#</th><th>بيان القطعة</th><th>رقم الموديل</th><th>القياس</th><th>اللون</th>
-    <th>سعر الوحدة (كتالوج)</th><th>قطع/باكيت</th><th>عدد الكروبات</th>
-    <th>خصم المنتج</th><th>سعر الوحدة (الفاتورة)</th><th>الإجمالي</th>
+    <th>عدد الكروبات</th>
+    <th>سعر الوحدة</th><th>الإجمالي</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
   <tfoot><tr>
-    <td colspan="7">إجمالي الكميات</td>
+    <td colspan="5">إجمالي الكميات</td>
     <td>${totalQty}</td>
-    <td colspan="2"></td>
+    <td></td>
     <td>${fmt(p.final_amount)}</td>
   </tr></tfoot>
 </table>
@@ -1575,7 +1730,7 @@ tfoot td{background:#f1f5f9;font-weight:700;padding:5px;text-align:center}
   </div>
 </div>
 
-${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:8px"><b>ملاحظات:</b> ${p.notes}</div>` : ''}
+${p.notes ? `<div style="margin-top:14px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:14px"><b>ملاحظات:</b> ${p.notes}</div>` : ''}
 
 <!-- ══ كشف حساب سريع مختصر (بعملة الفرع) ══ -->
 <div class="statement">
@@ -1618,12 +1773,12 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
             fd.append('notes', document.getElementById('cNotes').value);
             const img = document.getElementById('cInvoiceImg');
             if (img.files && img.files[0]) fd.append('invoice_image', img.files[0]);
-            fetch('../../api/confirm_sale_invoice.php', {method: 'POST', body: fd})
+            fetch('../../api/confirm_sale_invoice.php', { method: 'POST', body: fd })
                 .then(r => r.json()).then(d => {
                     document.getElementById('confirmTxt').style.opacity = '1';
                     document.getElementById('confirmSpin').style.display = 'none';
                     document.getElementById('btnConfirm').disabled = false;
-                    if (d.ok) {toast('✅ ' + d.msg); confirmModal.hide(); setTimeout(() => location.reload(), 800);}
+                    if (d.ok) { toast('✅ ' + d.msg); confirmModal.hide(); setTimeout(() => location.reload(), 800); }
                     else toast(d.msg, 'danger');
                 }).catch(() => {
                     document.getElementById('confirmTxt').style.opacity = '1';
@@ -1639,11 +1794,11 @@ ${p.notes ? `<div style="margin-top:10px;padding:6px 10px;background:#fffbeb;bor
             const fd = new FormData();
             fd.append('_action', 'cancel');
             fd.append('invoice_id', id);
-            fetch('../../api/confirm_sale_invoice.php', {method: 'POST', body: fd})
+            fetch('../../api/confirm_sale_invoice.php', { method: 'POST', body: fd })
                 .then(r => r.json()).then(d => {
-                if (d.ok) {toast('✅ ' + d.msg); setTimeout(() => location.reload(), 700);}
-                else toast(d.msg, 'danger');
-            });
+                    if (d.ok) { toast('✅ ' + d.msg); setTimeout(() => location.reload(), 700); }
+                    else toast(d.msg, 'danger');
+                });
         }
     </script>
 </body>

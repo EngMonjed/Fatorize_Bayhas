@@ -34,26 +34,6 @@ function genEntryNo(PDO $pdo, string $table): string
     return 'JE-' . $y . '-' . str_pad($seq, 4, '0', STR_PAD_LEFT);
 }
 
-// ── ترتيب تبويبات قسم المالية ──
-// ⚠ ميزة السحب والإفلات (Drag & Drop) معطَّلة مؤقتاً بطلب صريح — التبويبات
-// هلق ثابتة بالترتيب الافتراضي أدناه، غير قابلة للسحب. جدول قاعدة البيانات
-// user_tab_order ومنطق قراءة أي ترتيب محفوظ سابقاً تُركا كما هما عمداً
-// (ما انحذفوا) لأنه محتمل نرجع نفعّل الميزة لاحقاً — راجع تحديثات_مستقبلية.md.
-$tabsMeta = [
-    'accounts.php' => ['bi-diagram-3', 'شجرة الحسابات'],
-    'account_settings.php' => ['bi-gear', 'إعدادات الربط'],
-    'journal.php' => ['bi-journal-bookmark', 'القيود المحاسبية'],
-    'receipts.php' => ['bi-cash-stack', 'سندات القبض'],
-    'payments.php' => ['bi-cash-coin', 'سندات الدفع'],
-    'treasury.php' => ['bi-safe', 'الصندوق'],
-    'taxes.php' => ['bi-receipt-cutoff', 'الضرائب والرسوم'],
-    'reports.php' => ['bi-bar-chart-line', 'التقارير المالية'],
-    'currencies.php' => ['bi-currency-exchange', 'العملات'],
-    'shipping_carriers.php' => ['bi-truck', 'شركات الشحن']
-];
-$defaultTabOrder = array_keys($tabsMeta);
-$tabOrder = $defaultTabOrder;
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -245,39 +225,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             }
         }
 
-        elseif ($act === 'save_tab_order') {
-            $order = json_decode($_POST['order'] ?? '[]', true);
-            if (!is_array($order))
-                throw new Exception('ترتيب غير صالح');
-            $order = array_values(array_intersect($order, $defaultTabOrder));
-            if (empty($order))
-                throw new Exception('ترتيب فاضي');
-            $pdo->prepare("INSERT INTO user_tab_order (user_id, page_group, tab_order, updated_at)
-                VALUES (?, 'finance', ?, NOW())
-                ON DUPLICATE KEY UPDATE tab_order=VALUES(tab_order), updated_at=NOW()")
-                ->execute([$_SESSION['user_id'], json_encode($order, JSON_UNESCAPED_UNICODE)]);
-            echo json_encode(['ok' => true]);
-        } else
+        else
             throw new Exception('إجراء غير معروف');
     } catch (Exception $e) {
         echo json_encode(['ok' => false, 'msg' => $e->getMessage()]);
     }
     exit;
-}
-
-try {
-    $ordSt = $pdo->prepare("SELECT tab_order FROM user_tab_order WHERE user_id=? AND page_group='finance'");
-    $ordSt->execute([$_SESSION['user_id']]);
-    $savedTabJson = $ordSt->fetchColumn();
-    if ($savedTabJson) {
-        $savedTabArr = json_decode($savedTabJson, true);
-        if (is_array($savedTabArr)) {
-            $validOrder = array_values(array_intersect($savedTabArr, $defaultTabOrder));
-            $missingOrder = array_values(array_diff($defaultTabOrder, $validOrder));
-            $tabOrder = array_merge($validOrder, $missingOrder);
-        }
-    }
-} catch (Exception $e) {
 }
 
 $baseSym = '$';
@@ -494,25 +447,8 @@ $overdueCount = count(array_filter($pendingFees, fn($f) => $f['due_date'] < $tod
     <main class="main-content">
         <div class="content-body">
 
-            <!-- تبويبات صفحات المالية — قابلة للسحب وإعادة الترتيب، محفوظة لكل مستخدم -->
-            <ul class="nav nav-tabs mb-3" id="financeTabs" style="border-bottom:2px solid #e2e8f0;flex-wrap:wrap">
-                <?php foreach ($tabOrder as $href):
-                    if (!isset($tabsMeta[$href]))
-                        continue;
-                    [$icon, $label] = $tabsMeta[$href];
-                    $active = ($href === 'taxes.php');
-                    $cls = $active ? 'nav-link fw-600 active' : 'nav-link fw-600';
-                    $style = $active
-                        ? 'border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px'
-                        : 'border:none;color:#64748b;font-size:.83rem';
-                    ?>
-                <li class="nav-item" data-href="<?= htmlspecialchars($href) ?>">
-                    <a class="<?= $cls ?>" href="<?= htmlspecialchars($href) ?>" style="<?= $style ?>">
-                        <i class="bi <?= $icon ?> me-1"></i><?= htmlspecialchars($label) ?>
-                    </a>
-                </li>
-                <?php endforeach; ?>
-            </ul>
+            <!-- تبويبات قسم المالية (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <!-- إحصائيات -->
             <div class="row g-3 mb-4">

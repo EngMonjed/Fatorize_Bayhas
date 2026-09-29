@@ -339,8 +339,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             <!-- تبويبات القسم -->
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                 <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="sales_index.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
+                    <a class="nav-link fw-600" href="sales_index.php" style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-receipt me-1"></i>فواتير المبيعات
                     </a>
                 </li>

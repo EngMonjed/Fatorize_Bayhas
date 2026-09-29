@@ -30,26 +30,6 @@ if (!empty($_SESSION['branch_id'])) {
     $baseSym = $bcStmt->fetchColumn() ?: '$';
 }
 
-// ── ترتيب تبويبات قسم المالية ──
-// ⚠ ميزة السحب والإفلات (Drag & Drop) معطَّلة مؤقتاً بطلب صريح — التبويبات
-// هلق ثابتة بالترتيب الافتراضي أدناه، غير قابلة للسحب. جدول قاعدة البيانات
-// user_tab_order ومنطق قراءة أي ترتيب محفوظ سابقاً تُركا كما هما عمداً
-// (ما انحذفوا) لأنه محتمل نرجع نفعّل الميزة لاحقاً — راجع تحديثات_مستقبلية.md.
-$tabsMeta = [
-    'accounts.php' => ['bi-diagram-3', 'شجرة الحسابات'],
-    'account_settings.php' => ['bi-gear', 'إعدادات الربط'],
-    'journal.php' => ['bi-journal-bookmark', 'القيود المحاسبية'],
-    'receipts.php' => ['bi-cash-stack', 'سندات القبض'],
-    'payments.php' => ['bi-cash-coin', 'سندات الدفع'],
-    'treasury.php' => ['bi-safe', 'الصندوق'],
-    'taxes.php' => ['bi-receipt-cutoff', 'الضرائب والرسوم'],
-    'reports.php' => ['bi-bar-chart-line', 'التقارير المالية'],
-    'currencies.php' => ['bi-currency-exchange', 'العملات'],
-    'shipping_carriers.php' => ['bi-truck', 'شركات الشحن']
-];
-$defaultTabOrder = array_keys($tabsMeta);
-$tabOrder = $defaultTabOrder;
-
 // ── AJAX ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -228,27 +208,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     }
     exit;
 }
-// تحميل الترتيب المخصَّص للمستخدم الحالي (لو محفوظ) — يستبدل الترتيب
-// الافتراضي أعلاه؛ أي تبويب جديد ينضاف بالمستقبل ما كان بالترتيب
-// المحفوظ القديم بينضاف تلقائياً بالآخر (مش بيختفي).
-try {
-    $ordSt = $pdo->prepare("SELECT tab_order FROM user_tab_order WHERE user_id=? AND page_group='finance'");
-    $ordSt->execute([$_SESSION['user_id']]);
-    $savedTabJson = $ordSt->fetchColumn();
-    if ($savedTabJson) {
-        $savedTabArr = json_decode($savedTabJson, true);
-        if (is_array($savedTabArr)) {
-            $validOrder = array_values(array_intersect($savedTabArr, $defaultTabOrder));
-            $missingOrder = array_values(array_diff($defaultTabOrder, $validOrder));
-            $tabOrder = array_merge($validOrder, $missingOrder);
-        }
-    }
-} catch (Exception $e) {
-    // جدول user_tab_order لسا ما انعمل؟ رجوع آمن للترتيب الافتراضي بصمت
-}
-
-
-
 // ── بيانات الصفحة ──
 $accounts = $pdo->query("SELECT ac.*, c.code AS cur_code, c.symbol AS cur_sym
     FROM `{$TAC}` ac LEFT JOIN currencies c ON c.id=ac.currency_id
@@ -561,59 +520,8 @@ function renderTree(array $nodes, array $TYPE_MAP, array $CURRENCY_MAP, string $
     </header>
     <main class="main-content">
         <div class="content-body">
-            <!-- تبويبات صفحات المالية — قابلة للسحب وإعادة الترتيب، محفوظة لكل مستخدم -->
-            <ul class="nav nav-tabs mb-3" id="financeTabs" style="border-bottom:2px solid #e2e8f0;flex-wrap:wrap">
-                <li class="nav-item" data-href="accounts.php">
-                    <a class="nav-link fw-600 active" href="accounts.php" style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-diagram-3 me-1"></i>شجرة الحسابات
-                    </a>
-                </li>
-                <li class="nav-item" data-href="account_settings.php">
-                    <a class="nav-link fw-600" href="account_settings.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-gear me-1"></i>إعدادات الربط
-                    </a>
-                </li>
-                <li class="nav-item" data-href="journal.php">
-                    <a class="nav-link fw-600" href="journal.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-journal-bookmark me-1"></i>القيود المحاسبية
-                    </a>
-                </li>
-                <li class="nav-item" data-href="receipts.php">
-                    <a class="nav-link fw-600" href="receipts.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-cash-stack me-1"></i>سندات القبض
-                    </a>
-                </li>
-                <li class="nav-item" data-href="payments.php">
-                    <a class="nav-link fw-600" href="payments.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-cash-coin me-1"></i>سندات الدفع
-                    </a>
-                </li>
-                <li class="nav-item" data-href="treasury.php">
-                    <a class="nav-link fw-600" href="treasury.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-safe me-1"></i>الصندوق
-                    </a>
-                </li>
-                <li class="nav-item" data-href="taxes.php">
-                    <a class="nav-link fw-600" href="taxes.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt-cutoff me-1"></i>الضرائب والرسوم
-                    </a>
-                </li>
-                <li class="nav-item" data-href="reports.php">
-                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-bar-chart-line me-1"></i>التقارير المالية
-                    </a>
-                </li>
-                <li class="nav-item" data-href="currencies.php">
-                    <a class="nav-link fw-600" href="currencies.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-currency-exchange me-1"></i>العملات
-                    </a>
-                </li>
-                <li class="nav-item" data-href="shipping_carriers.php">
-                    <a class="nav-link fw-600" href="shipping_carriers.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-truck me-1"></i>شركات الشحن
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات قسم المالية (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
 
             <!-- إحصائيات سريعة -->

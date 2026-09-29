@@ -71,6 +71,13 @@ $SETTINGS_MAP['fx_loss'] = ['label' => 'خسائر فروقات الصرف', 'gr
 // حتى يتم توريدها (تُستخدم بـpayments.php وتُدار من taxes.php)
 $SETTINGS_MAP['withholding_tax_payable'] = ['label' => 'ضريبة استقطاع مستحقة', 'group' => 'الضرائب والرسوم', 'icon' => 'bi-receipt-cutoff', 'color' => '#d97706', 'type' => 'liability'];
 
+// الشركاء والمالك — حسابات "أب" تُنشئها إنت بشجرة الحسابات وتربطها هون؛ وكل شريك جديد
+// بياخد حسابات فرعية مخصصة تلقائياً تحتها (نفس نمط العملاء/الموردين). صفحة partners.php.
+$SETTINGS_MAP['partner_capital_parent'] = ['label' => 'رأس مال الشركاء (حساب أب)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-people', 'color' => '#16a34a', 'type' => 'equity'];
+$SETTINGS_MAP['partner_drawings_parent'] = ['label' => 'مسحوبات الشركاء (حساب أب)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-box-arrow-up', 'color' => '#dc2626', 'type' => 'equity'];
+$SETTINGS_MAP['partner_loan_payable_parent'] = ['label' => 'قروض من الشركاء للشركة (حساب أب — التزام)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-arrow-down-circle', 'color' => '#d97706', 'type' => 'liability'];
+$SETTINGS_MAP['partner_loan_receivable_parent'] = ['label' => 'قروض من الشركة للشركاء (حساب أب — أصل)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-arrow-up-circle', 'color' => '#2563eb', 'type' => 'asset'];
+
 // إضافة الصناديق والبنوك ديناميكياً من جدول العملات
 $currencies_list = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
 foreach ($currencies_list as $cur) {
@@ -91,26 +98,6 @@ foreach ($currencies_list as $cur) {
     ];
 }
 
-
-// ── ترتيب تبويبات قسم المالية ──
-// ⚠ ميزة السحب والإفلات (Drag & Drop) معطَّلة مؤقتاً بطلب صريح — التبويبات
-// هلق ثابتة بالترتيب الافتراضي أدناه، غير قابلة للسحب. جدول قاعدة البيانات
-// user_tab_order ومنطق قراءة أي ترتيب محفوظ سابقاً تُركا كما هما عمداً
-// (ما انحذفوا) لأنه محتمل نرجع نفعّل الميزة لاحقاً — راجع تحديثات_مستقبلية.md.
-$tabsMeta = [
-    'accounts.php' => ['bi-diagram-3', 'شجرة الحسابات'],
-    'account_settings.php' => ['bi-gear', 'إعدادات الربط'],
-    'journal.php' => ['bi-journal-bookmark', 'القيود المحاسبية'],
-    'receipts.php' => ['bi-cash-stack', 'سندات القبض'],
-    'payments.php' => ['bi-cash-coin', 'سندات الدفع'],
-    'treasury.php' => ['bi-safe', 'الصندوق'],
-    'taxes.php' => ['bi-receipt-cutoff', 'الضرائب والرسوم'],
-    'reports.php' => ['bi-bar-chart-line', 'التقارير المالية'],
-    'currencies.php' => ['bi-currency-exchange', 'العملات'],
-    'shipping_carriers.php' => ['bi-truck', 'شركات الشحن']
-];
-$defaultTabOrder = array_keys($tabsMeta);
-$tabOrder = $defaultTabOrder;
 
 // ── AJAX ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
@@ -154,27 +141,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     }
     exit;
 }
-// تحميل الترتيب المخصَّص للمستخدم الحالي (لو محفوظ) — يستبدل الترتيب
-// الافتراضي أعلاه؛ أي تبويب جديد ينضاف بالمستقبل ما كان بالترتيب
-// المحفوظ القديم بينضاف تلقائياً بالآخر (مش بيختفي).
-try {
-    $ordSt = $pdo->prepare("SELECT tab_order FROM user_tab_order WHERE user_id=? AND page_group='finance'");
-    $ordSt->execute([$_SESSION['user_id']]);
-    $savedTabJson = $ordSt->fetchColumn();
-    if ($savedTabJson) {
-        $savedTabArr = json_decode($savedTabJson, true);
-        if (is_array($savedTabArr)) {
-            $validOrder = array_values(array_intersect($savedTabArr, $defaultTabOrder));
-            $missingOrder = array_values(array_diff($defaultTabOrder, $validOrder));
-            $tabOrder = array_merge($validOrder, $missingOrder);
-        }
-    }
-} catch (Exception $e) {
-    // جدول user_tab_order لسا ما انعمل؟ رجوع آمن للترتيب الافتراضي بصمت
-}
-
-
-
 // ── مفاتيح "حرجة" فعلياً تُقرأ من كود ترحيل القيود ──
 // ⚠ لو مفتاح هون فاضي، القيد المحاسبي المرتبط به بيفشل يترحّل بصمت
 // (بس error_log، بدون أي تنبيه بالواجهة وقت التأكيد). موثّق حالياً:
@@ -363,61 +329,8 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
     </header>
     <main class="main-content">
         <div class="content-body">
-            <!-- تبويبات صفحات المالية — قابلة للسحب وإعادة الترتيب، محفوظة لكل مستخدم -->
-            <ul class="nav nav-tabs mb-3" id="financeTabs" style="border-bottom:2px solid #e2e8f0;flex-wrap:wrap">
-                <li class="nav-item" data-href="accounts.php">
-                    <a class="nav-link fw-600" href="accounts.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-diagram-3 me-1"></i>شجرة الحسابات
-                    </a>
-                </li>
-                <li class="nav-item" data-href="account_settings.php">
-                    <a class="nav-link fw-600 active" href="account_settings.php"
-                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-gear me-1"></i>إعدادات الربط
-                    </a>
-                </li>
-                <li class="nav-item" data-href="journal.php">
-                    <a class="nav-link fw-600" href="journal.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-journal-bookmark me-1"></i>القيود المحاسبية
-                    </a>
-                </li>
-                <li class="nav-item" data-href="receipts.php">
-                    <a class="nav-link fw-600" href="receipts.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-cash-stack me-1"></i>سندات القبض
-                    </a>
-                </li>
-                <li class="nav-item" data-href="payments.php">
-                    <a class="nav-link fw-600" href="payments.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-cash-coin me-1"></i>سندات الدفع
-                    </a>
-                </li>
-                <li class="nav-item" data-href="treasury.php">
-                    <a class="nav-link fw-600" href="treasury.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-safe me-1"></i>الصندوق
-                    </a>
-                </li>
-                <li class="nav-item" data-href="taxes.php">
-                    <a class="nav-link fw-600" href="taxes.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt-cutoff me-1"></i>الضرائب والرسوم
-                    </a>
-                </li>
-                <li class="nav-item" data-href="reports.php">
-                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-bar-chart-line me-1"></i>التقارير المالية
-                    </a>
-                </li>
-                <li class="nav-item" data-href="currencies.php">
-                    <a class="nav-link fw-600" href="currencies.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-currency-exchange me-1"></i>العملات
-                    </a>
-                </li>
-                <li class="nav-item" data-href="shipping_carriers.php">
-                    <a class="nav-link fw-600" href="shipping_carriers.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-truck me-1"></i>شركات الشحن
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات قسم المالية (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
 
             <!-- تنبيه -->

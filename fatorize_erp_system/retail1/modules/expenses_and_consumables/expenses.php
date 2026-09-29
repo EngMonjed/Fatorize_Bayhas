@@ -271,14 +271,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                                 $ln['currency_id'],
                                 $ln['exchange_rate']
                             ]);
-                        // ⚠ استدعاء صحيح ومبسّط — نفس التوقيع بالضبط
-                        // المستخدم بباقي الملفات (٥ باراميترات فقط:
-                        // pdo, جدول الحسابات, معرّف الحساب, مدين, دائن).
-                        // كان هون قبل هالإصلاح بيمرّر ٧ قيم لدالة بتاخذ
-                        // ٥ بس، بحسبة غير منطقية (original_amount مضروب
-                        // بـ1/-1) — كان عملياً بيكسر تحديث الرصيد بالكامل
-                        // عند إلغاء أي مصروف.
-                        postAccountBalance($pdo, $TAC, (int) $ln['account_id'], (float) $ln['credit'], (float) $ln['debit']);
+                        // ⚠ التوقيع الحالي لـpostAccountBalance() بياخذ ٧
+                        // باراميترات (مدين/دائن بعملة الحساب الأصلية +
+                        // مدين/دائن بعملة الفرع) — مش ٥ زي إصدار قديم.
+                        // لازم نحدد جهة original_amount الأصلية (كانت
+                        // بجهة المدين أو الدائن؟) حتى نعكسها صح، تماماً
+                        // متل ما بيصير بسطر INSERT العكسي فوق مباشرة.
+                        $wasDebit = (float) $ln['debit'] > 0;
+                        $revOriginalDebit = $wasDebit ? 0 : (float) $ln['original_amount'];
+                        $revOriginalCredit = $wasDebit ? (float) $ln['original_amount'] : 0;
+                        postAccountBalance(
+                            $pdo, $TAC, (int) $ln['account_id'],
+                            $revOriginalDebit, $revOriginalCredit,
+                            (float) $ln['credit'], (float) $ln['debit']
+                        );
                     }
                 }
 

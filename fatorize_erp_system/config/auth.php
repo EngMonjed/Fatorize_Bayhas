@@ -124,6 +124,18 @@ function requirePermission(string $moduleKey, string $action = 'view'): void
     checkLogin();
     if (!can($moduleKey, $action)) {
         http_response_code(403);
+
+        // طلبات AJAX (POST مع action) بتتوقع JSON — نرجّع رسالة بدل صفحة HTML كاملة
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['_action']) || isset($_POST['action']))) {
+            header('Content-Type: application/json; charset=utf-8');
+            die(json_encode([
+                'ok' => false,
+                'success' => false,
+                'msg' => 'ليس لديك صلاحية لهذا الإجراء',
+                'message' => 'ليس لديك صلاحية لهذا الإجراء',
+            ], JSON_UNESCAPED_UNICODE));
+        }
+
         die('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8">
         <title>غير مصرح</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">

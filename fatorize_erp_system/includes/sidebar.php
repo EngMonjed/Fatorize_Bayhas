@@ -293,6 +293,7 @@ function moduleUrl(string $key): string
     'finance.payments' => 'accounting/payments.php',        // ✅ جديد — سندات الدفع (مقابل finance.receipts)
     'finance.treasury' => 'accounting/treasury.php',        // ✅ جديد — الصندوق (نظرة عامة + تحويل بين الصناديق/البنوك)
     'finance.taxes' => 'accounting/taxes.php',           // ✅ جديد — الضرائب والرسوم
+    'finance.partners' => 'accounting/partners.php',     // ✅ جديد — الشركاء والمالك (رأس مال/مسحوبات/قروض)
     'finance.reports' => 'accounting/reports.php',         // ✅ جديد — التقارير المالية (ميزانية/أرباح وخسائر/تدفقات نقدية)
     'finance.currencies' => 'accounting/currencies.php',      // ✅ موجودة، كانت غير مربوطة بأي قائمة
     'finance.shipping_carriers' => 'accounting/shipping_carriers.php', // ✅ موجودة، كانت غير مربوطة بأي قائمة
@@ -323,6 +324,10 @@ function moduleUrl(string $key): string
     'admin.section_colors' => 'admin/section_colors.php', // ✅ جديد — صفحة إعدادات ألوان الأقسام
     'admin.opening_balances' => 'admin/opening_balances.php', // ✅ كانت مفقودة
     // admin.settings أُزيل — لا صفحة settings/index.php فعلية بعد
+    // الإنتاج
+    'production.raw_materials' => 'production/raw_materials.php',
+    'production.operations' => 'production/operations.php',
+    'production.entries' => 'production/production_entries.php',
     ];
     // قراءة base_path من session حسب الفرع
     // ⚠ 'ret' = فرع البيع 1 (كان aleppo/alp سابقاً، انترينيم لـ retail1/ret).

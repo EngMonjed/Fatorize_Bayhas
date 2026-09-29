@@ -55,7 +55,7 @@ $branchName = $_SESSION['branch_name'] ?? 'الفرع';
             <!-- تبويبات القسم -->
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
                 <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="sales_index.php"
+                    <a class="nav-link fw-600" href="sales_index.php"
                         style="border:none;color:#64748b;font-size:.83rem">
                         <i class="bi bi-receipt me-1"></i>فواتير المبيعات
                     </a>
@@ -109,11 +109,11 @@ $branchName = $_SESSION['branch_name'] ?? 'الفرع';
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const sb = document.getElementById('sidebar'), ov = document.getElementById('sbOverlay');
-        function sbOpen() {sb.classList.add('open'); ov.classList.add('show');}
-        function sbClose() {sb.classList.remove('open'); ov.classList.remove('show');}
-        window.addEventListener('resize', () => {if (window.innerWidth > 991) sbClose();});
-        function toggleGroup(g) {const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString());}
-        document.querySelectorAll('.sb-group').forEach(g => {if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open');});
+        function sbOpen() { sb.classList.add('open'); ov.classList.add('show'); }
+        function sbClose() { sb.classList.remove('open'); ov.classList.remove('show'); }
+        window.addEventListener('resize', () => { if (window.innerWidth > 991) sbClose(); });
+        function toggleGroup(g) { const o = g.classList.contains('open'); document.querySelectorAll('.sb-group.open').forEach(x => x.classList.remove('open')); g.classList.toggle('open', !o); localStorage.setItem('sb_open_' + g.dataset.key, (!o).toString()); }
+        document.querySelectorAll('.sb-group').forEach(g => { if (localStorage.getItem('sb_open_' + g.dataset.key) === 'true') g.classList.add('open'); });
     </script>
 </body>
 

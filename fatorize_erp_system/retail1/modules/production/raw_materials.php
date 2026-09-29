@@ -233,182 +233,221 @@ foreach ($materials as $m) {
 }
 $statCatCount = count($categories);
 
-// عملة الفرع الأساسية — للعرض فقط
-$baseCurrency = ['symbol' => '', 'code' => ''];
+// اسم الفرع + عملته الوظيفية (branches.base_currency هو الحقل الموثوق، مو base_currency_id)
+$branchName = '';
+$baseCurSym = '';
 try {
-    $bc = $pdo->prepare("
-        SELECT cur.symbol, cur.code
-        FROM branches b JOIN currencies cur ON cur.id = b.base_currency_id
-        WHERE b.id = ?
-    ");
-    $bc->execute([$_SESSION['branch_id']]);
-    $row = $bc->fetch();
-    if ($row) $baseCurrency = $row;
-} catch (Throwable $e) { /* عمود base_currency_id قد يختلف الاسم — يُعرض بدون رمز عملة عندها */ }
+    $bn = $pdo->prepare("SELECT * FROM branches WHERE id = ?");
+    $bn->execute([$_SESSION['branch_id'] ?? 0]);
+    $brow = $bn->fetch();
+    if ($brow) {
+        $branchName = $brow['name'] ?? ($brow['branch_name'] ?? '');
+        $baseCurSym = $brow['base_currency'] ?? '';
+    }
+} catch (Throwable $e) { /* يُعرض بدون اسم/عملة بدل ما تنكسر الصفحة */ }
 
 $can_create = can('production.raw_materials', 'create');
 $can_edit   = can('production.raw_materials', 'edit');
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>المواد الأولية — فاتورايز</title>
-<link rel="icon" type="image/png" href="../../../assets/images/logo.png">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link href="../../../assets/css/layout.css" rel="stylesheet">
-<style>
-.stat-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin-bottom:1.25rem; }
-@media (max-width:900px){ .stat-cards{ grid-template-columns:repeat(2,1fr); } }
-.stat-card { background:#fff; border-radius:14px; padding:1.1rem 1.25rem; border:1px solid #e2e8f0; }
-.stat-card .lbl { font-size:.8rem; color:#64748b; margin-bottom:.3rem; }
-.stat-card .val { font-size:1.4rem; font-weight:700; color:#1e293b; }
-.stat-card.warn .val { color:#ca8a04; }
-.section-tabs { display:flex; gap:.4rem; margin-bottom:1.1rem; border-bottom:1px solid #e2e8f0; }
-.section-tabs a {
-    padding:.65rem 1.1rem; font-size:.9rem; font-weight:600; color:#64748b;
-    text-decoration:none; border-bottom:2.5px solid transparent; margin-bottom:-1px;
-}
-.section-tabs a.active { color:#1e3a8a; border-bottom-color:#1e3a8a; }
-.tbl-wrap { background:#fff; border-radius:14px; border:1px solid #e2e8f0; overflow:hidden; }
-.tbl-hdr { display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; justify-content:space-between; padding:1rem 1.1rem; border-bottom:1px solid #e2e8f0; }
-.tbl-hdr .filters { display:flex; gap:.5rem; flex-wrap:wrap; }
-table.mtbl { width:100% !important; table-layout:auto; border-collapse:collapse; }
-table.mtbl th { background:#f8fafc; font-size:.82rem; color:#475569; padding:.7rem .8rem; text-align:right; cursor:pointer; white-space:nowrap; }
-table.mtbl th.no-sort { cursor:default; }
-table.mtbl td { padding:.65rem .8rem; font-size:.87rem; border-top:1px solid #f1f5f9; vertical-align:middle; }
-.badge-status { padding:.25rem .6rem; border-radius:20px; font-size:.75rem; font-weight:600; }
-.badge-active { background:#ecfdf5; color:#16a34a; }
-.badge-inactive { background:#f1f5f9; color:#64748b; }
-.badge-low { background:#fffbeb; color:#ca8a04; }
-.qty-cell { font-weight:600; color:#ca8a04; }
-.code-cell { font-family:'IBM Plex Mono',monospace; color:#1e3a8a; font-weight:600; font-size:.82rem; }
-.actions-cell { white-space:nowrap; }
-.actions-cell .btn { padding:.25rem .55rem; }
-.quick-add-btn { border:1px dashed #94a3b8; background:#fff; border-radius:8px; padding:.35rem .5rem; font-size:.8rem; color:#475569; }
-.breadcrumb-bar { font-size:.85rem; color:#64748b; margin-bottom:.6rem; }
-.breadcrumb-bar a { color:#64748b; text-decoration:none; }
-.breadcrumb-bar a:hover { color:#1e3a8a; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>المواد الأولية — FATORIZE</title>
+    <link rel="icon" type="image/png" href="<?= BASE_PATH ?>/assets/images/logo.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="<?= BASE_PATH ?>/assets/css/layout.css" rel="stylesheet">
+    <style>
+        table.mtbl { width: 100% !important; }
+        .badge-status { padding: .25rem .6rem; border-radius: 20px; font-size: .75rem; font-weight: 600; }
+        .badge-active { background: #ecfdf5; color: #16a34a; }
+        .badge-inactive { background: #f1f5f9; color: #64748b; }
+        .badge-low { background: #fffbeb; color: #ca8a04; }
+        .qty-cell { font-weight: 600; }
+        .code-cell { direction: ltr; text-align: right; font-weight: 600; font-size: .82rem; color: var(--section-color); }
+        .quick-add-btn { border: 1px dashed #94a3b8; background: #fff; border-radius: 8px; padding: .35rem .5rem; font-size: .8rem; color: #475569; }
+        .th-sort { cursor: pointer; white-space: nowrap; }
+    </style>
 </head>
+
 <body>
-<?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+    <div class="sb-overlay" id="sbOverlay" onclick="sbClose()"></div>
+    <?php require_once __DIR__ . '/../../../includes/sidebar.php'; ?>
+    <header class="topbar">
+        <button class="tb-toggle" onclick="sbOpen()"><i class="bi bi-list"></i></button>
+        <span class="tb-title"><i class="bi bi-box2 me-1" style="color:var(--section-color)"></i>المواد الأولية</span>
+        <span class="tb-branch"><i class="bi bi-shop me-1"></i><?= htmlspecialchars($branchName) ?></span>
+        <nav class="ms-auto d-flex align-items-center gap-1" style="font-size:.78rem;color:#94a3b8">
+            <span>الإنتاج</span>
+            <i class="bi bi-chevron-left mx-1" style="font-size:.65rem"></i>
+            <span class="fw-600" style="color:var(--section-color)">المواد الأولية</span>
+        </nav>
+    </header>
 
-<main class="content">
-    <div class="breadcrumb-bar">
-        <a href="../dashboard.php">الرئيسية</a> / <span>الإنتاج</span> / <span>المواد الأولية</span>
-    </div>
+    <main class="main-content">
+        <div class="content-body">
 
-    <div class="section-tabs">
-        <a href="raw_materials.php" class="active"><i class="bi bi-box2 me-1"></i> المواد الأولية</a>
-        <a href="operations.php"><i class="bi bi-diagram-3 me-1"></i> عمليات التصنيع</a>
-        <a href="production_entries.php"><i class="bi bi-clipboard-check me-1"></i> أوامر الإنتاج</a>
-    </div>
+            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
+                <li class="nav-item">
+                    <a class="nav-link fw-600 active" href="raw_materials.php"
+                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
+                        <i class="bi bi-box2 me-1"></i>المواد الأولية
+                    </a>
+                </li>
+                                <li class="nav-item">
+                    <a class="nav-link fw-600" href="stages.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-sliders me-1"></i>إعداد الإنتاج
+                    </a>
+                </li>
+<li class="nav-item">
+                    <a class="nav-link fw-600" href="operations.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-diagram-3 me-1"></i>عمليات التصنيع
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link fw-600" href="production_entries.php" style="border:none;color:#64748b;font-size:.83rem">
+                        <i class="bi bi-clipboard-check me-1"></i>أوامر الإنتاج
+                    </a>
+                </li>
+            </ul>
 
-    <div class="stat-cards">
-        <div class="stat-card">
-            <div class="lbl">مواد نشطة</div>
-            <div class="val"><?= $statTotalActive ?></div>
-        </div>
-        <div class="stat-card warn">
-            <div class="lbl">تحت الحد الأدنى</div>
-            <div class="val"><?= $statLowStock ?></div>
-        </div>
-        <div class="stat-card">
-            <div class="lbl">عدد الفئات</div>
-            <div class="val"><?= $statCatCount ?></div>
-        </div>
-        <div class="stat-card">
-            <div class="lbl">قيمة المخزون التقديرية</div>
-            <div class="val"><?= number_format($statStockValue, 2) ?> <?= htmlspecialchars($baseCurrency['symbol'] ?? '') ?></div>
-        </div>
-    </div>
-
-    <div class="tbl-wrap">
-        <div class="tbl-hdr">
-            <div class="filters">
-                <input type="text" id="searchBox" class="form-control form-control-sm" style="width:220px" placeholder="بحث بالاسم أو الكود...">
-                <select id="filterCategory" class="form-select form-select-sm" style="width:160px">
-                    <option value="">كل الفئات</option>
-                    <?php foreach ($categories as $c): ?>
-                        <option value="<?= (int)$c['id'] ?>"><?= htmlspecialchars($c['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <select id="filterStatus" class="form-select form-select-sm" style="width:130px">
-                    <option value="">كل الحالات</option>
-                    <option value="1">نشط</option>
-                    <option value="0">معطّل</option>
-                </select>
-                <div class="form-check form-check-sm d-flex align-items-center gap-1">
-                    <input class="form-check-input" type="checkbox" id="filterLow" style="margin-top:0">
-                    <label class="form-check-label small" for="filterLow">تحت الحد الأدنى بس</label>
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-3">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-box2 text-success"></i></div>
+                        <div>
+                            <div class="stat-val"><?= $statTotalActive ?></div>
+                            <div class="stat-lbl">مواد نشطة</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background:#fef3c7"><i class="bi bi-exclamation-triangle text-warning"></i></div>
+                        <div>
+                            <div class="stat-val"><?= $statLowStock ?></div>
+                            <div class="stat-lbl">تحت الحد الأدنى</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background:#eff6ff"><i class="bi bi-tags text-primary"></i></div>
+                        <div>
+                            <div class="stat-val"><?= $statCatCount ?></div>
+                            <div class="stat-lbl">عدد الفئات</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-cash-stack text-success"></i></div>
+                        <div>
+                            <div class="stat-val n"><?= number_format($statStockValue, 2) ?> <?= htmlspecialchars($baseCurSym) ?></div>
+                            <div class="stat-lbl">قيمة المخزون التقديرية (بعملة الفرع)</div>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <?php if ($can_create): ?>
-            <button class="btn btn-primary btn-sm" onclick="openMaterialModal()"><i class="bi bi-plus-lg me-1"></i> إضافة مادة</button>
-            <?php endif; ?>
-        </div>
-        <div style="overflow-x:auto">
-        <table class="mtbl" id="matTable">
-            <thead>
-                <tr>
-                    <th onclick="sortTableByColumn(0)">الكود</th>
-                    <th onclick="sortTableByColumn(1)">الاسم</th>
-                    <th onclick="sortTableByColumn(2)">الفئة</th>
-                    <th onclick="sortTableByColumn(3)">الوحدة</th>
-                    <th onclick="sortTableByColumn(4)">الرصيد الحالي</th>
-                    <th onclick="sortTableByColumn(5)">الحد الأدنى</th>
-                    <th onclick="sortTableByColumn(6)">آخر تكلفة</th>
-                    <th onclick="sortTableByColumn(7)">الحالة</th>
-                    <th class="no-sort data-no-sort">إجراءات</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($materials as $m):
-                    $isLow = (float)$m['total_stock'] <= (float)$m['min_stock_threshold'];
-                    $isActive = (int)$m['is_active'] === 1;
-                ?>
-                <tr data-cat="<?= (int)$m['category_id'] ?>" data-active="<?= $isActive ? 1 : 0 ?>" data-low="<?= $isLow ? 1 : 0 ?>"
-                    data-search="<?= htmlspecialchars(mb_strtolower($m['name'] . ' ' . $m['code'])) ?>">
-                    <td class="code-cell"><?= htmlspecialchars($m['code']) ?></td>
-                    <td><?= htmlspecialchars($m['name']) ?></td>
-                    <td><?= htmlspecialchars($m['category_name'] ?? '—') ?></td>
-                    <td><?= htmlspecialchars($m['unit_name'] ?? '—') ?> <?= $m['unit_symbol'] ? '('.htmlspecialchars($m['unit_symbol']).')' : '' ?></td>
-                    <td class="qty-cell">
-                        <?= number_format((float)$m['total_stock'], 2) ?>
-                        <?php if ($isLow && $isActive): ?><span class="badge-status badge-low ms-1">منخفض</span><?php endif; ?>
-                    </td>
-                    <td><?= number_format((float)$m['min_stock_threshold'], 2) ?></td>
-                    <td><?= number_format((float)$m['last_cost'], 2) ?> <?= htmlspecialchars($baseCurrency['symbol'] ?? '') ?></td>
-                    <td>
-                        <span class="badge-status <?= $isActive ? 'badge-active' : 'badge-inactive' ?>"><?= $isActive ? 'نشط' : 'معطّل' ?></span>
-                    </td>
-                    <td class="actions-cell">
-                        <button class="btn btn-outline-secondary btn-sm" title="الرصيد بالتفصيل" onclick="openStockModal(<?= (int)$m['id'] ?>, '<?= htmlspecialchars($m['name'], ENT_QUOTES) ?>')">
-                            <i class="bi bi-boxes"></i>
-                        </button>
-                        <?php if ($can_edit): ?>
-                        <button class="btn btn-outline-primary btn-sm" title="تعديل" onclick="openMaterialModal(<?= (int)$m['id'] ?>)">
-                            <i class="bi bi-pencil"></i>
-                        </button>
-                        <button class="btn btn-outline-<?= $isActive ? 'danger' : 'success' ?> btn-sm" title="<?= $isActive ? 'تعطيل' : 'تفعيل' ?>" onclick="toggleStatus(<?= (int)$m['id'] ?>)">
-                            <i class="bi bi-<?= $isActive ? 'slash-circle' : 'check-circle' ?>"></i>
-                        </button>
+
+            <div class="tbl-wrap">
+                <div class="tbl-hdr">
+                    <span style="font-size:.88rem;font-weight:700;color:#1e293b">
+                        <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>كتالوج المواد الأولية
+                    </span>
+                    <div class="d-flex gap-2 ms-auto flex-wrap align-items-center">
+                        <input type="text" id="searchBox" class="form-control form-control-sm"
+                            style="width:200px;border-radius:8px" placeholder="بحث بالاسم أو الكود...">
+                        <select id="filterCategory" class="form-select form-select-sm" style="width:150px;border-radius:8px">
+                            <option value="">كل الفئات</option>
+                            <?php foreach ($categories as $c): ?>
+                                <option value="<?= (int) $c['id'] ?>"><?= htmlspecialchars($c['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <select id="filterStatus" class="form-select form-select-sm" style="width:120px;border-radius:8px">
+                            <option value="">كل الحالات</option>
+                            <option value="1">نشط</option>
+                            <option value="0">معطّل</option>
+                        </select>
+                        <div class="form-check d-flex align-items-center gap-1 mb-0">
+                            <input class="form-check-input" type="checkbox" id="filterLow" style="margin-top:0">
+                            <label class="form-check-label small" for="filterLow">تحت الحد الأدنى بس</label>
+                        </div>
+                        <?php if ($can_create): ?>
+                            <button class="btn btn-sm fw-600" onclick="openMaterialModal()"
+                                style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem;white-space:nowrap">
+                                <i class="bi bi-plus-lg me-1"></i>إضافة مادة
+                            </button>
                         <?php endif; ?>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-                <?php if (!$materials): ?>
-                <tr><td colspan="9" class="text-center text-muted py-4">ما في مواد أولية مسجّلة بعد</td></tr>
-                <?php endif; ?>
-            </tbody>
-        </table>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="mtbl" id="matTable">
+                        <thead>
+                            <tr>
+                                <th class="th-sort" onclick="sortTableByColumn(0)">الكود</th>
+                                <th class="th-sort" onclick="sortTableByColumn(1)">الاسم</th>
+                                <th class="th-sort" onclick="sortTableByColumn(2)">الفئة</th>
+                                <th class="th-sort" onclick="sortTableByColumn(3)">الوحدة</th>
+                                <th class="th-sort" onclick="sortTableByColumn(4)">الرصيد الحالي</th>
+                                <th class="th-sort" onclick="sortTableByColumn(5)">الحد الأدنى</th>
+                                <th class="th-sort" onclick="sortTableByColumn(6)">آخر تكلفة</th>
+                                <th class="th-sort" onclick="sortTableByColumn(7)">الحالة</th>
+                                <th style="text-align:center" data-no-sort>إجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($materials as $m):
+                                $isLow = (float) $m['total_stock'] <= (float) $m['min_stock_threshold'];
+                                $isActive = (int) $m['is_active'] === 1;
+                                ?>
+                                <tr data-cat="<?= (int) $m['category_id'] ?>" data-active="<?= $isActive ? 1 : 0 ?>"
+                                    data-low="<?= $isLow ? 1 : 0 ?>"
+                                    data-search="<?= htmlspecialchars(mb_strtolower($m['name'] . ' ' . $m['code'])) ?>">
+                                    <td class="code-cell"><?= htmlspecialchars($m['code']) ?></td>
+                                    <td class="fw-600"><?= htmlspecialchars($m['name']) ?></td>
+                                    <td class="text-muted"><?= htmlspecialchars($m['category_name'] ?? '—') ?></td>
+                                    <td><?= htmlspecialchars($m['unit_name'] ?? '—') ?>
+                                        <?= $m['unit_symbol'] ? '(' . htmlspecialchars($m['unit_symbol']) . ')' : '' ?></td>
+                                    <td class="n qty-cell">
+                                        <?= number_format((float) $m['total_stock'], 2) ?>
+                                        <?php if ($isLow && $isActive): ?><span class="badge-status badge-low ms-1">منخفض</span><?php endif; ?>
+                                    </td>
+                                    <td class="n"><?= number_format((float) $m['min_stock_threshold'], 2) ?></td>
+                                    <td class="n"><?= number_format((float) $m['last_cost'], 2) ?> <?= htmlspecialchars($baseCurSym) ?></td>
+                                    <td><span class="badge-status <?= $isActive ? 'badge-active' : 'badge-inactive' ?>"><?= $isActive ? 'نشط' : 'معطّل' ?></span></td>
+                                    <td>
+                                        <div class="d-flex gap-1 justify-content-center">
+                                            <button class="act-btn info-h" title="الرصيد بالتفصيل"
+                                                onclick="openStockModal(<?= (int) $m['id'] ?>, '<?= htmlspecialchars($m['name'], ENT_QUOTES) ?>')"><i class="bi bi-boxes"></i></button>
+                                            <?php if ($can_edit): ?>
+                                                <button class="act-btn" title="تعديل" onclick="openMaterialModal(<?= (int) $m['id'] ?>)"><i class="bi bi-pencil"></i></button>
+                                                <button class="act-btn <?= $isActive ? 'danger' : 'success-h' ?>" title="<?= $isActive ? 'تعطيل' : 'تفعيل' ?>"
+                                                    onclick="toggleStatus(<?= (int) $m['id'] ?>)"><i class="bi bi-<?= $isActive ? 'slash-circle' : 'check-circle' ?>"></i></button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if (!$materials): ?>
+                                <tr>
+                                    <td colspan="9" class="text-center text-muted py-5">
+                                        <i class="bi bi-box2 d-block mb-2" style="font-size:2rem;opacity:.2"></i>
+                                        ما في مواد أولية مسجّلة بعد
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
         </div>
-    </div>
-</main>
+    </main>
 
 <!-- مودال إضافة/تعديل مادة -->
 <div class="modal fade" id="materialModal" tabindex="-1">
@@ -465,7 +504,7 @@ table.mtbl td { padding:.65rem .8rem; font-size:.87rem; border-top:1px solid #f1
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
-        <button type="button" class="btn btn-primary" onclick="saveMaterial()">حفظ</button>
+        <button type="button" class="btn fw-600" style="background:var(--section-color);color:#fff" onclick="saveMaterial()">حفظ</button>
       </div>
     </div>
   </div>
@@ -735,5 +774,6 @@ function adjustStock() {
     });
 }
 </script>
+<script src="<?= BASE_PATH ?>/assets/js/sidebar.js"></script>
 </body>
 </html>

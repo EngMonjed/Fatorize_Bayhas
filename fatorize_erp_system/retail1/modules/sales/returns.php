@@ -383,6 +383,125 @@ $retStats = [
     <style>
         .n { font-variant-numeric: tabular-nums }
 
+        /* ── بطاقات الإحصائيات ── */
+        .stat-card {
+            background: #fff;
+            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0
+        }
+
+        .stat-val {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #1e293b;
+            line-height: 1
+        }
+
+        .stat-lbl {
+            font-size: .7rem;
+            color: #64748b;
+            margin-top: 2px
+        }
+
+        /* ── حاوية الجدول + شريط الفلاتر ── */
+        .tbl-wrap {
+            background: #fff;
+            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            overflow: hidden
+        }
+
+        .tbl-hdr {
+            padding: 12px 16px;
+            border-bottom: 1px solid #eef2f7;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap
+        }
+
+        /* ── الجدول: حشوة كافية + فواصل واضحة بين الأعمدة والصفوف ──
+           (كانت كلاسات tbl-wrap/tbl-hdr/mtbl مستخدمة بالـHTML بدون أي
+           تعريف CSS، فكانت الرؤوس تنضغط فوق بعضها بلا حشوة) */
+        table.mtbl {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .82rem
+        }
+
+        table.mtbl th {
+            background: #f1f5f9;
+            padding: 11px 14px;
+            font-weight: 700;
+            color: #475569;
+            font-size: .74rem;
+            border-bottom: 2px solid #e2e8f0;
+            white-space: nowrap;
+            text-align: right;
+            vertical-align: middle
+        }
+
+        table.mtbl td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            vertical-align: middle;
+            text-align: right
+        }
+
+        /* فاصل عمودي رفيع بين كل عمودين (RTL: حد الخلية اليسار) */
+        table.mtbl th:not(:last-child),
+        table.mtbl td:not(:last-child) {
+            border-inline-end: 1px solid #e8edf3
+        }
+
+        table.mtbl tbody tr:last-child td {
+            border-bottom: none
+        }
+
+        table.mtbl tbody tr:hover td {
+            background: #f8fff8
+        }
+
+        table.mtbl th .sort-ind {
+            margin-inline-start: 4px
+        }
+
+        /* سجل المرتجعات: عرض أدنى يمنع انضغاط الرؤوس (الحاوية
+           .table-responsive تعمل scroll أفقي بدل التداخل) */
+        #returnsTbl {
+            min-width: 980px
+        }
+
+        /* محاذاة موحّدة للرأس والخلايا معاً:
+           يمين (نص): رقم المرتجع، العميل، طريقة التسوية
+           وسط: التاريخ، الفاتورة الأصلية، القيمة، الحالة، الإجراءات */
+        #returnsTbl th:nth-child(2), #returnsTbl td:nth-child(2),
+        #returnsTbl th:nth-child(4), #returnsTbl td:nth-child(4),
+        #returnsTbl th:nth-child(5), #returnsTbl td:nth-child(5),
+        #returnsTbl th:nth-child(7), #returnsTbl td:nth-child(7),
+        #returnsTbl th:nth-child(8), #returnsTbl td:nth-child(8) {
+            text-align: center
+        }
+
+        #returnsTbl th:nth-child(6), #returnsTbl td:nth-child(6) {
+            min-width: 170px
+        }
+
         .act-btn {
             width: 28px;
             height: 28px;
