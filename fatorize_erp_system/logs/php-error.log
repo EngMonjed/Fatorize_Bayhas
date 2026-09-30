@@ -1,0 +1,15 @@
+[29-Sep-2026 17:09:16 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'tenant_1.raw_material_categories_ret' doesn't exist in D:\laragon\www\fatorize_erp_system\retail1\modules\production\raw_materials.php:213
+Stack trace:
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\production\raw_materials.php(213): PDO->query('SELECT id, name...')
+#1 {main}
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\production\raw_materials.php on line 213
+[29-Sep-2026 21:29:44 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pi.product_name' in 'field list' in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php:120
+Stack trace:
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php(120): PDO->prepare('SELECT 'purchas...')
+#1 {main}
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php on line 120
+[29-Sep-2026 21:36:43 Asia/Damascus] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pi.product_name' in 'field list' in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php:120
+Stack trace:
+#0 D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php(120): PDO->prepare('SELECT 'purchas...')
+#1 {main}
+  thrown in D:\laragon\www\fatorize_erp_system\retail1\modules\inventory\movements.php on line 120

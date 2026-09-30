@@ -865,39 +865,8 @@ $catColors = [
     <main class="main-content">
         <div class="content-body">
 
-            <!-- الشريط الموحّد لقسم المنتجات/المخزون — نظير شريط المستهلكات
-                 بالضبط (نفس الأسلوب، بس بروابط نسبية لهذا القسم) -->
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="products.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-boxes me-1"></i>المنتجات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="warehouse.php?type=products"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-building me-1"></i>المستودعات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="movements.php?tab=products"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-arrow-left-right me-1"></i>حركة المخزون
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="internal_orders.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-signpost-split me-1"></i>الطلبات الداخلية
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-bar-chart-line me-1"></i>التقارير
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <!-- إحصائيات -->
             <div class="row g-3 mb-4">

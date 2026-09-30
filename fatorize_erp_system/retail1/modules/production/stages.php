@@ -25,6 +25,75 @@ $T_WC = "production_work_centers_{$TS}";
 $T_WCU = "production_work_center_users_{$TS}";
 $T_CONTR = "production_contractors_{$TS}";
 $T_ACCOUNT = "account_charts_{$TS}";
+$T_SETTINGS = "invoice_account_settings_{$TS}";
+
+/**
+ * ينشئ حسابين محاسبيين لمورد خدمة جديد (ذمم + دفعة مقدمة)، بنفس الرقم
+ * التسلسلي، تحت الحسابين الأب المضبوطين بجدول إعدادات الربط المحاسبي.
+ * يرمي Exception لو الإعدادات ناقصة — ما بيخمّن أي شي.
+ */
+function createServiceVendorAccounts(PDO $pdo, string $T_SETTINGS, string $T_ACCOUNT, string $vendorName, int $userId): array
+{
+    $st = $pdo->prepare("SELECT setting_key, account_id FROM {$T_SETTINGS} WHERE setting_key IN ('service_vendor_payable','service_vendor_advance')");
+    $st->execute();
+    $settings = [];
+    foreach ($st->fetchAll() as $row)
+        $settings[$row['setting_key']] = (int) $row['account_id'];
+
+    if (empty($settings['service_vendor_payable']) || empty($settings['service_vendor_advance'])) {
+        throw new Exception('لسا ما انضبطت حسابات موردي الخدمة الأب بدليل الحسابات — راجع مسؤول النظام لإضافتها أول (ذمم موردي الخدمة + دفعات مقدمة لموردي الخدمة)');
+    }
+
+    $accSt = $pdo->prepare("SELECT code, level, cash_flow_category FROM {$T_ACCOUNT} WHERE id = ?");
+    $accSt->execute([$settings['service_vendor_payable']]);
+    $payableParent = $accSt->fetch();
+    $accSt->execute([$settings['service_vendor_advance']]);
+    $advanceParent = $accSt->fetch();
+    if (!$payableParent || !$advanceParent) {
+        throw new Exception('الحسابات الأب المضبوطة بالإعدادات غير موجودة فعلياً بدليل الحسابات');
+    }
+
+    // رقم تسلسلي جديد — فرع الذمم هو المرجع الوحيد لتوليد الرقم، ونفس
+    // الرقم يُطبَّق على فرع الدفعات المقدمة كمان (نفس نمط الموردين الحاليين)
+    $seqSt = $pdo->prepare("SELECT code FROM {$T_ACCOUNT} WHERE code LIKE ? ORDER BY id DESC LIMIT 1");
+    $seqSt->execute([$payableParent['code'] . '.%']);
+    $lastCode = $seqSt->fetchColumn();
+    $nextNum = 1;
+    if ($lastCode) {
+        $parts = explode('.', $lastCode);
+        $nextNum = (int) end($parts) + 1;
+    }
+    $seq = str_pad((string) $nextNum, 3, '0', STR_PAD_LEFT);
+
+    $ins = $pdo->prepare("
+        INSERT INTO {$T_ACCOUNT}
+            (code, name, parent_id, account_type, cash_flow_category, currency_id, exchange_rate, level, is_active, is_locked, created_by)
+        VALUES (?, ?, ?, ?, ?, 1, 1.0000, ?, 1, 0, ?)
+    ");
+    $ins->execute([
+        $payableParent['code'] . '.' . $seq,
+        'ذمم ' . $vendorName,
+        $settings['service_vendor_payable'],
+        'liability',
+        $payableParent['cash_flow_category'],
+        (int) $payableParent['level'] + 1,
+        $userId
+    ]);
+    $payableAccountId = (int) $pdo->lastInsertId();
+
+    $ins->execute([
+        $advanceParent['code'] . '.' . $seq,
+        'دفعات مقدمة — ' . $vendorName,
+        $settings['service_vendor_advance'],
+        'asset',
+        $advanceParent['cash_flow_category'],
+        (int) $advanceParent['level'] + 1,
+        $userId
+    ]);
+    $advanceAccountId = (int) $pdo->lastInsertId();
+
+    return [$payableAccountId, $advanceAccountId];
+}
 
 $activeTab = $_GET['tab'] ?? 'stages';
 if (!in_array($activeTab, ['stages', 'work_centers', 'contractors'], true))
@@ -214,7 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 exit;
             }
 
-            // ---------- موردي الخدمة ----------
+            // ---------- موردي الخدمات ----------
             case 'contractor_get': {
                 $id = (int) ($_POST['id'] ?? 0);
                 $st = $pdo->prepare("SELECT * FROM {$T_CONTR} WHERE id = ?");
@@ -230,20 +299,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $id = (int) ($_POST['id'] ?? 0);
                 $name = trim($_POST['name'] ?? '');
                 $contact = trim($_POST['contact_info'] ?? '');
-                $accountId = ($_POST['account_id'] ?? '') !== '' ? (int) $_POST['account_id'] : null;
                 if ($name === '')
                     throw new Exception('اسم مورد الخدمة مطلوب');
 
                 if ($id > 0) {
                     requirePermission('production.contractors', 'edit');
-                    $pdo->prepare("UPDATE {$T_CONTR} SET name=?, contact_info=?, account_id=? WHERE id=?")
-                        ->execute([$name, $contact !== '' ? $contact : null, $accountId, $id]);
+                    $pdo->prepare("UPDATE {$T_CONTR} SET name=?, contact_info=? WHERE id=?")
+                        ->execute([$name, $contact !== '' ? $contact : null, $id]);
+                    // مزامنة اسم الحسابين المرتبطين (لو موجودين) مع الاسم الجديد
+                    $cSt = $pdo->prepare("SELECT account_id, advance_account_id FROM {$T_CONTR} WHERE id=?");
+                    $cSt->execute([$id]);
+                    if ($crow = $cSt->fetch()) {
+                        if ($crow['account_id'])
+                            $pdo->prepare("UPDATE {$T_ACCOUNT} SET name=? WHERE id=?")->execute(['ذمم ' . $name, $crow['account_id']]);
+                        if ($crow['advance_account_id'])
+                            $pdo->prepare("UPDATE {$T_ACCOUNT} SET name=? WHERE id=?")->execute(['دفعات مقدمة — ' . $name, $crow['advance_account_id']]);
+                    }
                     echo json_encode(['ok' => true, 'msg' => 'تم تحديث مورد الخدمة']);
                 } else {
                     requirePermission('production.contractors', 'create');
-                    $pdo->prepare("INSERT INTO {$T_CONTR} (name, contact_info, account_id) VALUES (?,?,?)")
-                        ->execute([$name, $contact !== '' ? $contact : null, $accountId]);
-                    echo json_encode(['ok' => true, 'id' => (int) $pdo->lastInsertId(), 'msg' => 'تمت إضافة مورد الخدمة']);
+                    $pdo->beginTransaction();
+                    try {
+                        [$payableId, $advanceId] = createServiceVendorAccounts($pdo, $T_SETTINGS, $T_ACCOUNT, $name, $userId);
+                        $pdo->prepare("INSERT INTO {$T_CONTR} (name, contact_info, account_id, advance_account_id) VALUES (?,?,?,?)")
+                            ->execute([$name, $contact !== '' ? $contact : null, $payableId, $advanceId]);
+                        $newId = (int) $pdo->lastInsertId();
+                        $pdo->commit();
+                        echo json_encode(['ok' => true, 'id' => $newId, 'msg' => 'تمت إضافة المورد، وأُنشئ حسابه المحاسبي (ذمم + دفعة مقدمة) تلقائياً']);
+                    } catch (Throwable $e) {
+                        $pdo->rollBack();
+                        throw $e;
+                    }
                 }
                 exit;
             }
@@ -282,15 +368,21 @@ $workCenters = $pdo->query("
     ORDER BY s.name, wc.name
 ")->fetchAll();
 
-$contractors = $pdo->query("SELECT * FROM {$T_CONTR} ORDER BY name")->fetchAll();
+$contractors = $pdo->query("
+    SELECT c.*, pa.code AS payable_code, pa.name AS payable_name,
+           aa.code AS advance_code, aa.name AS advance_name
+    FROM {$T_CONTR} c
+    LEFT JOIN {$T_ACCOUNT} pa ON pa.id = c.account_id
+    LEFT JOIN {$T_ACCOUNT} aa ON aa.id = c.advance_account_id
+    ORDER BY c.name
+")->fetchAll();
 
-// حسابات دليل الحسابات — اختياري، بمحاولة آمنة (بنية الجدول غير مؤكدة بعد)
-$accounts = [];
-$accountsLoadFailed = false;
+// هل إعدادات حسابات موردي الخدمة مضبوطة؟ (للتنبيه بالواجهة قبل أي محاولة حفظ)
+$serviceVendorSettingsReady = false;
 try {
-    $accounts = $pdo->query("SELECT id, name FROM {$T_ACCOUNT} ORDER BY name")->fetchAll();
-} catch (Throwable $e) {
-    $accountsLoadFailed = true;
+    $cnt = $pdo->query("SELECT COUNT(*) FROM {$T_SETTINGS} WHERE setting_key IN ('service_vendor_payable','service_vendor_advance')")->fetchColumn();
+    $serviceVendorSettingsReady = ((int) $cnt === 2);
+} catch (Throwable $e) { /* يُعامل كغير مضبوط */
 }
 
 $can_stage_create = can('production.stages', 'create');
@@ -422,7 +514,7 @@ $can_contr_edit = can('production.contractors', 'edit');
                 <button type="button" data-tab="work_centers" onclick="showSubTab('work_centers')"><i
                         class="bi bi-diagram-2 me-1"></i>محطات العمل</button>
                 <button type="button" data-tab="contractors" onclick="showSubTab('contractors')"><i
-                        class="bi bi-building me-1"></i>موردي الخدمة</button>
+                        class="bi bi-building me-1"></i>موردي الخدمات</button>
             </div>
 
             <!-- ===================== تبويب: مراحل التصنيع ===================== -->
@@ -563,20 +655,22 @@ $can_contr_edit = can('production.contractors', 'edit');
 
             <!-- ===================== تبويب: المقاولين ===================== -->
             <div class="subtab-pane" id="pane-contractors">
-                <?php if ($accountsLoadFailed): ?>
+                <?php if (!$serviceVendorSettingsReady): ?>
                     <div class="alert alert-warning py-2 px-3" style="font-size:.82rem">
-                        تعذّر تحميل قائمة الحسابات المحاسبية — فيك تضيف مورد خدمة بدون ربط حساب الآن، وتربطه لاحقاً.
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        حسابات موردي الخدمة الأب (ذمم + دفعات مقدمة) لسا ما انضبطت بدليل الحسابات — إضافة مورد جديد رح تفشل
+                        لحد ما تُضبط. راجع مسؤول النظام.
                     </div>
                 <?php endif; ?>
                 <div class="tbl-wrap">
                     <div class="tbl-hdr">
                         <span style="font-size:.88rem;font-weight:700;color:#1e293b">
-                            <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>موردي الخدمة
+                            <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>موردي الخدمات
                         </span>
                         <?php if ($can_contr_create): ?>
                             <button class="btn btn-sm fw-600 ms-auto" onclick="openContractorModal()"
                                 style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
-                                <i class="bi bi-plus-lg me-1"></i>إضافة مورد خدمة
+                                <i class="bi bi-plus-lg me-1"></i>إضافة مقاول
                             </button>
                         <?php endif; ?>
                     </div>
@@ -586,28 +680,24 @@ $can_contr_edit = can('production.contractors', 'edit');
                                 <tr>
                                     <th>الاسم</th>
                                     <th>التواصل</th>
-                                    <th>الحساب المرتبط</th>
+                                    <th>حساب الذمم</th>
+                                    <th>حساب الدفعة المقدمة</th>
                                     <th>الحالة</th>
                                     <th style="text-align:center">إجراءات</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($contractors as $c):
-                                    $active = (int) $c['is_active'] === 1;
-                                    $accName = '—';
-                                    if ($c['account_id']) {
-                                        foreach ($accounts as $a) {
-                                            if ($a['id'] == $c['account_id']) {
-                                                $accName = $a['name'];
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    ?>
+                                    $active = (int) $c['is_active'] === 1; ?>
                                     <tr>
                                         <td class="fw-600"><?= htmlspecialchars($c['name']) ?></td>
                                         <td class="text-muted"><?= htmlspecialchars($c['contact_info'] ?? '—') ?></td>
-                                        <td class="text-muted"><?= htmlspecialchars($accName) ?></td>
+                                        <td class="text-muted" style="font-size:.8rem">
+                                            <?= $c['payable_code'] ? htmlspecialchars($c['payable_code'] . ' — ' . $c['payable_name']) : '—' ?>
+                                        </td>
+                                        <td class="text-muted" style="font-size:.8rem">
+                                            <?= $c['advance_code'] ? htmlspecialchars($c['advance_code'] . ' — ' . $c['advance_name']) : '—' ?>
+                                        </td>
                                         <td><span
                                                 class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشط' : 'معطّل' ?></span>
                                         </td>
@@ -628,7 +718,8 @@ $can_contr_edit = can('production.contractors', 'edit');
                                 <?php endforeach; ?>
                                 <?php if (!$contractors): ?>
                                     <tr>
-                                        <td colspan="5" class="text-center text-muted py-4">ما في مقاولين مسجّلين بعد</td>
+                                        <td colspan="6" class="text-center text-muted py-4">ما في موردي خدمة مسجّلين بعد
+                                        </td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>
@@ -695,7 +786,7 @@ $can_contr_edit = can('production.contractors', 'edit');
                         <label class="form-label small fw-600">النوع *</label>
                         <select id="wc_type" class="form-select" onchange="toggleWcContractorField()">
                             <option value="internal">داخلية</option>
-                            <option value="external">خارجية (مورد خدمة)</option>
+                            <option value="external">خارجية (مقاول)</option>
                         </select>
                     </div>
                     <div class="mb-2" id="wc_contractor_wrap" style="display:none">
@@ -776,12 +867,12 @@ $can_contr_edit = can('production.contractors', 'edit');
         </div>
     </div>
 
-    <!-- مودال مورد خدمة -->
+    <!-- مودال مقاول -->
     <div class="modal fade" id="contractorModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="contractorModalTitle">إضافة مورد خدمة</h5><button type="button"
+                    <h5 class="modal-title" id="contractorModalTitle">إضافة مقاول</h5><button type="button"
                         class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -790,14 +881,11 @@ $can_contr_edit = can('production.contractors', 'edit');
                             id="contractor_name" class="form-control"></div>
                     <div class="mb-2"><label class="form-label small fw-600">معلومات التواصل</label><input type="text"
                             id="contractor_contact" class="form-control"></div>
-                    <div class="mb-2">
-                        <label class="form-label small fw-600">الحساب المحاسبي المرتبط</label>
-                        <select id="contractor_account" class="form-select" <?= $accountsLoadFailed ? 'disabled' : '' ?>>
-                            <option value="">— بدون ربط الآن —</option>
-                            <?php foreach ($accounts as $a): ?>
-                                <option value="<?= (int) $a['id'] ?>"><?= htmlspecialchars($a['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                    <div class="alert alert-light border py-2 px-3 mb-0" id="contractorAccountNotice"
+                        style="font-size:.78rem;color:#64748b">
+                        <i class="bi bi-info-circle me-1"></i>
+                        <span id="contractorAccountNoticeText">سيتم إنشاء حساب الذمم وحساب الدفعة المقدمة بدليل الحسابات
+                            تلقائياً عند الحفظ.</span>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -974,8 +1062,8 @@ $can_contr_edit = can('production.contractors', 'edit');
             document.getElementById('contractor_id').value = '';
             document.getElementById('contractor_name').value = '';
             document.getElementById('contractor_contact').value = '';
-            document.getElementById('contractor_account').value = '';
-            document.getElementById('contractorModalTitle').innerText = 'إضافة مورد خدمة';
+            document.getElementById('contractorModalTitle').innerText = 'إضافة مقاول';
+            document.getElementById('contractorAccountNoticeText').innerText = 'سيتم إنشاء حساب الذمم وحساب الدفعة المقدمة بدليل الحسابات تلقائياً عند الحفظ.';
             if (id) {
                 post('contractor_get', { id }).then(res => {
                     if (!res.ok) { alert(res.msg); return; }
@@ -983,8 +1071,8 @@ $can_contr_edit = can('production.contractors', 'edit');
                     document.getElementById('contractor_id').value = d.id;
                     document.getElementById('contractor_name').value = d.name;
                     document.getElementById('contractor_contact').value = d.contact_info || '';
-                    document.getElementById('contractor_account').value = d.account_id || '';
-                    document.getElementById('contractorModalTitle').innerText = 'تعديل مورد خدمة';
+                    document.getElementById('contractorModalTitle').innerText = 'تعديل مقاول';
+                    document.getElementById('contractorAccountNoticeText').innerText = 'حسابه المحاسبي (ذمم + دفعة مقدمة) موجود مسبقاً — بيتحدّث اسمه تلقائياً لو غيّرت اسم المورد.';
                     contractorModal.show();
                 });
             } else { contractorModal.show(); }
@@ -994,8 +1082,7 @@ $can_contr_edit = can('production.contractors', 'edit');
             if (!name) { alert('اسم مورد الخدمة مطلوب'); return; }
             post('contractor_save', {
                 id: document.getElementById('contractor_id').value,
-                name, contact_info: document.getElementById('contractor_contact').value.trim(),
-                account_id: document.getElementById('contractor_account').value
+                name, contact_info: document.getElementById('contractor_contact').value.trim()
             }).then(res => { if (!res.ok) { alert(res.msg); return; } location.reload(); });
         }
         function contractorToggle(id) {

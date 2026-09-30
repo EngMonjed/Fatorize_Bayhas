@@ -186,19 +186,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     <main class="main-content">
         <div class="content-body">
 
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item"><a class="nav-link fw-600" href="products.php"
-                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a></li>
-                <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=products"
-                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-building me-1"></i>مستودعات المنتجات</a></li>
-                <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
-                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
-                <li class="nav-item"><a class="nav-link fw-600" href="internal_orders.php"
-                        style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-signpost-split me-1"></i>الطلبات الداخلية</a></li>
-                <li class="nav-item"><a class="nav-link fw-600 active" href="#"
-                        style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
-                            class="bi bi-bar-chart-line me-1"></i>التقارير</a></li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <!-- بحث عن منتج -->
             <div class="position-relative mb-4" style="max-width:420px">

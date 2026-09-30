@@ -336,35 +336,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
 
     <main class="main-content">
         <div class="content-body">
-            <!-- تبويبات القسم -->
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="sales_index.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt me-1"></i>فواتير المبيعات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="customers.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-people me-1"></i>إدارة العملاء
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="returns.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المبيعات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="orders.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-file-earmark-text me-1"></i>أوامر البيع / عروض الأسعار
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="reports.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-bar-chart me-1"></i>التقارير
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <!-- منتقي التقرير -->
             <div class="d-flex gap-2 flex-wrap mb-3 no-print" id="repPills">

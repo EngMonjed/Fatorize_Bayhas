@@ -559,34 +559,8 @@ $retStats = [
     <main class="main-content">
         <div class="content-body">
 
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="customers.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-people me-1"></i>العملاء
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="sales_index.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-receipt me-1"></i>الفواتير
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="returns.php"
-                        style="border:none;border-bottom:2px solid #16a34a;color:#16a34a;font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-arrow-return-right me-1"></i>مرتجعات المبيعات
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="orders.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-file-earmark-text me-1"></i>أوامر البيع / عروض الأسعار
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="reports.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-bar-chart me-1"></i>التقارير
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <div class="row g-3 mb-4">
                 <div class="col-6 col-md-3">
@@ -662,9 +636,9 @@ $retStats = [
                             <span style="font-size:.8rem;color:#94a3b8">—</span>
                             <input type="date" name="to" value="<?= htmlspecialchars($dateTo) ?>"
                                 class="form-control form-control-sm" style="width:140px;border-radius:8px">
-                            <button type="submit" class="btn btn-sm btn-success" style="border-radius:8px">
-                                <i class="bi bi-search me-1"></i>بحث
-                            </button>
+                        <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px">
+                            <i class="bi bi-search me-1"></i>بحث
+                        </button>
                             <?php if ($search || $status || $custF || $dateFrom || $dateTo): ?>
                                         <a href="returns.php" class="btn btn-sm btn-light" style="border-radius:8px">
                                             <i class="bi bi-x-lg me-1"></i>مسح
@@ -672,10 +646,30 @@ $retStats = [
                             <?php endif; ?>
                         </form>
                         <button class="btn btn-sm fw-600" onclick="openNewReturn()"
-                            style="border-radius:9px;background:#16a34a;color:#fff;font-size:.82rem">
+                         style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem;text-decoration:none;white-space:nowrap"
+                        target="_blank">
                             <i class="bi bi-plus-lg me-1"></i>مرتجع جديد
                         </button>
                     </div>
+                </div>
+                <div class="d-flex align-items-center gap-2 px-3 pt-2">
+                    <span style="font-size:.72rem;color:#64748b">النقر على رأس العمود:</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeSort" checked
+                            onchange="setHeaderMode('sort')">
+                        <label class="btn btn-outline-success" for="hdrModeSort" style="font-size:.72rem">
+                            <i class="bi bi-sort-down me-1"></i>ترتيب
+                        </label>
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeFilter"
+                            onchange="setHeaderMode('filter')">
+                        <label class="btn btn-outline-success" for="hdrModeFilter" style="font-size:.72rem">
+                            <i class="bi bi-funnel me-1"></i>فلترة
+                        </label>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" style="font-size:.7rem;display:none"
+                        id="btnClearHdrFilters" onclick="clearAllHeaderFilters()">
+                        <i class="bi bi-x-circle me-1"></i>مسح كل الفلاتر
+                    </button>
                 </div>
                 <div class="table-responsive">
                     <table class="mtbl" id="returnsTbl">
@@ -1466,6 +1460,19 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
                 .catch(err => toast(err.message || 'تعذّر الاتصال بخادم الإلغاء', 'danger'));
         }
 
+        // ══════════════════════════════════════════════════════════
+        // ترتيب/فلترة عند النقر على رأس العمود — وضعان قابلان للتبديل
+        // (نفس آلية sales_index.php بالضبط، مبنية هون على innerText
+        // مباشرة بدل data-sort، بلا أي تعديل على قالب PHP للصفوف).
+        // ══════════════════════════════════════════════════════════
+        let _hdrMode = 'sort';
+        const _activeFilters = {}; // { colIndex: Set(قيم مسموحة) }
+
+        function setHeaderMode(mode) {
+            _hdrMode = mode;
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+        }
+
         function makeSortable(table) {
             if (!table) return;
             const headers = table.querySelectorAll('thead th');
@@ -1473,10 +1480,92 @@ ${r.notes ? `<div style="margin-top:12px;padding:8px 12px;background:#fffbeb;bor
                 if (th.hasAttribute('data-no-sort')) return;
                 th.style.cursor = 'pointer';
                 th.style.userSelect = 'none';
-                th.title = 'اضغط للفرز';
-                th.addEventListener('click', () => sortTableByColumn(table, colIndex, th));
+                th.title = 'اضغط للفرز أو الفلترة';
+                th.addEventListener('click', (e) => {
+                    if (_hdrMode === 'sort') sortTableByColumn(table, colIndex, th);
+                    else { e.stopPropagation(); openFilterPopover(table, colIndex, th); }
+                });
             });
         }
+
+        function openFilterPopover(table, colIndex, th) {
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+            const tbody = table.querySelector('tbody');
+            const allRows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.children.length > colIndex);
+            const getVal = row => (row.children[colIndex]?.innerText || '').trim();
+            const values = [...new Set(allRows.map(getVal).filter(v => v !== ''))].sort((a, b) => a.localeCompare(b, 'ar'));
+
+            const selected = _activeFilters[colIndex] || new Set(values);
+            const pop = document.createElement('div');
+            pop.className = 'hdr-filter-pop';
+            pop.style.cssText = 'position:fixed;z-index:2000;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px;max-height:260px;overflow-y:auto;min-width:170px;font-size:.75rem';
+            pop.innerHTML = `
+                <div class="d-flex justify-content-between mb-1">
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${colIndex},true)">تحديد الكل</button>
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${colIndex},false)">إلغاء الكل</button>
+                </div>
+                ${values.map(v => `
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input filter-chk" data-val="${v.replace(/"/g, '&quot;')}"
+                            ${selected.has(v) ? 'checked' : ''}>
+                        <label class="form-check-label" style="cursor:pointer">${v}</label>
+                    </div>`).join('')}
+                <div class="d-flex gap-1 mt-2">
+                    <button class="btn btn-sm btn-success flex-fill" style="font-size:.7rem" onclick="_applyFilter(${colIndex})">تطبيق</button>
+                    <button class="btn btn-sm btn-light" style="font-size:.7rem" onclick="document.querySelectorAll('.hdr-filter-pop').forEach(p=>p.remove())">إغلاق</button>
+                </div>`;
+            pop._values = values;
+            pop._table = table;
+            // ⚠ يُرسم على body مباشرة بـposition:fixed — .table-responsive
+            // عنده overflow بيقص أي عنصر position:absolute جواه.
+            const rect = th.getBoundingClientRect();
+            document.body.appendChild(pop);
+            let left = rect.left;
+            if (left + pop.offsetWidth > window.innerWidth - 10) left = window.innerWidth - pop.offsetWidth - 10;
+            pop.style.top = (rect.bottom + 4) + 'px';
+            pop.style.left = Math.max(10, left) + 'px';
+            pop.addEventListener('click', e => e.stopPropagation());
+        }
+
+        function _toggleAllFilter(colIndex, checked) {
+            document.querySelectorAll('.hdr-filter-pop .filter-chk').forEach(c => c.checked = checked);
+        }
+
+        function _applyFilter(colIndex) {
+            const pop = document.querySelector('.hdr-filter-pop');
+            const checked = new Set(Array.from(pop.querySelectorAll('.filter-chk:checked')).map(c => c.dataset.val));
+            if (checked.size === pop._values.length) delete _activeFilters[colIndex];
+            else _activeFilters[colIndex] = checked;
+            const table = pop._table;
+            pop.remove();
+            _renderFilters(table);
+        }
+
+        function _renderFilters(table) {
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.children.length > 1);
+            const hasFilters = Object.keys(_activeFilters).length > 0;
+            const clearBtn = document.getElementById('btnClearHdrFilters');
+            if (clearBtn) clearBtn.style.display = hasFilters ? '' : 'none';
+            rows.forEach(r => {
+                let visible = true;
+                for (const col in _activeFilters) {
+                    const val = (r.children[col]?.innerText || '').trim();
+                    if (!_activeFilters[col].has(val)) {visible = false; break;}
+                }
+                r.style.display = visible ? '' : 'none';
+            });
+            table.querySelectorAll('thead th').forEach((h, i) => {
+                h.style.background = _activeFilters[i] ? '#fef3c7' : '';
+            });
+        }
+
+        function clearAllHeaderFilters() {
+            Object.keys(_activeFilters).forEach(k => delete _activeFilters[k]);
+            _renderFilters(document.getElementById('returnsTbl'));
+        }
+
+        document.addEventListener('click', () => document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove()));
 
         function sortTableByColumn(table, colIndex, th) {
             const tbody = table.querySelector('tbody');

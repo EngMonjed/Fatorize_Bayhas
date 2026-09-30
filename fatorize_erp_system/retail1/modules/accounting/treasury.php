@@ -58,10 +58,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $accId = (int) ($_POST['account_id'] ?? 0);
             if (!$accId)
                 throw new Exception('حساب غير صالح');
-            $st = $pdo->prepare("SELECT ji.debit, ji.credit, je.entry_number, je.entry_date, je.description
+            $st = $pdo->prepare("SELECT ji.debit, ji.credit, je.entry_number, je.created_at, je.description
                 FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
                 WHERE ji.account_id = ? AND je.status = 'posted'
-                ORDER BY je.entry_date DESC, je.id DESC LIMIT 10");
+                ORDER BY je.created_at DESC, je.id DESC LIMIT 10");
             $st->execute([$accId]);
             echo json_encode(['ok' => true, 'data' => $st->fetchAll()]);
         }
@@ -418,7 +418,8 @@ $stats = [
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-cash-coin text-success"></i></div>
+                        <div class="stat-icon" style="background:#f0fdf4"><i class="bi bi-cash-coin text-success"></i>
+                        </div>
                         <div>
                             <div class="stat-val"><?= $stats['cash_count'] ?></div>
                             <div class="stat-lbl">صناديق نقدية</div>
@@ -436,9 +437,12 @@ $stats = [
                 </div>
                 <div class="col-6 col-md-3">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:#fffbeb"><i class="bi bi-wallet2 text-warning"></i></div>
+                        <div class="stat-icon" style="background:#fffbeb"><i class="bi bi-wallet2 text-warning"></i>
+                        </div>
                         <div>
-                            <div class="stat-val n"><?= htmlspecialchars($baseSym) ?> <?= number_format($stats['total_base'], 2) ?></div>
+                            <div class="stat-val n"><?= htmlspecialchars($baseSym) ?>
+                                <?= number_format($stats['total_base'], 2) ?>
+                            </div>
                             <div class="stat-lbl">إجمالي السيولة (بعملة الفرع)</div>
                         </div>
                     </div>
@@ -461,7 +465,7 @@ $stats = [
                     <div class="col-12">
                         <div class="text-center text-muted py-4" style="font-size:.85rem">
                             <i class="bi bi-inbox d-block mb-2" style="font-size:1.5rem;opacity:.3"></i>
-                            ماكو حسابات صناديق/بنوك مضبوطة بعد — اضبطها من
+                            مافي حسابات صناديق/بنوك مضبوطة بعد — اضبطها من
                             <a href="account_settings.php">إعدادات الربط المحاسبي</a>
                             (مفاتيح "صندوق ..." و"بنك ..." تحت مجموعة "الصناديق والبنوك")
                         </div>
@@ -490,17 +494,20 @@ $stats = [
                                             </div>
                                         </div>
                                     </div>
-                                    <span class="badge" style="font-size:.65rem;background:<?= $color ?>1a;color:<?= $color ?>">
+                                    <span class="badge"
+                                        style="font-size:.65rem;background:<?= $color ?>1a;color:<?= $color ?>">
                                         <?= htmlspecialchars($acc['cur_code'] ?? '') ?>
                                     </span>
                                 </div>
-
                                 <div class="cash-bal-section">
-                                    <div class="cash-bal n" style="color:<?= ($acc['balance'] ?? 0) >= 0 ? '#16a34a' : '#dc2626' ?>">
-                                        <?= htmlspecialchars($acc['cur_sym'] ?? '') ?> <?= number_format($acc['balance'] ?? 0, 2) ?>
+                                    <div class="cash-bal n"
+                                        style="color:<?= ($acc['balance'] ?? 0) >= 0 ? '#16a34a' : '#dc2626' ?>">
+                                        <?= htmlspecialchars($acc['cur_sym'] ?? '') ?>
+                                        <?= number_format($acc['balance'] ?? 0, 2) ?>
                                     </div>
                                     <div class="n" style="font-size:.72rem;color:#64748b;margin-top:2px">
-                                        = <?= htmlspecialchars($baseSym) ?> <?= number_format($acc['base_balance'] ?? 0, 2) ?> بعملة الفرع
+                                        = <?= htmlspecialchars($baseSym) ?>
+                                        <?= number_format($acc['base_balance'] ?? 0, 2) ?> بعملة الفرع
                                     </div>
                                 </div>
 
@@ -532,12 +539,14 @@ $stats = [
             <div class="modal-content" style="border-radius:16px;border:none">
                 <div class="modal-header py-3 px-4 border-0"
                     style="background:linear-gradient(135deg,#1e3a8a,#2563eb);border-radius:16px 16px 0 0">
-                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-arrow-left-right me-2"></i>تحويل بين الصناديق</h6>
+                    <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-arrow-left-right me-2"></i>تحويل بين
+                        الصناديق</h6>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body px-4 py-4">
                     <!-- قسم الحسابين -->
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+                    <div
+                        style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
                         <div style="font-size:.78rem;font-weight:700;color:#1e3a8a;margin-bottom:10px">
                             <i class="bi bi-arrow-left-right me-1"></i>الحسابان
                         </div>
@@ -559,7 +568,8 @@ $stats = [
                             </div>
                             <div class="col-md-6">
                                 <label class="field-lbl">إلى حساب (الوجهة) <span class="req">*</span></label>
-                                <select id="trTo" class="form-select form-select-sm" onchange="onAccountSelectionChange()">
+                                <select id="trTo" class="form-select form-select-sm"
+                                    onchange="onAccountSelectionChange()">
                                     <option value="">— اختر —</option>
                                     <?php foreach ($cashAccounts as $acc): ?>
                                         <option value="<?= $acc['id'] ?>" data-cur="<?= $acc['currency_id'] ?>">
@@ -591,32 +601,40 @@ $stats = [
                                     value="<?= date('Y-m-d') ?>">
                             </div>
                             <div class="col-md-4">
-                                <label class="field-lbl" id="trOutLbl">المبلغ الخارج من المصدر <span class="req">*</span></label>
-                                <input type="number" id="trAmountOut" class="form-control form-control-sm fw-600" min="0"
-                                    step="0.01" dir="ltr" placeholder="0.00" oninput="onAmountOutInput()">
+                                <label class="field-lbl" id="trOutLbl">المبلغ الخارج من المصدر <span
+                                        class="req">*</span></label>
+                                <input type="number" id="trAmountOut" class="form-control form-control-sm fw-600"
+                                    min="0" step="0.01" dir="ltr" placeholder="0.00" oninput="onAmountOutInput()">
                             </div>
                             <div class="col-md-4">
-                                <label class="field-lbl" id="trInLbl">المبلغ الداخل للوجهة <span class="req">*</span></label>
+                                <label class="field-lbl" id="trInLbl">المبلغ الداخل للوجهة <span
+                                        class="req">*</span></label>
                                 <input type="number" id="trAmountIn" class="form-control form-control-sm fw-600" min="0"
                                     step="0.01" dir="ltr" placeholder="0.00" oninput="updateDiffHint()">
                             </div>
                             <div class="col-12">
                                 <label class="field-lbl">ملاحظات</label>
-                                <input type="text" id="trNotes" class="form-control form-control-sm" placeholder="اختياري">
+                                <input type="text" id="trNotes" class="form-control form-control-sm"
+                                    placeholder="اختياري">
                             </div>
                         </div>
                     </div>
 
-                    <div id="trDiffHint" class="alert py-2 mb-2" style="font-size:.78rem;border-radius:10px;display:none"></div>
+                    <div id="trDiffHint" class="alert py-2 mb-2"
+                        style="font-size:.78rem;border-radius:10px;display:none"></div>
                     <div class="alert alert-warning py-2 mb-0" style="font-size:.72rem;border-radius:10px">
                         <i class="bi bi-info-circle me-1"></i>
-                        لو الحسابين بعملتين مختلفتين، أدخل المبلغ الفعلي يلي خرج من المصدر والمبلغ الفعلي يلي دخل للوجهة (نظام بيقترح المبلغ الداخل تلقائياً حسب سعر الصرف المسجَّل، وتقدر تعدّله لو سعر التفاوض الفعلي مختلف). أي فرق بينهم بينسجّل تلقائياً كربح أو خسارة صرف بقيود منفصلة.
+                        لو الحسابين بعملتين مختلفتين، أدخل المبلغ الفعلي يلي خرج من المصدر والمبلغ الفعلي يلي دخل للوجهة
+                        (نظام بيقترح المبلغ الداخل تلقائياً حسب سعر الصرف المسجَّل، وتقدر تعدّله لو سعر التفاوض الفعلي
+                        مختلف). أي فرق بينهم بينسجّل تلقائياً كربح أو خسارة صرف بقيود منفصلة.
                     </div>
                 </div>
                 <div class="modal-footer border-0 px-4 pb-4">
-                    <button class="btn btn-sm btn-light" style="border-radius:8px" data-bs-dismiss="modal">إلغاء</button>
-                    <button class="btn btn-sm fw-600" style="border-radius:8px;background:#1e3a8a;color:#fff;min-width:110px"
-                        onclick="saveTransfer()" id="btnSaveTr">
+                    <button class="btn btn-sm btn-light" style="border-radius:8px"
+                        data-bs-dismiss="modal">إلغاء</button>
+                    <button class="btn btn-sm fw-600"
+                        style="border-radius:8px;background:#1e3a8a;color:#fff;min-width:110px" onclick="saveTransfer()"
+                        id="btnSaveTr">
                         <span id="saveTrTxt"><i class="bi bi-check-circle me-1"></i>تحويل وترحيل</span>
                         <span id="saveTrSpin" class="spinner-border spinner-border-sm" style="display:none"></span>
                     </button>
@@ -649,7 +667,10 @@ $stats = [
         // خريطة العملات: id → {code, symbol, rate} — rate هون بنفس اتفاقية
         // كل الصفحات التانية (1 عملة أساسية = rate عملة معيّنة)
         const CURR_MAP = <?= json_encode(array_column(array_map(fn($c) => [
-            'id' => $c['id'], 'code' => $c['code'], 'symbol' => $c['symbol'], 'rate' => (float) $c['exchange_rate'],
+            'id' => $c['id'],
+            'code' => $c['code'],
+            'symbol' => $c['symbol'],
+            'rate' => (float) $c['exchange_rate'],
         ], $currenciesList), null, 'id')) ?>;
 
         function post(data) {
@@ -797,12 +818,21 @@ $stats = [
                     const amt = parseFloat(last.debit) > 0 ? parseFloat(last.debit) : parseFloat(last.credit);
                     const dir = parseFloat(last.debit) > 0 ? 'وارد' : 'صادر';
                     const color = parseFloat(last.debit) > 0 ? '#16a34a' : '#dc2626';
-                    el.innerHTML = `آخر حركة: ${last.entry_date} — <span style="color:${color};font-weight:600">${dir} ${amt.toFixed(2)}</span>`;
+
+                    // created_at من قاعدة البيانات بصيغة "YYYY-MM-DD HH:MM:SS" —
+                    // نقسمها يدوياً (بدون new Date()) لتفادي مشاكل تفسير التوقيت/المنطقة
+                    // الزمنية بالمتصفح (نفس المشكلة يلي واجهناها سابقاً مع toISOString())،
+                    // ونعرض التاريخ والوقت بشكل واضح ومفصول، بدقة الدقائق (بدون ثواني).
+                    const [dPart, tPart] = String(last.created_at || '').split(' ');
+                    const timeShort = tPart ? tPart.substring(0, 5) : '';
+                    const whenStr = timeShort ? `${dPart} — ${timeShort}` : dPart;
+
+                    el.innerHTML = `آخر حركة: <span class="n" dir="ltr">${whenStr}</span> — <span style="color:${color};font-weight:600">${dir} ${amt.toFixed(2)}</span>`;
                 });
             });
         }
         loadMiniMovements();
-    
+
     </script>
 
 </body>

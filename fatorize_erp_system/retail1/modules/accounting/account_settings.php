@@ -78,6 +78,12 @@ $SETTINGS_MAP['partner_drawings_parent'] = ['label' => 'مسحوبات الشر�
 $SETTINGS_MAP['partner_loan_payable_parent'] = ['label' => 'قروض من الشركاء للشركة (حساب أب — التزام)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-arrow-down-circle', 'color' => '#d97706', 'type' => 'liability'];
 $SETTINGS_MAP['partner_loan_receivable_parent'] = ['label' => 'قروض من الشركة للشركاء (حساب أب — أصل)', 'group' => 'الشركاء والمالك', 'icon' => 'bi-arrow-up-circle', 'color' => '#2563eb', 'type' => 'asset'];
 
+// موردي الخدمة (مقاولين خارجيين بقسم الإنتاج) — حساب أب "ذمم" وحساب أب
+// "دفعة مقدمة"، وكل مورد جديد بياخد حسابات فرعية مخصصة تلقائياً تحتهم
+// (نفس نمط العملاء/الموردين وشركات الشحن أعلاه). صفحة production/stages.php.
+$SETTINGS_MAP['service_vendor_payable'] = ['label' => 'ذمم موردي الخدمة (حساب أب)', 'group' => 'الإنتاج والتصنيع', 'icon' => 'bi-gear-wide-connected', 'color' => '#0d9488', 'type' => 'liability'];
+$SETTINGS_MAP['service_vendor_advance'] = ['label' => 'دفعات مقدمة لموردي الخدمة (حساب أب)', 'group' => 'الإنتاج والتصنيع', 'icon' => 'bi-cash-coin', 'color' => '#0d9488', 'type' => 'asset'];
+
 // إضافة الصناديق والبنوك ديناميكياً من جدول العملات
 $currencies_list = $pdo->query("SELECT * FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
 foreach ($currencies_list as $cur) {
@@ -154,6 +160,8 @@ $criticalKeys = [
     'employee_advance' => 'إنشاء حساب سلف فرعي عند إضافة موظف (hr/employees.php)',
     'transport_payable' => 'قيد النقلية عند تحديث حالة التسليم (sales/sales_index.php)',
     'transport_expense' => 'قيد النقلية عند تحديث حالة التسليم (sales/sales_index.php)',
+    'service_vendor_payable' => 'إنشاء حساب ذمم فرعي عند إضافة مورد خدمة (production/stages.php)',
+    'service_vendor_advance' => 'إنشاء حساب دفعة مقدمة فرعي عند إضافة مورد خدمة (production/stages.php)',
 ];
 
 // ── جلب الإعدادات الحالية ──
@@ -376,6 +384,7 @@ foreach ($SETTINGS_MAP as $key => $cfg) {
                             'المستهلكات' => ['bi-box-seam', '#0891b2', '#f0f9ff'],
                             'الموارد البشرية' => ['bi-people', '#7c3aed', '#f5f3ff'],
                             'الصناديق والبنوك' => ['bi-safe', '#16a34a', '#f0fdf4'],
+                            'الإنتاج والتصنيع' => ['bi-gear-wide-connected', '#0d9488', '#f0fdfa'],
                         ];
                         [$gIc, $gClr, $gBg] = $groupIcons[$groupName] ?? ['bi-gear', '#64748b', '#f8fafc'];
                         ?>

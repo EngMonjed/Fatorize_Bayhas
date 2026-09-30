@@ -61,25 +61,8 @@ if (true) {
         <main class="main-content">
             <div class="content-body">
 
-                <!-- الشريط الموحّد لقسم المنتجات/المخزون — نفس الأربع صفحات
-                     الأخرى بالضبط، مع "الطلبات الداخلية" كتبويب نشط هون -->
-                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                    <li class="nav-item"><a class="nav-link fw-600" href="products.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-boxes me-1"></i>المنتجات</a>
-                    </li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="warehouse.php?type=products"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-building me-1"></i>مستودعات المنتجات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=products"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-arrow-left-right me-1"></i>حركة المخزون</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
-                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
-                                class="bi bi-signpost-split me-1"></i>الطلبات الداخلية</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="reports.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-bar-chart-line me-1"></i>التقارير</a></li>
-                </ul>
+                <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+                <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
                 <div class="text-center py-5">
                     <i class="bi bi-cone-striped" style="font-size:3rem;color:#f59e0b"></i>

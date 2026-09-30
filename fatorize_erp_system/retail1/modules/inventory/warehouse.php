@@ -33,11 +33,6 @@ $TW  = "warehouses_{$TS}";
 $TWI = "warehouse_items_{$TS}";
 $THR = "hr_employees_{$TS}";
 
-// ⚠ رمز عملة الفرع الفعلي — لعرض قيمة المستودع بدقة، مش "$" ثابتة
-$baseCurSt = $pdo->prepare("SELECT c.symbol FROM branches b LEFT JOIN currencies c ON c.id = b.base_currency_id WHERE b.id = ?");
-$baseCurSt->execute([$_SESSION['branch_id'] ?? 0]);
-$baseCurSymbol = $baseCurSt->fetchColumn() ?: '$';
-
 // ── AJAX ─────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -138,24 +133,41 @@ try {
     $managers = []; // جدول الموظفين قد لا يكون مُهيّأ بعد بهذا الفرع
 }
 
+// عملة الفرع الأساسية — لعرض قيمة كل مستودع بعملة صحيحة، مو رمز ثابت
+$branchCurRow = $pdo->prepare("SELECT c.symbol FROM branches b
+    JOIN currencies c ON c.id = b.base_currency_id
+    WHERE b.table_suffix = ? LIMIT 1");
+$branchCurRow->execute([$TS]);
+$baseCurSymbol = $branchCurRow->fetchColumn() ?: '$';
+
 // مصدر الرصيد يختلف حسب النوع — منتجات من warehouse_items، مستهلكات من
 // consumable_stock. لا يوجد بعد جدول رصيد لمواد أولية (raw_material_stock
 // موجود لكن بلا بيانات فعلية حتى الآن)، فبيرجع صفر مؤقتاً لهالنوع.
 if ($type === 'consumables') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(cs.quantity),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT cs.item_id) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id AND cs.quantity > 0)";
-    // ⚠ قيمة المستودع = مجموع (الكمية × متوسط تكلفة الشراء المرجّح) لكل
-    // مادة فيه — avg_cost_base نفسه أصلاً محسوب من أسعار الشراء الفعلية
-    // (متوسط مرجّح يتحدّث بكل عملية شراء/مناقلة)، مش سعر بيع أو تقديري
-    $statsSubqueryValue  = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_base),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
+    // ✅ إصلاح: العمود الفعلي (تأكّدنا عبر DESCRIBE حقيقي) اسمه
+    // avg_cost_base، مو avg_cost_usd كما افتُرض سابقاً بدون تحقّق —
+    // متوسط التكلفة المرجّح، مخزّن بعملة الفرع الأساسية
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(cs.quantity * cs.avg_cost_base),0) FROM `consumable_stock_{$TS}` cs WHERE cs.warehouse_id = w.id)";
 } elseif ($type === 'raw_materials') {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(rms.quantity),0) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT rms.material_id) FROM `raw_material_stock_{$TS}` rms WHERE rms.warehouse_id = w.id AND rms.quantity > 0)";
-    $statsSubqueryValue  = "0";
+    $statsSubqueryValue   = "0";
 } else {
     $statsSubqueryQty     = "(SELECT COALESCE(SUM(wi.quantity),0) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id)";
     $statsSubqueryCount   = "(SELECT COUNT(DISTINCT wi.variant_id) FROM `{$TWI}` wi WHERE wi.warehouse_id = w.id AND wi.quantity > 0)";
-    $statsSubqueryValue  = "0";
+    // ✅ إصلاح: قيمة المستودع كانت تُحسب من product_sizes.cost_price
+    // (رقم ثابت من وقت تسجيل المنتج أول مرة)، بينما التكلفة الحقيقية
+    // الحالية مخزَّنة بـwarehouse_items.current_cost — تتحدّث تلقائياً
+    // مع كل عملية شراء حسب costing_method تبع الفرع (آخر سعر/متوسط
+    // مرجّح). fallback لـcost_price الثابت بس للمتغيرات يلي لسا ما
+    // انشرت عبر النظام الجديد (current_cost لسا صفر عندها).
+    $statsSubqueryValue   = "(SELECT COALESCE(SUM(wi.quantity * COALESCE(NULLIF(wi.current_cost,0), psz.cost_price)),0)
+        FROM `{$TWI}` wi
+        JOIN product_variants_{$TS} pv ON pv.id = wi.variant_id
+        JOIN product_sizes_{$TS} psz ON psz.id = pv.size_id
+        WHERE wi.warehouse_id = w.id)";
 }
 
 $stmt = $pdo->prepare("
@@ -174,6 +186,7 @@ $warehouses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $totalWh    = count($warehouses);
 $activeWh   = count(array_filter($warehouses, fn($w) => (int)$w['is_active'] === 1));
 $totalStock = array_sum(array_column($warehouses, 'total_qty'));
+$totalValue = array_sum(array_column($warehouses, 'total_value'));
 
 $TYPE_LABELS = [
     'products'      => ['label' => 'مستودعات المنتجات',       'icon' => 'bi-boxes',    'unit_label' => 'قطعة'],
@@ -234,38 +247,11 @@ $curTypeInfo = $TYPE_LABELS[$type];
     <main class="main-content">
         <div class="content-body">
 
-            <?php if ($type === 'consumables'): ?>
-                <!-- الشريط الموحّد لقسم المستهلكات والمصاريف — يظهر بس بسياق المستهلكات -->
-                <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumables.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-box-seam me-1"></i>المواد
-                            الاستهلاكية</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_purchases.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-cart-plus me-1"></i>فواتير
-                            الشراء</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_issues.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-arrow-bar-up me-1"></i>صرف المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600 active" href="#"
-                            style="border:none;border-bottom:2px solid #1e3a8a;color:#1e3a8a;font-size:.83rem;margin-bottom:-2px"><i
-                                class="bi bi-building me-1"></i>مستودعات المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="movements.php?tab=consumables"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-arrow-left-right me-1"></i>حركة المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_transfers.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-signpost-split me-1"></i>مناقلة بين المستودعات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/expenses.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i class="bi bi-wallet2 me-1"></i>إدارة
-                            المصاريف</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../purchases/suppliers.php?tab=consumables"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-people me-1"></i>موردو المستهلكات</a></li>
-                    <li class="nav-item"><a class="nav-link fw-600" href="../expenses_and_consumables/consumable_reports.php"
-                            style="border:none;color:#64748b;font-size:.83rem"><i
-                                class="bi bi-bar-chart me-1"></i>التقارير</a></li>
-                </ul>
-            <?php endif; ?>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي).
+                 $currentModule محسوبة ديناميكياً حسب $type أعلاه (قبل
+                 sidebar.php)، فالمكوّن بيرسم تلقائياً تبويبات القسم
+                 الصحيح (مخزون أو مستهلكات) بدون أي شرط يدوي هون. -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <!-- تبويبات النوع — بنفس نمط movements.php؟tab= -->
             <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
@@ -288,8 +274,9 @@ $curTypeInfo = $TYPE_LABELS[$type];
                     [$totalWh, 'إجمالي المستودعات', 'bi-building', '#2563eb', '#eff6ff'],
                     [$activeWh, 'مستودعات نشطة', 'bi-check-circle-fill', '#16a34a', '#f0fdf4'],
                     [number_format($totalStock, 0), 'إجمالي القطع بكل المستودعات', 'bi-boxes', '#7c3aed', '#f5f3ff'],
+                    [number_format($totalValue, 2) . ' ' . $baseCurSymbol, 'القيمة الإجمالية (سعر الشراء)', 'bi-cash-stack', '#d97706', '#fffbeb'],
                 ] as [$val, $lbl, $icon, $color, $bg]): ?>
-                    <div class="col-6 col-md-4">
+                    <div class="col-6 col-md-3">
                         <div class="stat-card">
                             <div class="stat-icon" style="background:<?= $bg ?>;color:<?= $color ?>"><i class="bi <?= $icon ?>"></i></div>
                             <div>
@@ -332,13 +319,7 @@ $curTypeInfo = $TYPE_LABELS[$type];
                                 <?php endif; ?>
                                 <div class="wh-meta"><i class="bi bi-person-badge"></i><?= htmlspecialchars($w['manager_name'] ?? 'بدون مدير محدد') ?></div>
                                 <div class="wh-meta"><i class="bi bi-boxes"></i><?= number_format((float)$w['total_qty'], 0) ?> <?= htmlspecialchars($curTypeInfo['unit_label']) ?> — <?= (int)$w['variant_count'] ?> صنف</div>
-                                <?php if ($type === 'consumables'): ?>
-                                    <div class="wh-meta" style="color:#16a34a;font-weight:700">
-                                        <i class="bi bi-cash-stack"></i>
-                                        <?= htmlspecialchars($baseCurSymbol) ?> <?= number_format((float)$w['total_value'], 2) ?>
-                                        <small style="color:#94a3b8;font-weight:400">(بسعر الشراء)</small>
-                                    </div>
-                                <?php endif; ?>
+                                <div class="wh-meta"><i class="bi bi-cash-stack"></i><?= number_format((float)$w['total_value'], 2) ?> <?= htmlspecialchars($baseCurSymbol) ?></div>
                                 <div class="d-flex gap-1 mt-2">
                                     <?php if (can($warehousePermKey, 'edit')): ?>
                                         <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="openWhModal(<?= (int)$w['id'] ?>)">
