@@ -325,6 +325,9 @@ function moduleUrl(string $key): string
     'admin.opening_balances' => 'admin/opening_balances.php', // ✅ كانت مفقودة
     // admin.settings أُزيل — لا صفحة settings/index.php فعلية بعد
     // الإنتاج
+    'production.stages' => 'production/stages.php',
+    'production.work_centers' => 'production/stages.php?tab=work_centers',
+    'production.contractors' => 'production/stages.php?tab=contractors',
     'production.raw_materials' => 'production/raw_materials.php',
     'production.operations' => 'production/operations.php',
     'production.entries' => 'production/production_entries.php',

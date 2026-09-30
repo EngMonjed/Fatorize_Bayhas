@@ -231,7 +231,7 @@ $entries = $pdo->prepare("SELECT je.*, cur.code AS currency_code,
     LEFT JOIN currencies cur ON cur.id = je.currency_id
     LEFT JOIN `{$TJI}` ji ON ji.journal_entry_id=je.id
     {$where}
-    GROUP BY je.id ORDER BY je.entry_date DESC, je.id DESC LIMIT 200");
+    GROUP BY je.id ORDER BY je.entry_date DESC, je.id DESC LIMIT 1500");
 $entries->execute($params);
 $entries = $entries->fetchAll();
 
@@ -242,9 +242,13 @@ $accounts = $pdo->query("SELECT id,code,name,account_type,is_active
 $currenciesList = $pdo->query("SELECT id,code,name,symbol,is_base FROM currencies WHERE status='active' ORDER BY is_base DESC,id")->fetchAll();
 $baseCur = null;
 foreach ($currenciesList as $c) {
-    if ($c['is_base']) { $baseCur = $c; break; }
+    if ($c['is_base']) {
+        $baseCur = $c;
+        break;
+    }
 }
-if (!$baseCur) $baseCur = $currenciesList[0] ?? ['code' => 'USD', 'name' => 'دولار', 'symbol' => '$'];
+if (!$baseCur)
+    $baseCur = $currenciesList[0] ?? ['code' => 'USD', 'name' => 'دولار', 'symbol' => '$'];
 $baseSym = htmlspecialchars($baseCur['symbol'] ?? '$');
 
 try {
@@ -549,7 +553,8 @@ $entryNo = genEntryNo($pdo, $TJE);
                         <div class="stat-icon" style="background:#eff6ff"><i
                                 class="bi bi-currency-dollar text-primary"></i></div>
                         <div>
-                            <div class="stat-val n"><?= $baseSym ?> <?= number_format($stats['total_posted'], 2) ?></div>
+                            <div class="stat-val n"><?= $baseSym ?> <?= number_format($stats['total_posted'], 2) ?>
+                            </div>
                             <div class="stat-lbl">إجمالي المرحّل</div>
                         </div>
                     </div>
@@ -567,7 +572,7 @@ $entryNo = genEntryNo($pdo, $TJE);
                             onchange="this.form.submit()">
                             <option value="">كل الحالات</option>
                             <?php foreach ($STATUS_MAP as $k => $v): ?>
-                                        <option value="<?= $k ?>" <?= $statusF === $k ? 'selected' : '' ?>><?= $v['label'] ?></option>
+                                <option value="<?= $k ?>" <?= $statusF === $k ? 'selected' : '' ?>><?= $v['label'] ?></option>
                             <?php endforeach; ?>
                         </select>
                         <input type="date" name="from" value="<?= htmlspecialchars($dateFrom) ?>"
@@ -578,8 +583,8 @@ $entryNo = genEntryNo($pdo, $TJE);
                         <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px"><i
                                 class="bi bi-search me-1"></i>بحث</button>
                         <?php if ($search || $statusF): ?>
-                                    <a href="?from=<?= $dateFrom ?>&to=<?= $dateTo ?>" class="btn btn-sm btn-light"
-                                        style="border-radius:8px"><i class="bi bi-x-lg"></i></a>
+                            <a href="?from=<?= $dateFrom ?>&to=<?= $dateTo ?>" class="btn btn-sm btn-light"
+                                style="border-radius:8px"><i class="bi bi-x-lg"></i></a>
                         <?php endif; ?>
                     </form>
                     <button class="btn btn-sm fw-600 ms-auto"
@@ -610,60 +615,63 @@ $entryNo = genEntryNo($pdo, $TJE);
                         </thead>
                         <tbody>
                             <?php if (empty($entries)): ?>
-                                        <tr>
-                                            <td colspan="10" class="text-center text-muted py-5">
-                                                <i class="bi bi-journal-bookmark d-block mb-2"
-                                                    style="font-size:2rem;opacity:.2"></i>
-                                                لا توجد قيود في هذه الفترة
-                                            </td>
-                                        </tr>
+                                <tr>
+                                    <td colspan="10" class="text-center text-muted py-5">
+                                        <i class="bi bi-journal-bookmark d-block mb-2"
+                                            style="font-size:2rem;opacity:.2"></i>
+                                        لا توجد قيود في هذه الفترة
+                                    </td>
+                                </tr>
                             <?php endif; ?>
                             <?php foreach ($entries as $je):
                                 $st = $STATUS_MAP[$je['status']] ?? $STATUS_MAP['draft'];
                                 ?>
-                                        <tr>
-                                            <td class="n fw-600" style="direction:ltr;color:#1e3a8a">
-                                                <?= htmlspecialchars($je['entry_number']) ?></td>
-                                            <td class="text-muted"><?= $je['entry_date'] ?></td>
-                                            <td
-                                                style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                                                <?= htmlspecialchars($je['description'] ?? '—') ?>
-                                            </td>
-                                            <td style="font-size:.75rem"><?= htmlspecialchars($je['currency_code'] ?? '') ?></td>
-                                            <td class="text-center"><span
-                                                    class="badge bg-secondary-subtle text-secondary"><?= $je['lines_count'] ?></span>
-                                            </td>
-                                            <td class="n text-end fw-600 text-primary"><?= $baseSym ?> <?= number_format($je['total_debit'], 2) ?>
-                                            </td>
-                                            <td class="n text-end fw-600 text-success"><?= $baseSym ?> <?= number_format($je['total_credit'], 2) ?>
-                                            </td>
-                                            <td style="font-size:.72rem;color:#94a3b8"><?= $je['reference_type'] ?? '—' ?></td>
-                                            <td><span class="badge <?= $st['cls'] ?>"
-                                                    style="font-size:.68rem"><?= $st['label'] ?></span></td>
-                                            <td>
-                                                <div class="d-flex gap-1 justify-content-center">
-                                                    <button class="act-btn info-h" onclick="viewEntry(<?= $je['id'] ?>)" title="عرض"
-                                                        style="color:#0891b2" onmouseover="this.style.background='#e0f2fe'"
-                                                        onmouseout="this.style.background='#fff'">
-                                                        <i class="bi bi-eye"></i>
-                                                    </button>
-                                                    <?php if ($je['status'] === 'draft'): ?>
-                                                                <button class="act-btn success-h"
-                                                                    onclick="postEntry(<?= $je['id'] ?>,'<?= htmlspecialchars($je['entry_number'], ENT_QUOTES) ?>')"
-                                                                    title="ترحيل">
-                                                                    <i class="bi bi-check-circle"></i>
-                                                                </button>
-                                                    <?php endif; ?>
-                                                    <?php if ($je['status'] !== 'cancelled'): ?>
-                                                                <button class="act-btn danger"
-                                                                    onclick="cancelEntry(<?= $je['id'] ?>,'<?= htmlspecialchars($je['entry_number'], ENT_QUOTES) ?>')"
-                                                                    title="إلغاء">
-                                                                    <i class="bi bi-x-circle"></i>
-                                                                </button>
-                                                    <?php endif; ?>
-                                                </div>
-                                            </td>
-                                        </tr>
+                                <tr>
+                                    <td class="n fw-600" style="direction:ltr;color:#1e3a8a">
+                                        <?= htmlspecialchars($je['entry_number']) ?>
+                                    </td>
+                                    <td class="text-muted"><?= $je['entry_date'] ?></td>
+                                    <td
+                                        style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                                        <?= htmlspecialchars($je['description'] ?? '—') ?>
+                                    </td>
+                                    <td style="font-size:.75rem"><?= htmlspecialchars($je['currency_code'] ?? '') ?></td>
+                                    <td class="text-center"><span
+                                            class="badge bg-secondary-subtle text-secondary"><?= $je['lines_count'] ?></span>
+                                    </td>
+                                    <td class="n text-end fw-600 text-primary"><?= $baseSym ?>
+                                        <?= number_format($je['total_debit'], 2) ?>
+                                    </td>
+                                    <td class="n text-end fw-600 text-success"><?= $baseSym ?>
+                                        <?= number_format($je['total_credit'], 2) ?>
+                                    </td>
+                                    <td style="font-size:.72rem;color:#94a3b8"><?= $je['reference_type'] ?? '—' ?></td>
+                                    <td><span class="badge <?= $st['cls'] ?>"
+                                            style="font-size:.68rem"><?= $st['label'] ?></span></td>
+                                    <td>
+                                        <div class="d-flex gap-1 justify-content-center">
+                                            <button class="act-btn info-h" onclick="viewEntry(<?= $je['id'] ?>)" title="عرض"
+                                                style="color:#0891b2" onmouseover="this.style.background='#e0f2fe'"
+                                                onmouseout="this.style.background='#fff'">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
+                                            <?php if ($je['status'] === 'draft'): ?>
+                                                <button class="act-btn success-h"
+                                                    onclick="postEntry(<?= $je['id'] ?>,'<?= htmlspecialchars($je['entry_number'], ENT_QUOTES) ?>')"
+                                                    title="ترحيل">
+                                                    <i class="bi bi-check-circle"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                            <?php if ($je['status'] !== 'cancelled'): ?>
+                                                <button class="act-btn danger"
+                                                    onclick="cancelEntry(<?= $je['id'] ?>,'<?= htmlspecialchars($je['entry_number'], ENT_QUOTES) ?>')"
+                                                    title="إلغاء">
+                                                    <i class="bi bi-x-circle"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
@@ -682,7 +690,8 @@ $entryNo = genEntryNo($pdo, $TJE);
                         <h6 class="modal-title text-white fw-700 mb-0"><i class="bi bi-journal-plus me-2"></i>إضافة قيد
                             محاسبي</h6>
                         <div style="font-size:.72rem;color:rgba(255,255,255,.7);margin-top:2px" dir="ltr">
-                            <?= htmlspecialchars($entryNo) ?></div>
+                            <?= htmlspecialchars($entryNo) ?>
+                        </div>
                     </div>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
@@ -1068,7 +1077,7 @@ $entryNo = genEntryNo($pdo, $TJE);
                 else toast(d.msg, 'danger');
             });
         }
-    
+
     </script>
 
 </body>

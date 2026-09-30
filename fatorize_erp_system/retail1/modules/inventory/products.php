@@ -948,20 +948,32 @@ $catColors = [
                         </a>
                     <?php endif; ?>
                 </div>
+                <div class="d-flex align-items-center gap-2 px-3 pt-2">
+                    <span style="font-size:.72rem;color:#64748b">النقر على رأس العمود:</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeSort" checked onchange="setHeaderMode('sort')">
+                        <label class="btn btn-outline-primary" for="hdrModeSort" style="font-size:.72rem"><i class="bi bi-sort-down me-1"></i>ترتيب</label>
+                        <input type="radio" class="btn-check" name="hdrMode" id="hdrModeFilter" onchange="setHeaderMode('filter')">
+                        <label class="btn btn-outline-primary" for="hdrModeFilter" style="font-size:.72rem"><i class="bi bi-funnel me-1"></i>فلترة</label>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" style="font-size:.7rem;display:none" id="btnClearHdrFilters" onclick="clearAllHeaderFilters()">
+                        <i class="bi bi-x-circle me-1"></i>مسح كل الفلاتر
+                    </button>
+                </div>
                 <div class="table-responsive">
                     <table class="mtbl" id="productsTable">
                         <thead>
                             <tr>
                                 <th data-no-sort>#</th>
-                                <th onclick="sortTableByColumn(this)">اسم المنتج</th>
-                                <th onclick="sortTableByColumn(this)">الموديل</th>
-                                <th onclick="sortTableByColumn(this)">الفئة</th>
+                                <th class="sortable-th" data-col="1" data-type="text">اسم المنتج</th>
+                                <th class="sortable-th" data-col="2" data-type="text">الموديل</th>
+                                <th class="sortable-th" data-col="3" data-type="text">الفئة</th>
                                 <th data-no-sort>القياسات</th>
                                 <th data-no-sort>الألوان</th>
-                                <th onclick="sortTableByColumn(this)">نوع القماش</th>
-                                <th onclick="sortTableByColumn(this)">المخزون</th>
-                                <th onclick="sortTableByColumn(this)">الأسعار</th>
-                                <th onclick="sortTableByColumn(this)">الحالة</th>
+                                <th class="sortable-th" data-col="6" data-type="text">نوع القماش</th>
+                                <th class="sortable-th" data-col="7" data-type="num">المخزون</th>
+                                <th class="sortable-th" data-col="8" data-type="num">الأسعار</th>
+                                <th class="sortable-th" data-col="9" data-type="text">الحالة</th>
                                 <th data-no-sort style="text-align:center">إجراءات</th>
                             </tr>
                         </thead>
@@ -1032,7 +1044,7 @@ $catColors = [
                                     <td class="text-muted small"><?= $i + 1 ?></td>
 
                                     <!-- اسم المنتج -->
-                                    <td>
+                                    <td data-sort="<?= htmlspecialchars($prod['name']) ?>">
                                         <div class="fw-600" style="font-size:.84rem"><?= htmlspecialchars($prod['name']) ?>
                                         </div>
                                         <div class="text-muted" style="font-size:.7rem">
@@ -1041,12 +1053,12 @@ $catColors = [
                                     </td>
 
                                     <!-- الموديل -->
-                                    <td class="n text-muted" style="font-size:.78rem;direction:ltr">
+                                    <td class="n text-muted" style="font-size:.78rem;direction:ltr" data-sort="<?= htmlspecialchars($prod['model_number']) ?>">
                                         <?= htmlspecialchars($prod['model_number']) ?>
                                     </td>
 
                                     <!-- الفئة -->
-                                    <td>
+                                    <td data-sort="<?= htmlspecialchars($prod['cat_name'] ?? '') ?>">
                                         <span class="badge"
                                             style="background:<?= $cc[0] ?>;color:<?= $cc[1] ?>;border:1px solid <?= $cc[2] ?>;border-radius:20px;font-size:.68rem;padding:2px 7px">
                                             <?= htmlspecialchars($prod['cat_name'] ?? '—') ?>
@@ -1085,12 +1097,12 @@ $catColors = [
                                     </td>
 
                                     <!-- نوع القماش -->
-                                    <td style="font-size:.78rem;color:#64748b">
+                                    <td style="font-size:.78rem;color:#64748b" data-sort="<?= htmlspecialchars($prod['fabric_type'] ?? '') ?>">
                                         <?= htmlspecialchars($prod['fabric_type'] ?? '—') ?>
                                     </td>
 
                                     <!-- المخزون -->
-                                    <td class="n" style="font-size:.82rem">
+                                    <td class="n" style="font-size:.82rem" data-sort="<?= $stock ?>">
                                         <?php
                                         $sCls = $stock > 10 ? 'text-success' : ($stock > 0 ? 'text-warning' : 'text-danger');
                                         $sLbl = $stock > 0 ? number_format($stock, 0) . ' قطعة' : 'نفد';
@@ -1099,7 +1111,7 @@ $catColors = [
                                     </td>
 
                                     <!-- الأسعار: نعرض القيمة الفعلية (أو المدى لو الأسعار مختلفة)، مو بس عدّاد -->
-                                    <td style="font-size:.78rem" class="n">
+                                    <td style="font-size:.78rem" class="n" data-sort="<?= $minSell !== null ? $minSell : 0 ?>">
                                         <?php $grpCount = count($grps); ?>
                                         <?php if ($grpCount > 0): ?>
                                             <div class="fw-600" style="color:#1e293b">
@@ -1123,7 +1135,7 @@ $catColors = [
                                     </td>
 
                                     <!-- الحالة -->
-                                    <td>
+                                    <td data-sort="<?= $prod['is_active'] ? 'نشط' : 'معطّل' ?>">
                                         <?php if ($prod['is_active']): ?>
                                             <span class="badge bg-success-subtle text-success border border-success-subtle"
                                                 style="font-size:.68rem">نشط</span>
@@ -1384,45 +1396,121 @@ $catColors = [
 
     <script>
         // ── فرز جدول عند النقر على رأس عمود (نمط موحّد بكل صفحات القسم) ──
-        function sortTableByColumn(th) {
-            const table = th.closest('table');
-            const tbody = table.querySelector('tbody');
-            const headers = Array.from(th.parentElement.children);
-            const colIndex = headers.indexOf(th);
-            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => !r.querySelector('td[colspan]'));
+        // ── ترتيب/فلترة رأس الجدول (مكوّن مشترك — راجع FATORIZE-DESIGN-AND-PATTERNS.md § ب) ──
+        let _hdrMode = 'sort';
+        let _sortCol = null, _sortDir = 1;
+        const _activeFilters = {};
 
-            const asc = th.dataset.sortDir !== 'asc';
-            headers.forEach(h => delete h.dataset.sortDir);
-            th.dataset.sortDir = asc ? 'asc' : 'desc';
-            headers.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
-            th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+        function setHeaderMode(mode) {
+            _hdrMode = mode;
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+        }
 
-            const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
-
-            rows.sort((r1, r2) => {
-                const c1 = r1.children[colIndex]?.innerText.trim() || '';
-                const c2 = r2.children[colIndex]?.innerText.trim() || '';
-
-                // ١. تاريخ ISO أولاً — مقارنة زمنية حقيقية (⚠ لا parseFloat على تاريخ مباشرة)
-                if (ISO_DATE.test(c1) && ISO_DATE.test(c2)) {
-                    const d1 = new Date(c1), d2 = new Date(c2);
-                    return asc ? d1 - d2 : d2 - d1;
-                }
-
-                // ٢. رقم صرف كامل المطابقة (النص كله رقم، مش رقم داخل نص أطول)
-                const numOnly = /^-?[\d,]+\.?\d*$/;
-                if (numOnly.test(c1) && numOnly.test(c2)) {
-                    const n1 = parseFloat(c1.replace(/,/g, ''));
-                    const n2 = parseFloat(c2.replace(/,/g, ''));
-                    return asc ? n1 - n2 : n2 - n1;
-                }
-
-                // ٣. نص عربي عادي
-                return asc ? c1.localeCompare(c2, 'ar') : c2.localeCompare(c1, 'ar');
+        (function initTableHeaders() {
+            const table = document.getElementById('productsTable');
+            if (!table) return;
+            table.querySelectorAll('th.sortable-th').forEach(th => {
+                th.style.cursor = 'pointer';
+                th.addEventListener('click', (e) => {
+                    if (_hdrMode === 'sort') sortByColumn(th);
+                    else { e.stopPropagation(); openFilterPopover(th); }
+                });
             });
+        })();
 
+        function sortByColumn(th) {
+            const col = parseInt(th.dataset.col);
+            const type = th.dataset.type;
+            if (_sortCol === col) _sortDir *= -1; else { _sortCol = col; _sortDir = 1; }
+            document.querySelectorAll('th.sortable-th').forEach(h => h.innerHTML = h.innerHTML.replace(/\s*[▲▼]$/, ''));
+            th.innerHTML += _sortDir === 1 ? ' ▲' : ' ▼';
+            const tbody = th.closest('table').querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            rows.sort((a, b) => {
+                let va = a.cells[col]?.dataset.sort ?? '', vb = b.cells[col]?.dataset.sort ?? '';
+                if (type === 'num') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; return (va - vb) * _sortDir; }
+                if (type === 'date') return (new Date(va) - new Date(vb)) * _sortDir;
+                return va.localeCompare(vb, 'ar') * _sortDir;
+            });
             rows.forEach(r => tbody.appendChild(r));
         }
+
+        function openFilterPopover(th) {
+            document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove());
+            const col = parseInt(th.dataset.col);
+            const table = th.closest('table');
+            const tbody = table.querySelector('tbody');
+            const allRows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            const values = [...new Set(allRows.map(r => (r.cells[col]?.dataset.sort ?? '').trim()).filter(v => v !== ''))]
+                .sort((a, b) => a.localeCompare(b, 'ar'));
+            const selected = _activeFilters[col] || new Set(values);
+            const pop = document.createElement('div');
+            pop.className = 'hdr-filter-pop';
+            pop.style.cssText = 'position:fixed;z-index:2000;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px;max-height:260px;overflow-y:auto;min-width:170px;font-size:.75rem';
+            pop.innerHTML = `
+                <div class="d-flex justify-content-between mb-1">
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${col},true)">تحديد الكل</button>
+                    <button class="btn btn-link btn-sm p-0" style="font-size:.7rem" onclick="_toggleAllFilter(${col},false)">إلغاء الكل</button>
+                </div>
+                ${values.map(v => `
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input filter-chk" data-val="${v.replace(/"/g, '&quot;')}" ${selected.has(v) ? 'checked' : ''}>
+                        <label class="form-check-label" style="cursor:pointer">${v}</label>
+                    </div>`).join('')}
+                <div class="d-flex gap-1 mt-2">
+                    <button class="btn btn-sm btn-primary flex-fill" style="font-size:.7rem" onclick="_applyFilter(${col})">تطبيق</button>
+                    <button class="btn btn-sm btn-light" style="font-size:.7rem" onclick="document.querySelectorAll('.hdr-filter-pop').forEach(p=>p.remove())">إغلاق</button>
+                </div>`;
+            pop._values = values;
+            pop._table = table;
+            const rect = th.getBoundingClientRect();
+            document.body.appendChild(pop);
+            let left = rect.left;
+            if (left + pop.offsetWidth > window.innerWidth - 10) left = window.innerWidth - pop.offsetWidth - 10;
+            pop.style.top = (rect.bottom + 4) + 'px';
+            pop.style.left = Math.max(10, left) + 'px';
+            pop.addEventListener('click', e => e.stopPropagation());
+        }
+
+        function _toggleAllFilter(col, checked) {
+            document.querySelectorAll('.hdr-filter-pop .filter-chk').forEach(c => c.checked = checked);
+        }
+
+        function _applyFilter(col) {
+            const pop = document.querySelector('.hdr-filter-pop');
+            const checked = new Set(Array.from(pop.querySelectorAll('.filter-chk:checked')).map(c => c.dataset.val));
+            if (checked.size === pop._values.length) delete _activeFilters[col];
+            else _activeFilters[col] = checked;
+            const table = pop._table;
+            pop.remove();
+            _renderFilters(table);
+        }
+
+        function _renderFilters(table) {
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.cells.length > 1);
+            const hasFilters = Object.keys(_activeFilters).length > 0;
+            const clearBtn = document.getElementById('btnClearHdrFilters');
+            if (clearBtn) clearBtn.style.display = hasFilters ? '' : 'none';
+            rows.forEach(r => {
+                let visible = true;
+                for (const col in _activeFilters) {
+                    const val = (r.cells[col]?.dataset.sort ?? '').trim();
+                    if (!_activeFilters[col].has(val)) { visible = false; break; }
+                }
+                r.style.display = visible ? '' : 'none';
+            });
+            table.querySelectorAll('th.sortable-th').forEach((h) => {
+                h.style.background = _activeFilters[h.dataset.col] ? '#fef3c7' : '';
+            });
+        }
+
+        function clearAllHeaderFilters() {
+            Object.keys(_activeFilters).forEach(k => delete _activeFilters[k]);
+            _renderFilters(document.getElementById('productsTable'));
+        }
+
+        document.addEventListener('click', () => document.querySelectorAll('.hdr-filter-pop').forEach(p => p.remove()));
 
         const prodModal = new bootstrap.Modal(document.getElementById('prodModal'));
         const variantModal = new bootstrap.Modal(document.getElementById('variantModal'));

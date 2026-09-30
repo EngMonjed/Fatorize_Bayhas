@@ -14,10 +14,16 @@ require_once __DIR__ . '/../../../config/auth.php';
 
 $pdo = getConnection();
 checkLogin($pdo);
-requirePermission('production.stages', 'view');
+
+// التبويب النشط بيحدد $currentModule والصلاحية المطلوبة معاً — كل
+// تبويب صلاحيته الخاصة (ب.٢٢)، مو صلاحية production.stages وحدها تغطّي الكل
+$activeTab = $_GET['tab'] ?? 'stages';
+if (!in_array($activeTab, ['stages', 'work_centers', 'contractors'], true))
+    $activeTab = 'stages';
+$currentModule = 'production.' . $activeTab;
+requirePermission($currentModule, 'view');
 
 $TS = $_SESSION['table_suffix'];
-$currentModule = 'production.stages';
 $userId = (int) $_SESSION['user_id'];
 
 $T_STAGE = "production_stages_{$TS}";
@@ -94,10 +100,6 @@ function createServiceVendorAccounts(PDO $pdo, string $T_SETTINGS, string $T_ACC
 
     return [$payableAccountId, $advanceAccountId];
 }
-
-$activeTab = $_GET['tab'] ?? 'stages';
-if (!in_array($activeTab, ['stages', 'work_centers', 'contractors'], true))
-    $activeTab = 'stages';
 
 // اسم الفرع + عملته الوظيفية
 $branchName = '';
@@ -193,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 if ($name === '')
                     throw new Exception('اسم المحطة مطلوب');
                 if ($type === 'external' && !$contractorId)
-                    throw new Exception('اختر مورد الخدمة للمحطة الخارجية');
+                    throw new Exception('اختر المقاول للمحطة الخارجية');
                 if ($rate < 0)
                     throw new Exception('التسعيرة ما بتنكون سالبة');
 
@@ -290,7 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st->execute([$id]);
                 $row = $st->fetch();
                 if (!$row)
-                    throw new Exception('مورد الخدمة غير موجود');
+                    throw new Exception('المقاول غير موجود');
                 echo json_encode(['ok' => true, 'data' => $row]);
                 exit;
             }
@@ -300,7 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $name = trim($_POST['name'] ?? '');
                 $contact = trim($_POST['contact_info'] ?? '');
                 if ($name === '')
-                    throw new Exception('اسم مورد الخدمة مطلوب');
+                    throw new Exception('اسم المقاول مطلوب');
 
                 if ($id > 0) {
                     requirePermission('production.contractors', 'edit');
@@ -315,7 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                         if ($crow['advance_account_id'])
                             $pdo->prepare("UPDATE {$T_ACCOUNT} SET name=? WHERE id=?")->execute(['دفعات مقدمة — ' . $name, $crow['advance_account_id']]);
                     }
-                    echo json_encode(['ok' => true, 'msg' => 'تم تحديث مورد الخدمة']);
+                    echo json_encode(['ok' => true, 'msg' => 'تم تحديث المقاول']);
                 } else {
                     requirePermission('production.contractors', 'create');
                     $pdo->beginTransaction();
@@ -341,7 +343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
                 $st->execute([$id]);
                 $cur = $st->fetchColumn();
                 if ($cur === false)
-                    throw new Exception('مورد الخدمة غير موجود');
+                    throw new Exception('المقاول غير موجود');
                 $pdo->prepare("UPDATE {$T_CONTR} SET is_active=? WHERE id=?")->execute([$cur ? 0 : 1, $id]);
                 echo json_encode(['ok' => true, 'is_active' => $cur ? 0 : 1]);
                 exit;
@@ -431,37 +433,6 @@ $can_contr_edit = can('production.contractors', 'edit');
             background: #fdf4ff;
             color: #a21caf;
         }
-
-        .subtab-nav {
-            display: flex;
-            gap: .4rem;
-            margin-bottom: 1.1rem;
-        }
-
-        .subtab-nav button {
-            padding: .5rem 1rem;
-            font-size: .82rem;
-            font-weight: 600;
-            color: #64748b;
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 9px;
-            cursor: pointer;
-        }
-
-        .subtab-nav button.active {
-            color: #fff;
-            background: var(--section-color);
-            border-color: var(--section-color);
-        }
-
-        .subtab-pane {
-            display: none;
-        }
-
-        .subtab-pane.active {
-            display: block;
-        }
     </style>
 </head>
 
@@ -482,251 +453,225 @@ $can_contr_edit = can('production.contractors', 'edit');
     <main class="main-content">
         <div class="content-body">
 
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="raw_materials.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-box2 me-1"></i>المواد الأولية
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600 active" href="stages.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-sliders me-1"></i>إعداد الإنتاج
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="operations.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-diagram-3 me-1"></i>عمليات التصنيع
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="production_entries.php"
-                        style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-clipboard-check me-1"></i>أوامر الإنتاج
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
-            <div class="subtab-nav">
-                <button type="button" data-tab="stages" onclick="showSubTab('stages')"><i
-                        class="bi bi-diagram-3 me-1"></i>مراحل التصنيع</button>
-                <button type="button" data-tab="work_centers" onclick="showSubTab('work_centers')"><i
-                        class="bi bi-diagram-2 me-1"></i>محطات العمل</button>
-                <button type="button" data-tab="contractors" onclick="showSubTab('contractors')"><i
-                        class="bi bi-building me-1"></i>موردي الخدمات</button>
-            </div>
-
-            <!-- ===================== تبويب: مراحل التصنيع ===================== -->
-            <div class="subtab-pane" id="pane-stages">
-                <div class="tbl-wrap">
-                    <div class="tbl-hdr">
-                        <span style="font-size:.88rem;font-weight:700;color:#1e293b">
-                            <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>مراحل التصنيع
-                        </span>
-                        <?php if ($can_stage_create): ?>
-                            <button class="btn btn-sm fw-600 ms-auto" onclick="openStageModal()"
-                                style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
-                                <i class="bi bi-plus-lg me-1"></i>إضافة مرحلة
-                            </button>
-                        <?php endif; ?>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="mtbl">
-                            <thead>
-                                <tr>
-                                    <th>الاسم</th>
-                                    <th>الرمز</th>
-                                    <th>الوصف</th>
-                                    <th>الحالة</th>
-                                    <th style="text-align:center">إجراءات</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($stages as $s):
-                                    $active = (int) $s['is_active'] === 1; ?>
+            <?php if ($activeTab === 'stages'): ?>
+                <!-- ===================== تبويب: مراحل التصنيع ===================== -->
+                <div>
+                    <div class="tbl-wrap">
+                        <div class="tbl-hdr">
+                            <span style="font-size:.88rem;font-weight:700;color:#1e293b">
+                                <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>مراحل التصنيع
+                            </span>
+                            <?php if ($can_stage_create): ?>
+                                <button class="btn btn-sm fw-600 ms-auto" onclick="openStageModal()"
+                                    style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
+                                    <i class="bi bi-plus-lg me-1"></i>إضافة مرحلة
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="mtbl">
+                                <thead>
                                     <tr>
-                                        <td class="fw-600"><?= htmlspecialchars($s['name']) ?></td>
-                                        <td class="text-muted"><?= htmlspecialchars($s['code'] ?? '—') ?></td>
-                                        <td class="text-muted" style="font-size:.82rem">
-                                            <?= htmlspecialchars($s['description'] ?? '—') ?>
-                                        </td>
-                                        <td><span
-                                                class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشطة' : 'معطّلة' ?></span>
-                                        </td>
-                                        <td>
-                                            <div class="d-flex gap-1 justify-content-center">
-                                                <?php if ($can_stage_edit): ?>
-                                                    <button class="act-btn" title="تعديل"
-                                                        onclick="openStageModal(<?= (int) $s['id'] ?>)"><i
-                                                            class="bi bi-pencil"></i></button>
-                                                    <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
-                                                        title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
-                                                        onclick="stageToggle(<?= (int) $s['id'] ?>)"><i
-                                                            class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
+                                        <th>الاسم</th>
+                                        <th>الرمز</th>
+                                        <th>الوصف</th>
+                                        <th>الحالة</th>
+                                        <th style="text-align:center">إجراءات</th>
                                     </tr>
-                                <?php endforeach; ?>
-                                <?php if (!$stages): ?>
-                                    <tr>
-                                        <td colspan="5" class="text-center text-muted py-4">ما في مراحل مسجّلة بعد</td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($stages as $s):
+                                        $active = (int) $s['is_active'] === 1; ?>
+                                        <tr>
+                                            <td class="fw-600"><?= htmlspecialchars($s['name']) ?></td>
+                                            <td class="text-muted"><?= htmlspecialchars($s['code'] ?? '—') ?></td>
+                                            <td class="text-muted" style="font-size:.82rem">
+                                                <?= htmlspecialchars($s['description'] ?? '—') ?>
+                                            </td>
+                                            <td><span
+                                                    class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشطة' : 'معطّلة' ?></span>
+                                            </td>
+                                            <td>
+                                                <div class="d-flex gap-1 justify-content-center">
+                                                    <?php if ($can_stage_edit): ?>
+                                                        <button class="act-btn" title="تعديل"
+                                                            onclick="openStageModal(<?= (int) $s['id'] ?>)"><i
+                                                                class="bi bi-pencil"></i></button>
+                                                        <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
+                                                            title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
+                                                            onclick="stageToggle(<?= (int) $s['id'] ?>)"><i
+                                                                class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    <?php if (!$stages): ?>
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted py-4">ما في مراحل مسجّلة بعد</td>
+                                        </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
+            <?php endif; ?>
 
-            <!-- ===================== تبويب: محطات العمل ===================== -->
-            <div class="subtab-pane" id="pane-work_centers">
-                <div class="tbl-wrap">
-                    <div class="tbl-hdr">
-                        <span style="font-size:.88rem;font-weight:700;color:#1e293b">
-                            <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>محطات العمل
-                        </span>
-                        <?php if ($can_wc_create): ?>
-                            <button class="btn btn-sm fw-600 ms-auto" onclick="openWcModal()"
-                                style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
-                                <i class="bi bi-plus-lg me-1"></i>إضافة محطة عمل
-                            </button>
-                        <?php endif; ?>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="mtbl">
-                            <thead>
-                                <tr>
-                                    <th>المحطة</th>
-                                    <th>المرحلة</th>
-                                    <th>النوع</th>
-                                    <th>مورد الخدمة</th>
-                                    <th>التسعيرة</th>
-                                    <th>الحالة</th>
-                                    <th style="text-align:center">إجراءات</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($workCenters as $w):
-                                    $active = (int) $w['is_active'] === 1;
-                                    $isExt = $w['type'] === 'external'; ?>
+            <?php if ($activeTab === 'work_centers'): ?>
+                <!-- ===================== تبويب: محطات العمل ===================== -->
+                <div>
+                    <div class="tbl-wrap">
+                        <div class="tbl-hdr">
+                            <span style="font-size:.88rem;font-weight:700;color:#1e293b">
+                                <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>محطات العمل
+                            </span>
+                            <?php if ($can_wc_create): ?>
+                                <button class="btn btn-sm fw-600 ms-auto" onclick="openWcModal()"
+                                    style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
+                                    <i class="bi bi-plus-lg me-1"></i>إضافة محطة عمل
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="mtbl">
+                                <thead>
                                     <tr>
-                                        <td class="fw-600"><?= htmlspecialchars($w['name']) ?></td>
-                                        <td class="text-muted"><?= htmlspecialchars($w['stage_name'] ?? '—') ?></td>
-                                        <td><span
-                                                class="badge-status <?= $isExt ? 'badge-type-external' : 'badge-type-internal' ?>"><?= $isExt ? 'خارجية' : 'داخلية' ?></span>
-                                        </td>
-                                        <td class="text-muted"><?= htmlspecialchars($w['contractor_name'] ?? '—') ?></td>
-                                        <td class="n"><?= number_format((float) $w['rate'], 2) ?>
-                                            <?= htmlspecialchars($baseCurSym) ?>
-                                        </td>
-                                        <td><span
-                                                class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشطة' : 'معطّلة' ?></span>
-                                        </td>
-                                        <td>
-                                            <div class="d-flex gap-1 justify-content-center">
-                                                <button class="act-btn info-h" title="تخويل المستخدمين"
-                                                    onclick="openWcUsersModal(<?= (int) $w['id'] ?>, '<?= htmlspecialchars($w['name'], ENT_QUOTES) ?>')"><i
-                                                        class="bi bi-people"></i></button>
-                                                <?php if ($can_wc_edit): ?>
-                                                    <button class="act-btn" title="تعديل"
-                                                        onclick="openWcModal(<?= (int) $w['id'] ?>)"><i
-                                                            class="bi bi-pencil"></i></button>
-                                                    <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
-                                                        title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
-                                                        onclick="wcToggle(<?= (int) $w['id'] ?>)"><i
-                                                            class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
+                                        <th>المحطة</th>
+                                        <th>المرحلة</th>
+                                        <th>النوع</th>
+                                        <th>المقاول</th>
+                                        <th>التسعيرة</th>
+                                        <th>الحالة</th>
+                                        <th style="text-align:center">إجراءات</th>
                                     </tr>
-                                <?php endforeach; ?>
-                                <?php if (!$workCenters): ?>
-                                    <tr>
-                                        <td colspan="7" class="text-center text-muted py-4">ما في محطات عمل مسجّلة بعد</td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($workCenters as $w):
+                                        $active = (int) $w['is_active'] === 1;
+                                        $isExt = $w['type'] === 'external'; ?>
+                                        <tr>
+                                            <td class="fw-600"><?= htmlspecialchars($w['name']) ?></td>
+                                            <td class="text-muted"><?= htmlspecialchars($w['stage_name'] ?? '—') ?></td>
+                                            <td><span
+                                                    class="badge-status <?= $isExt ? 'badge-type-external' : 'badge-type-internal' ?>"><?= $isExt ? 'خارجية' : 'داخلية' ?></span>
+                                            </td>
+                                            <td class="text-muted"><?= htmlspecialchars($w['contractor_name'] ?? '—') ?></td>
+                                            <td class="n"><?= number_format((float) $w['rate'], 2) ?>
+                                                <?= htmlspecialchars($baseCurSym) ?>
+                                            </td>
+                                            <td><span
+                                                    class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشطة' : 'معطّلة' ?></span>
+                                            </td>
+                                            <td>
+                                                <div class="d-flex gap-1 justify-content-center">
+                                                    <button class="act-btn info-h" title="تخويل المستخدمين"
+                                                        onclick="openWcUsersModal(<?= (int) $w['id'] ?>, '<?= htmlspecialchars($w['name'], ENT_QUOTES) ?>')"><i
+                                                            class="bi bi-people"></i></button>
+                                                    <?php if ($can_wc_edit): ?>
+                                                        <button class="act-btn" title="تعديل"
+                                                            onclick="openWcModal(<?= (int) $w['id'] ?>)"><i
+                                                                class="bi bi-pencil"></i></button>
+                                                        <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
+                                                            title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
+                                                            onclick="wcToggle(<?= (int) $w['id'] ?>)"><i
+                                                                class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    <?php if (!$workCenters): ?>
+                                        <tr>
+                                            <td colspan="7" class="text-center text-muted py-4">ما في محطات عمل مسجّلة بعد</td>
+                                        </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
+            <?php endif; ?>
 
-            <!-- ===================== تبويب: المقاولين ===================== -->
-            <div class="subtab-pane" id="pane-contractors">
-                <?php if (!$serviceVendorSettingsReady): ?>
-                    <div class="alert alert-warning py-2 px-3" style="font-size:.82rem">
-                        <i class="bi bi-exclamation-triangle me-1"></i>
-                        حسابات موردي الخدمة الأب (ذمم + دفعات مقدمة) لسا ما انضبطت بدليل الحسابات — إضافة مورد جديد رح تفشل
-                        لحد ما تُضبط. راجع مسؤول النظام.
-                    </div>
-                <?php endif; ?>
-                <div class="tbl-wrap">
-                    <div class="tbl-hdr">
-                        <span style="font-size:.88rem;font-weight:700;color:#1e293b">
-                            <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>موردي الخدمات
-                        </span>
-                        <?php if ($can_contr_create): ?>
-                            <button class="btn btn-sm fw-600 ms-auto" onclick="openContractorModal()"
-                                style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
-                                <i class="bi bi-plus-lg me-1"></i>إضافة مقاول
-                            </button>
-                        <?php endif; ?>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="mtbl">
-                            <thead>
-                                <tr>
-                                    <th>الاسم</th>
-                                    <th>التواصل</th>
-                                    <th>حساب الذمم</th>
-                                    <th>حساب الدفعة المقدمة</th>
-                                    <th>الحالة</th>
-                                    <th style="text-align:center">إجراءات</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($contractors as $c):
-                                    $active = (int) $c['is_active'] === 1; ?>
+            <?php if ($activeTab === 'contractors'): ?>
+                <!-- ===================== تبويب: المقاولين ===================== -->
+                <div>
+                    <?php if (!$serviceVendorSettingsReady): ?>
+                        <div class="alert alert-warning py-2 px-3" style="font-size:.82rem">
+                            <i class="bi bi-exclamation-triangle me-1"></i>
+                            حسابات موردي الخدمة الأب (ذمم + دفعات مقدمة) لسا ما انضبطت بدليل الحسابات — إضافة مورد جديد رح تفشل
+                            لحد ما تُضبط. راجع مسؤول النظام.
+                        </div>
+                    <?php endif; ?>
+                    <div class="tbl-wrap">
+                        <div class="tbl-hdr">
+                            <span style="font-size:.88rem;font-weight:700;color:#1e293b">
+                                <i class="bi bi-list-ul me-1" style="color:var(--section-color)"></i>موردي الخدمات
+                            </span>
+                            <?php if ($can_contr_create): ?>
+                                <button class="btn btn-sm fw-600 ms-auto" onclick="openContractorModal()"
+                                    style="border-radius:9px;background:var(--section-color);color:#fff;font-size:.82rem">
+                                    <i class="bi bi-plus-lg me-1"></i>إضافة مورد خدمة
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="mtbl">
+                                <thead>
                                     <tr>
-                                        <td class="fw-600"><?= htmlspecialchars($c['name']) ?></td>
-                                        <td class="text-muted"><?= htmlspecialchars($c['contact_info'] ?? '—') ?></td>
-                                        <td class="text-muted" style="font-size:.8rem">
-                                            <?= $c['payable_code'] ? htmlspecialchars($c['payable_code'] . ' — ' . $c['payable_name']) : '—' ?>
-                                        </td>
-                                        <td class="text-muted" style="font-size:.8rem">
-                                            <?= $c['advance_code'] ? htmlspecialchars($c['advance_code'] . ' — ' . $c['advance_name']) : '—' ?>
-                                        </td>
-                                        <td><span
-                                                class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشط' : 'معطّل' ?></span>
-                                        </td>
-                                        <td>
-                                            <div class="d-flex gap-1 justify-content-center">
-                                                <?php if ($can_contr_edit): ?>
-                                                    <button class="act-btn" title="تعديل"
-                                                        onclick="openContractorModal(<?= (int) $c['id'] ?>)"><i
-                                                            class="bi bi-pencil"></i></button>
-                                                    <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
-                                                        title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
-                                                        onclick="contractorToggle(<?= (int) $c['id'] ?>)"><i
-                                                            class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
+                                        <th>الاسم</th>
+                                        <th>التواصل</th>
+                                        <th>حساب الذمم</th>
+                                        <th>حساب الدفعة المقدمة</th>
+                                        <th>الحالة</th>
+                                        <th style="text-align:center">إجراءات</th>
                                     </tr>
-                                <?php endforeach; ?>
-                                <?php if (!$contractors): ?>
-                                    <tr>
-                                        <td colspan="6" class="text-center text-muted py-4">ما في موردي خدمة مسجّلين بعد
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($contractors as $c):
+                                        $active = (int) $c['is_active'] === 1; ?>
+                                        <tr>
+                                            <td class="fw-600"><?= htmlspecialchars($c['name']) ?></td>
+                                            <td class="text-muted"><?= htmlspecialchars($c['contact_info'] ?? '—') ?></td>
+                                            <td class="text-muted" style="font-size:.8rem">
+                                                <?= $c['payable_code'] ? htmlspecialchars($c['payable_code'] . ' — ' . $c['payable_name']) : '—' ?>
+                                            </td>
+                                            <td class="text-muted" style="font-size:.8rem">
+                                                <?= $c['advance_code'] ? htmlspecialchars($c['advance_code'] . ' — ' . $c['advance_name']) : '—' ?>
+                                            </td>
+                                            <td><span
+                                                    class="badge-status <?= $active ? 'badge-active' : 'badge-inactive' ?>"><?= $active ? 'نشط' : 'معطّل' ?></span>
+                                            </td>
+                                            <td>
+                                                <div class="d-flex gap-1 justify-content-center">
+                                                    <?php if ($can_contr_edit): ?>
+                                                        <button class="act-btn" title="تعديل"
+                                                            onclick="openContractorModal(<?= (int) $c['id'] ?>)"><i
+                                                                class="bi bi-pencil"></i></button>
+                                                        <button class="act-btn <?= $active ? 'danger' : 'success-h' ?>"
+                                                            title="<?= $active ? 'تعطيل' : 'تفعيل' ?>"
+                                                            onclick="contractorToggle(<?= (int) $c['id'] ?>)"><i
+                                                                class="bi bi-<?= $active ? 'slash-circle' : 'check-circle' ?>"></i></button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    <?php if (!$contractors): ?>
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted py-4">ما في موردي خدمة مسجّلين بعد
+                                            </td>
+                                        </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
+            <?php endif; ?>
 
         </div>
     </main>
@@ -790,7 +735,7 @@ $can_contr_edit = can('production.contractors', 'edit');
                         </select>
                     </div>
                     <div class="mb-2" id="wc_contractor_wrap" style="display:none">
-                        <label class="form-label small fw-600">مورد الخدمة *</label>
+                        <label class="form-label small fw-600">المقاول *</label>
                         <select id="wc_contractor_id" class="form-select">
                             <option value="">— اختر —</option>
                             <?php foreach ($contractors as $c):
@@ -804,7 +749,7 @@ $can_contr_edit = can('production.contractors', 'edit');
                         <label class="form-label small fw-600">التسعيرة (بعملة الفرع لكل قطعة)</label>
                         <input type="number" step="0.0001" min="0" id="wc_rate" class="form-control" value="0">
                         <div class="form-text" style="font-size:.75rem">داخلية = تسعيرة معيارية للتكلفة (لا دفع فعلي).
-                            خارجية = تسعيرة مورد الخدمة الحقيقية.</div>
+                            خارجية = تسعيرة المقاول الحقيقية.</div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -872,12 +817,12 @@ $can_contr_edit = can('production.contractors', 'edit');
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="contractorModalTitle">إضافة مقاول</h5><button type="button"
+                    <h5 class="modal-title" id="contractorModalTitle">إضافة مورد خدمة</h5><button type="button"
                         class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="contractor_id">
-                    <div class="mb-2"><label class="form-label small fw-600">اسم مورد الخدمة *</label><input type="text"
+                    <div class="mb-2"><label class="form-label small fw-600">اسم المقاول *</label><input type="text"
                             id="contractor_name" class="form-control"></div>
                     <div class="mb-2"><label class="form-label small fw-600">معلومات التواصل</label><input type="text"
                             id="contractor_contact" class="form-control"></div>
@@ -905,16 +850,6 @@ $can_contr_edit = can('production.contractors', 'edit');
             for (const k in data) fd.append(k, data[k]);
             return fetch(location.pathname, { method: 'POST', body: fd }).then(r => r.json());
         }
-
-        // ---------- تبويبات ----------
-        function showSubTab(tab) {
-            document.querySelectorAll('.subtab-pane').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.subtab-nav button').forEach(b => b.classList.remove('active'));
-            document.getElementById('pane-' + tab).classList.add('active');
-            document.querySelector('.subtab-nav button[data-tab="' + tab + '"]').classList.add('active');
-            history.replaceState(null, '', '?tab=' + tab);
-        }
-        showSubTab(<?= json_encode($activeTab) ?>);
 
         // ---------- مراحل ----------
         const stageModal = new bootstrap.Modal(document.getElementById('stageModal'));
@@ -1062,7 +997,7 @@ $can_contr_edit = can('production.contractors', 'edit');
             document.getElementById('contractor_id').value = '';
             document.getElementById('contractor_name').value = '';
             document.getElementById('contractor_contact').value = '';
-            document.getElementById('contractorModalTitle').innerText = 'إضافة مقاول';
+            document.getElementById('contractorModalTitle').innerText = 'إضافة مورد خدمة';
             document.getElementById('contractorAccountNoticeText').innerText = 'سيتم إنشاء حساب الذمم وحساب الدفعة المقدمة بدليل الحسابات تلقائياً عند الحفظ.';
             if (id) {
                 post('contractor_get', { id }).then(res => {
@@ -1079,7 +1014,7 @@ $can_contr_edit = can('production.contractors', 'edit');
         }
         function saveContractor() {
             const name = document.getElementById('contractor_name').value.trim();
-            if (!name) { alert('اسم مورد الخدمة مطلوب'); return; }
+            if (!name) { alert('اسم المقاول مطلوب'); return; }
             post('contractor_save', {
                 id: document.getElementById('contractor_id').value,
                 name, contact_info: document.getElementById('contractor_contact').value.trim()

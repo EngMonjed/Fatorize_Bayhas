@@ -67,29 +67,8 @@ try {
     <main class="main-content">
         <div class="content-body">
 
-            <ul class="nav nav-tabs mb-3" style="border-bottom:2px solid #e2e8f0">
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="raw_materials.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-box2 me-1"></i>المواد الأولية
-                    </a>
-                </li>
-                                <li class="nav-item">
-                    <a class="nav-link fw-600" href="stages.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-sliders me-1"></i>إعداد الإنتاج
-                    </a>
-                </li>
-<li class="nav-item">
-                    <a class="nav-link fw-600 active" href="operations.php"
-                        style="border:none;border-bottom:2px solid var(--section-color);color:var(--section-color);font-size:.83rem;margin-bottom:-2px">
-                        <i class="bi bi-diagram-3 me-1"></i>عمليات التصنيع
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link fw-600" href="production_entries.php" style="border:none;color:#64748b;font-size:.83rem">
-                        <i class="bi bi-clipboard-check me-1"></i>أوامر الإنتاج
-                    </a>
-                </li>
-            </ul>
+            <!-- تبويبات القسم (مكوّن مشترك — يتبع الشريط الجانبي) -->
+            <?php require __DIR__ . '/../../../includes/tab_bar.php'; ?>
 
             <div class="maint-box">
                 <i class="bi bi-cone-striped big d-block mb-3"></i>

@@ -58,10 +58,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_action'])) {
             $accId = (int) ($_POST['account_id'] ?? 0);
             if (!$accId)
                 throw new Exception('حساب غير صالح');
-            $st = $pdo->prepare("SELECT ji.debit, ji.credit, je.entry_number, je.created_at, je.description
+            $st = $pdo->prepare("SELECT ji.debit, ji.credit, je.entry_number, je.entry_date, je.description
                 FROM `{$TJI}` ji JOIN `{$TJE}` je ON je.id = ji.journal_entry_id
                 WHERE ji.account_id = ? AND je.status = 'posted'
-                ORDER BY je.created_at DESC, je.id DESC LIMIT 10");
+                ORDER BY je.entry_date DESC, je.id DESC LIMIT 10");
             $st->execute([$accId]);
             echo json_encode(['ok' => true, 'data' => $st->fetchAll()]);
         }
@@ -821,9 +821,9 @@ $stats = [
 
                     // created_at من قاعدة البيانات بصيغة "YYYY-MM-DD HH:MM:SS" —
                     // نقسمها يدوياً (بدون new Date()) لتفادي مشاكل تفسير التوقيت/المنطقة
-                    // الزمنية بالمتصفح (نفس المشكلة يلي واجهناها سابقاً مع toISOString())،
+                    // الزمنية بالمتصفح (نفس المشكلة يلي واجهناها سابقاً مع toISOString())，
                     // ونعرض التاريخ والوقت بشكل واضح ومفصول، بدقة الدقائق (بدون ثواني).
-                    const [dPart, tPart] = String(last.created_at || '').split(' ');
+                    const [dPart, tPart] = String(last.entry_date || '').split(' ');
                     const timeShort = tPart ? tPart.substring(0, 5) : '';
                     const whenStr = timeShort ? `${dPart} — ${timeShort}` : dPart;
 
